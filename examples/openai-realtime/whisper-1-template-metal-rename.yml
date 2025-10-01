@@ -1,0 +1,39 @@
+nodes:
+  - id: NODE_ID
+    build: cargo build -p dora-openai-websocket --release
+    path: ../../target/release/dora-openai-websocket
+    inputs:
+      speech_started: dora-vad/timestamp_start
+      speech_stopped: dora-vad/timestamp_end
+      text: dora-echo/echo
+    outputs:
+      - audio
+      - text
+      - function_call_output
+      - response.create
+      - system_prompt
+      - tools
+
+  - id: dora-vad
+    build: pip install -e ../../node-hub/dora-vad
+    path: dora-vad
+    inputs:
+      audio:
+        source: NODE_ID/audio
+        queue_size: 10
+    outputs:
+      - audio
+      - timestamp_start
+      - timestamp_end
+    env:
+      MIN_SPEECH_DURATION_MS: 500
+      MIN_SILENCE_DURATION_MS: 500
+      THRESHOLD: 0.6
+
+  - id: dora-echo
+    build: pip install -e ../../node-hub/dora-echo
+    path: dora-echo
+    inputs:
+      echo: NODE_ID/response.create
+    outputs:
+      - echo
