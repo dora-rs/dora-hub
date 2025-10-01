@@ -48,7 +48,7 @@ dora-coordinator = { version = "0.3.13" }
 dora-ros2-bridge = { version = "0.3.13" }
 dora-ros2-bridge-msg-gen = { version = "0.3.13" }
 # versioned independently from the other dora crates
-dora-message = { version = "0.5.0" }
+dora-message = { version = "0.6.0" }
 arrow = { version = "54.2.1" }
 arrow-schema = { version = "54.2.1" }
 arrow-data = { version = "54.2.1" }

@@ -3671,7 +3671,7 @@ dependencies = [
  "dora-core",
  "dora-daemon",
  "dora-download",
- "dora-message 0.6.0",
+ "dora-message",
  "dora-node-api-c",
  "dora-operator-api-c",
  "dora-runtime",
@@ -3709,7 +3709,7 @@ checksum = "345741f26d66cbb66f066fccd00a9577710354736de63a05a02e051bf51a5cec"
 dependencies = [
  "ctrlc",
  "dora-core",
- "dora-message 0.6.0",
+ "dora-message",
  "dora-tracing",
  "eyre",
  "futures",
@@ -3730,7 +3730,7 @@ version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "255a1fcbe74b0caa20e83d132a7dbcad3b20769263eb6b748d91dd6c56354bce"
 dependencies = [
- "dora-message 0.6.0",
+ "dora-message",
  "dunce",
  "eyre",
  "fs_extra",
@@ -3766,7 +3766,7 @@ dependencies = [
  "dora-arrow-convert",
  "dora-core",
  "dora-download",
- "dora-message 0.6.0",
+ "dora-message",
  "dora-node-api",
  "dora-tracing",
  "dunce",
@@ -3825,7 +3825,7 @@ dependencies = [
  "dora-coordinator",
  "dora-core",
  "dora-download",
- "dora-message 0.5.0",
+ "dora-message",
  "dora-tracing",
  "dunce",
  "eyre",
@@ -3901,29 +3901,6 @@ dependencies = [
 
 [[package]]
 name = "dora-message"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8569a3739b7d4ae8ebb5220ad2a0118a8c0f956dc50f4451f170c83739c3374"
-dependencies = [
- "aligned-vec 0.5.0",
- "arrow-data 54.3.1",
- "arrow-schema 54.3.1",
- "bincode",
- "eyre",
- "log",
- "once_cell",
- "schemars 0.8.22",
- "semver",
- "serde",
- "serde-with-expand-env",
- "serde_yaml 0.9.34+deprecated",
- "tokio",
- "uhlc 0.5.2",
- "uuid 1.18.0",
-]
-
-[[package]]
-name = "dora-message"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e02396e7fd23f14f0bcdb852a746e0a261004701aa4058fba5f2cb7c428cd3e"
@@ -3980,7 +3957,7 @@ dependencies = [
  "bincode",
  "dora-arrow-convert",
  "dora-core",
- "dora-message 0.6.0",
+ "dora-message",
  "dora-tracing",
  "eyre",
  "flume 0.10.14",
@@ -4139,7 +4116,7 @@ dependencies = [
  "arrow 54.3.1",
  "dora-core",
  "dora-download",
- "dora-message 0.6.0",
+ "dora-message",
  "dora-metrics",
  "dora-node-api",
  "dora-operator-api-types",
