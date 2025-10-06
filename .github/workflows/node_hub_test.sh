@@ -32,11 +32,6 @@ if [[ " ${large_node[@]} " =~ " ${base_dir} " ]] && [[ "$CI" == "true" ]]; then
     sudo rm -rf /opt/hostedtoolcache/PyPy || :
     # 376MB
     sudo rm -rf /opt/hostedtoolcache/node || :
-    # Remove Web browser packages
-    sudo apt purge -y \
-    firefox \
-    google-chrome-stable \
-    microsoft-edge-stable
     sudo rm -rf /usr/local/lib/android/ 
     sudo rm -rf /usr/share/dotnet/
     sudo rm -rf /opt/ghc/

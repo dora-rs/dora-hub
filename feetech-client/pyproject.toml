@@ -1,6 +1,6 @@
 [project]
 name = "feetech-client"
-version = "0.1"
+version = "0.3.13"
 authors = [{ name = "Hennzau", email = "<dev@enzo-le-van.fr>" }]
 description = "Dora Node client for feetech motors."
 license = { text = "MIT" }

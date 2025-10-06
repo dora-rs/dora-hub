@@ -316,7 +316,7 @@ wheels = [
 
 [[package]]
 name = "video-encoder"
-version = "0.1"
+version = "0.3.13"
 source = { editable = "." }
 dependencies = [
     { name = "dora-rs" },

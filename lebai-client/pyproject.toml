@@ -1,16 +1,13 @@
 [project]
 name = "lebai-client"
-version = "0.1"
-authors = [{ name = "dora-rs team"}]
+version = "0.3.13"
+authors = [{ name = "dora-rs team" }]
 description = "Dora Node client for lebai robotic arms."
 license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.9"
 
-dependencies = [
-"dora-rs >= 0.3.6rc0",
-"lebai-sdk >= 0.2.17",
-]
+dependencies = ["dora-rs >= 0.3.6rc0", "lebai-sdk >= 0.2.17"]
 
 [dependency-groups]
 dev = ["pytest >=8.1.1", "ruff >=0.9.1"]
