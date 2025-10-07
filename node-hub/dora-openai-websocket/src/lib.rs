@@ -1,15 +1,17 @@
 use base64::Engine;
 use base64::engine::general_purpose;
-use dora_cli::command::Executable;
-use dora_cli::command::Start;
+use dora_node_api::ArrowData;
 use dora_node_api::DoraNode;
+use dora_node_api::Event;
 use dora_node_api::IntoArrow;
 use dora_node_api::MetadataParameters;
+use dora_node_api::arrow::array::Array;
+use dora_node_api::arrow::array::ArrayData;
+use dora_node_api::arrow::array::ArrayRef;
 use dora_node_api::arrow::array::AsArray;
+use dora_node_api::arrow::array::make_array;
 use dora_node_api::arrow::datatypes::DataType;
 use dora_node_api::dora_core::config::DataId;
-use dora_node_api::dora_core::config::NodeId;
-use dora_node_api::dora_core::topics::DORA_COORDINATOR_PORT_CONTROL_DEFAULT;
 use dora_node_api::into_vec;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
@@ -27,16 +29,10 @@ use hyper::body::Bytes;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use rand::random;
 use serde;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::value::RawValue;
-use std::collections::HashMap;
-use std::fs;
-use std::io::{self, Write};
-use std::net::IpAddr;
-use std::net::Ipv4Addr;
 use tokio::net::TcpListener;
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -313,37 +309,16 @@ fn convert_f32_to_pcm16(samples: &[f32]) -> Vec<u8> {
     pcm16_bytes
 }
 
-/// Replaces a placeholder in a file and writes the result to an output file.
-///
-/// # Arguments
-///
-/// * `input_path` - Path to the input file with placeholder text.
-/// * `placeholder` - The placeholder text to search for (e.g., "{{PLACEHOLDER}}").
-/// * `replacement` - The text to replace the placeholder with.
-/// * `output_path` - Path to write the modified content.
-fn replace_placeholder_in_file(
-    input_path: &str,
-    replacement: &HashMap<String, String>,
-    output_path: &str,
-) -> io::Result<()> {
-    // Read the file content into a string
-    let mut content = fs::read_to_string(input_path)?;
-
-    // Replace the placeholder
-    for (placeholder, replacement) in replacement {
-        // Ensure the placeholder is wrapped in curly braces
-        // Replace the placeholder with the replacement text
-        content = content.replace(placeholder, replacement);
-    }
-
-    // Write the modified content to the output file
-    let mut file = fs::File::create(output_path)?;
-    file.write_all(content.as_bytes())?;
-
-    Ok(())
+#[derive(Debug, Clone)]
+enum DoraTokioBroadcast {
+    Output(DataId, MetadataParameters, ArrayData),
+    Input(DataId, MetadataParameters, ArrayRef),
 }
 
-async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
+async fn handle_client(
+    fut: upgrade::UpgradeFut,
+    tx: tokio::sync::broadcast::Sender<DoraTokioBroadcast>,
+) -> Result<(), WebSocketError> {
     let mut ws = fastwebsockets::FragmentCollector::new(fut.await?);
 
     let frame = ws.read_frame().await?;
@@ -354,47 +329,27 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
     let OpenAIRealtimeMessage::SessionUpdate { session } = data else {
         return Err(WebSocketError::InvalidConnectionHeader);
     };
-
-    let input_audio_transcription = session
-        .input_audio_transcription
-        .map_or("whisper".to_string(), |t| t.model);
     let system_prompt = session.instructions.clone();
-    let llm = session.model.clone();
-    let id = random::<u16>();
-    let node_id = format!("server-{id}");
-    let dataflow = format!("{input_audio_transcription}-{}.yml", id);
-    let template = format!("{input_audio_transcription}-template-metal.yml");
-    let mut replacements = HashMap::new();
-    replacements.insert("NODE_ID".to_string(), node_id.clone());
-    replacements.insert("LLM_ID".to_string(), llm);
-    replacements.insert("SYSTEM_PROMPT_ID".to_string(), system_prompt);
-    if let Ok(json) = serde_json::to_string(&session.tools) {
-        // Escape $ characters to prevent issues in replacement
-        let json = json.replace("$", r"\$");
-        replacements.insert("TOOLS_ID".to_string(), json);
-    }
-    println!("Filling template: {}", template);
-    replace_placeholder_in_file(&template, &replacements, &dataflow).unwrap();
+    let tools = serde_json::to_string(&session.tools.clone()).unwrap_or_default();
+
     // Copy configuration file but replace the node ID with "server-id"
     // Read the configuration file and replace the node ID with "server-id"
-    dora_cli::command::Command::Start(Start {
-        dataflow,
-        name: Some(node_id.to_string()),
-        coordinator_addr: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-        coordinator_port: DORA_COORDINATOR_PORT_CONTROL_DEFAULT,
-        attach: false,
-        detach: true,
-        hot_reload: false,
-        uv: true,
-    })
-    .execute()
-    .unwrap();
-    let (mut node, mut events) =
-        DoraNode::init_from_node_id(NodeId::from(node_id.clone())).unwrap();
     let serialized_data = OpenAIRealtimeResponse::SessionCreated {
         session: serde_json::Value::Null,
     };
 
+    tx.send(DoraTokioBroadcast::Output(
+        DataId::from("system_prompt".to_string()),
+        MetadataParameters::default(),
+        system_prompt.into_arrow().to_data(),
+    ))
+    .unwrap();
+    tx.send(DoraTokioBroadcast::Output(
+        DataId::from("tools".to_string()),
+        MetadataParameters::default(),
+        tools.into_arrow().to_data(),
+    ))
+    .unwrap();
     let payload =
         Payload::Bytes(Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into());
     let frame = Frame::text(payload);
@@ -405,228 +360,201 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
     let mut call_id = 0;
     let mut item_id = 0;
     loop {
-        let event_fut = events.recv_async().map(Either::Left);
+        let mut rx = tx.subscribe();
+        let event_fut = rx.recv().map(Either::Left);
         let frame_fut = ws.read_frame().map(Either::Right);
         let event_stream = (event_fut, frame_fut).race();
         let frame = match event_stream.await {
-            future::Either::Left(Some(ev)) => {
-                let frame = match ev {
-                    dora_node_api::Event::Input {
-                        id,
-                        metadata: _,
-                        data,
-                    } => {
-                        if data.data_type() == &DataType::Utf8 && id.contains("transcript") {
-                            let data = data.as_string::<i32>();
-                            let str = data.value(0);
-                            let serialized_data =
-                                OpenAIRealtimeResponse::ResponseAudioTranscriptDelta {
-                                    response_id: "123".to_string(),
-                                    item_id: item_id.to_string(),
-                                    output_index: 123,
-                                    content_index: 123,
-                                    delta: str.to_string(),
-                                };
-                            item_id += 1;
+            future::Either::Left(Ok(DoraTokioBroadcast::Input(id, _metadata, data))) => {
+                let frame = if data.data_type() == &DataType::Utf8 && id.contains("transcript") {
+                    let data = data.as_string::<i32>();
+                    let str = data.value(0);
+                    let serialized_data = OpenAIRealtimeResponse::ResponseAudioTranscriptDelta {
+                        response_id: "123".to_string(),
+                        item_id: item_id.to_string(),
+                        output_index: 123,
+                        content_index: 123,
+                        delta: str.to_string(),
+                    };
+                    item_id += 1;
 
-                            let frame = Frame::text(Payload::Bytes(
-                                Bytes::from(serde_json::to_string(&serialized_data).unwrap())
-                                    .into(),
-                            ));
-                            frame
-                        } else if data.data_type() == &DataType::Utf8 && id.contains("text") {
-                            let data = data.as_string::<i32>();
-                            let orig_str = data.value(0);
-                            println!("Got the following text: {}", orig_str);
-                            // If response start and finish with <tool_call> parse it.
-                            let frame = if orig_str.starts_with("<tool_call>") {
-                                let str = orig_str
-                                    .trim_start_matches("<tool_call>")
-                                    .trim_end_matches("</tool_call>");
+                    let frame = Frame::text(Payload::Bytes(
+                        Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
+                    ));
+                    frame
+                } else if data.data_type() == &DataType::Utf8 && id.contains("text") {
+                    let data = data.as_string::<i32>();
+                    let orig_str = data.value(0);
+                    // If response start and finish with <tool_call> parse it.
+                    let frame = if orig_str.starts_with("<tool_call>") {
+                        let str = orig_str
+                            .trim_start_matches("<tool_call>")
+                            .trim_end_matches("</tool_call>");
 
-                                // Replace double curly braces with single curly braces
-                                let str = if str.contains("{{") {
-                                    str.replace("{{", "{").replace("}}}", "}}")
-                                } else {
-                                    str.to_string()
-                                };
+                        // Replace double curly braces with single curly braces
+                        let str = if str.contains("{{") {
+                            str.replace("{{", "{").replace("}}}", "}}")
+                        } else {
+                            str.to_string()
+                        };
 
-                                if let Ok(tool_call) = serde_json::from_str::<ToolCall>(&str) {
-                                    let serialized_data =
-                                        OpenAIRealtimeResponse::ResponseOutputItemAdded {
-                                            event_id: "123".to_string(),
-                                            response_id: "123".to_string(),
-                                            output_index: 123,
-                                            item: ConversationItem {
-                                                id: Some("msg_007".to_string()),
-                                                item_type: "function_call".to_string(),
-                                                status: Some("in_progress".to_string()),
-                                                role: Some("assistant".to_string()),
-                                                content: vec![],
-                                                call_id: call_id.to_string().into(),
-                                                output: None,
-                                                name: Some(tool_call.name.clone()),
-                                                arguments: None,
-                                                object: None,
-                                            },
-                                        };
-                                    let frame = Frame::text(Payload::Bytes(
-                                        Bytes::from(
-                                            serde_json::to_string(&serialized_data).unwrap(),
-                                        )
-                                        .into(),
-                                    ));
-
-                                    ws.write_frame(frame).await.unwrap();
-                                    let serialized_data =
-                                        OpenAIRealtimeResponse::ResponseFunctionCallArgumentsDelta {
-                                            item_id: item_id.to_string(),
-                                            output_index: 123,
-                                            call_id: call_id.to_string().into(),
-                                            response_id: "123".to_string(),
-                                            delta: tool_call.arguments.to_string(),
-                                        };
-                                    item_id += 1;
-                                    let frame = Frame::text(Payload::Bytes(
-                                        Bytes::from(
-                                            serde_json::to_string(&serialized_data).unwrap(),
-                                        )
-                                        .into(),
-                                    ));
-
-                                    ws.write_frame(frame).await.unwrap();
-
-                                    let serialized_data =
-                                        OpenAIRealtimeResponse::ResponseFunctionCallArgumentsDone {
-                                            item_id: item_id.to_string(),
-                                            output_index: 123,
-                                            call_id: call_id.to_string().into(),
-                                            sequence_number: 123,
-                                            name: tool_call.name,
-                                            arguments: tool_call.arguments.to_string(),
-                                        };
-                                    call_id += 1;
-                                    item_id += 1;
-                                    let frame = Frame::text(Payload::Bytes(
-                                        Bytes::from(
-                                            serde_json::to_string(&serialized_data).unwrap(),
-                                        )
-                                        .into(),
-                                    ));
-                                    frame
-                                } else {
-                                    if let Ok(tool_call) =
-                                        serde_json::from_str::<ToolCall>(&orig_str)
-                                    {
-                                        let serialized_data =
-                                        OpenAIRealtimeResponse::ResponseFunctionCallArgumentsDone {
-                                            item_id: item_id.to_string(),
-                                            output_index: 123,
-                                            call_id: "123".to_string(),
-                                            sequence_number: 123,
-                                            name: tool_call.name,
-                                            arguments: tool_call.arguments.to_string(),
-                                        };
-                                        item_id += 1;
-                                        let frame = Frame::text(Payload::Bytes(
-                                            Bytes::from(
-                                                serde_json::to_string(&serialized_data).unwrap(),
-                                            )
-                                            .into(),
-                                        ));
-                                        println!("Sending tool call: {:?}", serialized_data);
-                                        frame
-                                    } else {
-                                        println!("Failed to parse tool call: {}", str);
-                                        continue;
-                                    }
-                                }
-                            } else {
-                                let serialized_data = OpenAIRealtimeResponse::ResponseTextDelta {
-                                    response_id: "123".to_string(),
-                                    item_id: item_id.to_string(),
-                                    output_index: 123,
-                                    content_index: 123,
-                                    delta: orig_str.to_string(),
-                                };
-                                item_id += 1;
-                                let frame = Frame::text(Payload::Bytes(
-                                    Bytes::from(serde_json::to_string(&serialized_data).unwrap())
-                                        .into(),
-                                ));
-                                frame
-                            };
-                            frame
-                        } else if id.contains("audio") {
-                            let data: Vec<f32> = into_vec(&data).unwrap();
-                            let data = convert_f32_to_pcm16(&data);
-                            let serialized_data = OpenAIRealtimeResponse::ResponseAudioDelta {
+                        if let Ok(tool_call) = serde_json::from_str::<ToolCall>(&str) {
+                            let serialized_data = OpenAIRealtimeResponse::ResponseOutputItemAdded {
+                                event_id: "123".to_string(),
                                 response_id: "123".to_string(),
-                                item_id: item_id.to_string(),
                                 output_index: 123,
-                                content_index: 123,
-                                delta: general_purpose::STANDARD.encode(data),
-                            };
-                            item_id += 1;
-                            let frame = Frame::text(Payload::Bytes(
-                                Bytes::from(serde_json::to_string(&serialized_data).unwrap())
-                                    .into(),
-                            ));
-                            ws.write_frame(frame).await?;
-                            let serialized_data = OpenAIRealtimeResponse::ResponseDone {
-                                response: ResponseDoneData {
-                                    id: "123".to_string(),
-                                    status: "123".to_string(),
-                                    output: vec![],
+                                item: ConversationItem {
+                                    id: Some("msg_007".to_string()),
+                                    item_type: "function_call".to_string(),
+                                    status: Some("in_progress".to_string()),
+                                    role: Some("assistant".to_string()),
+                                    content: vec![],
+                                    call_id: call_id.to_string().into(),
+                                    output: None,
+                                    name: Some(tool_call.name.clone()),
+                                    arguments: None,
+                                    object: None,
                                 },
                             };
-
-                            let payload = Payload::Bytes(
-                                Bytes::from(serde_json::to_string(&serialized_data).unwrap())
-                                    .into(),
-                            );
-                            println!("Sending response done: {:?}", serialized_data);
-                            let frame = Frame::text(payload);
-                            frame
-                        } else if id.contains("speech_started") {
-                            let serialized_data =
-                                OpenAIRealtimeResponse::InputAudioBufferSpeechStarted {
-                                    audio_start_ms: 123,
-                                    item_id: item_id.to_string(),
-                                };
-                            item_id += 1;
-
                             let frame = Frame::text(Payload::Bytes(
                                 Bytes::from(serde_json::to_string(&serialized_data).unwrap())
                                     .into(),
                             ));
-                            frame
-                        } else if id.contains("speech_stopped") {
+
+                            ws.write_frame(frame).await.unwrap();
                             let serialized_data =
-                                OpenAIRealtimeResponse::InputAudioBufferSpeechStopped {
-                                    audio_end_ms: 123,
+                                OpenAIRealtimeResponse::ResponseFunctionCallArgumentsDelta {
                                     item_id: item_id.to_string(),
+                                    output_index: 123,
+                                    call_id: call_id.to_string().into(),
+                                    response_id: "123".to_string(),
+                                    delta: tool_call.arguments.to_string(),
                                 };
                             item_id += 1;
+                            let frame = Frame::text(Payload::Bytes(
+                                Bytes::from(serde_json::to_string(&serialized_data).unwrap())
+                                    .into(),
+                            ));
 
+                            ws.write_frame(frame).await.unwrap();
+
+                            let serialized_data =
+                                OpenAIRealtimeResponse::ResponseFunctionCallArgumentsDone {
+                                    item_id: item_id.to_string(),
+                                    output_index: 123,
+                                    call_id: call_id.to_string().into(),
+                                    sequence_number: 123,
+                                    name: tool_call.name,
+                                    arguments: tool_call.arguments.to_string(),
+                                };
+                            call_id += 1;
+                            item_id += 1;
                             let frame = Frame::text(Payload::Bytes(
                                 Bytes::from(serde_json::to_string(&serialized_data).unwrap())
                                     .into(),
                             ));
                             frame
                         } else {
-                            unimplemented!()
+                            if let Ok(tool_call) = serde_json::from_str::<ToolCall>(&orig_str) {
+                                let serialized_data =
+                                    OpenAIRealtimeResponse::ResponseFunctionCallArgumentsDone {
+                                        item_id: item_id.to_string(),
+                                        output_index: 123,
+                                        call_id: "123".to_string(),
+                                        sequence_number: 123,
+                                        name: tool_call.name,
+                                        arguments: tool_call.arguments.to_string(),
+                                    };
+                                item_id += 1;
+                                let frame = Frame::text(Payload::Bytes(
+                                    Bytes::from(serde_json::to_string(&serialized_data).unwrap())
+                                        .into(),
+                                ));
+                                println!("Sending tool call: {:?}", serialized_data);
+                                frame
+                            } else {
+                                println!("Failed to parse tool call: {}", str);
+                                continue;
+                            }
                         }
-                    }
-                    dora_node_api::Event::Error(_) => {
-                        // println!("Error in input: {}", s);
-                        continue;
-                    }
-                    _ => break,
+                    } else {
+                        let serialized_data = OpenAIRealtimeResponse::ResponseTextDelta {
+                            response_id: "123".to_string(),
+                            item_id: item_id.to_string(),
+                            output_index: 123,
+                            content_index: 123,
+                            delta: orig_str.to_string(),
+                        };
+                        item_id += 1;
+                        let frame = Frame::text(Payload::Bytes(
+                            Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
+                        ));
+                        frame
+                    };
+                    frame
+                } else if id.contains("audio") {
+                    let data: Vec<f32> = into_vec(&ArrowData(data)).unwrap();
+                    let data = convert_f32_to_pcm16(&data);
+                    let serialized_data = OpenAIRealtimeResponse::ResponseAudioDelta {
+                        response_id: "123".to_string(),
+                        item_id: item_id.to_string(),
+                        output_index: 123,
+                        content_index: 123,
+                        delta: general_purpose::STANDARD.encode(data),
+                    };
+                    item_id += 1;
+                    let frame = Frame::text(Payload::Bytes(
+                        Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
+                    ));
+                    ws.write_frame(frame).await?;
+                    let serialized_data = OpenAIRealtimeResponse::ResponseDone {
+                        response: ResponseDoneData {
+                            id: "123".to_string(),
+                            status: "123".to_string(),
+                            output: vec![],
+                        },
+                    };
+
+                    let payload = Payload::Bytes(
+                        Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
+                    );
+                    println!("Sending response done: {:?}", serialized_data);
+                    let frame = Frame::text(payload);
+                    frame
+                } else if id.contains("speech_started") {
+                    let serialized_data = OpenAIRealtimeResponse::InputAudioBufferSpeechStarted {
+                        audio_start_ms: 123,
+                        item_id: item_id.to_string(),
+                    };
+                    item_id += 1;
+
+                    let frame = Frame::text(Payload::Bytes(
+                        Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
+                    ));
+                    frame
+                } else if id.contains("speech_stopped") {
+                    let serialized_data = OpenAIRealtimeResponse::InputAudioBufferSpeechStopped {
+                        audio_end_ms: 123,
+                        item_id: item_id.to_string(),
+                    };
+                    item_id += 1;
+
+                    let frame = Frame::text(Payload::Bytes(
+                        Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
+                    ));
+                    frame
+                } else {
+                    unimplemented!()
                 };
+
                 Some(frame)
             }
-            future::Either::Left(None) => break,
+            future::Either::Left(Ok(DoraTokioBroadcast::Output(_, _, _))) => {
+                todo!("Handle Output variant")
+            }
+            future::Either::Left(Err(_)) => {
+                todo!("Handle Error variant")
+            }
             future::Either::Right(Ok(frame)) => {
                 match frame.opcode {
                     OpCode::Close => break,
@@ -651,11 +579,11 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
                                         "sample_rate".to_string(),
                                         dora_node_api::Parameter::Integer(16000),
                                     );
-                                    node.send_output(
+                                    tx.send(DoraTokioBroadcast::Output(
                                         DataId::from("audio".to_string()),
                                         parameter,
-                                        f32_data.into_arrow(),
-                                    )
+                                        f32_data.into_arrow().to_data(),
+                                    ))
                                     .unwrap();
                                 }
                             }
@@ -667,11 +595,11 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
                                         "tools".to_string(),
                                         dora_node_api::Parameter::String("[]".to_string()),
                                     );
-                                    node.send_output(
+                                    tx.send(DoraTokioBroadcast::Output(
                                         DataId::from("response.create".to_string()),
                                         parameter,
-                                        text.into_arrow(),
-                                    )
+                                        text.into_arrow().to_data(),
+                                    ))
                                     .unwrap();
                                 }
                             }
@@ -683,11 +611,15 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
                                         "tools".to_string(),
                                         dora_node_api::Parameter::String("[]".to_string()),
                                     );
-                                    node.send_output(
+                                    tx.send(DoraTokioBroadcast::Output(
                                         DataId::from("function_call_output".to_string()),
                                         parameter,
-                                        item.output.unwrap_or_default().into_arrow(),
-                                    )
+                                        item.output
+                                            .clone()
+                                            .unwrap_or_default()
+                                            .into_arrow()
+                                            .to_data(),
+                                    ))
                                     .unwrap();
                                 }
                             }
@@ -710,11 +642,12 @@ async fn handle_client(fut: upgrade::UpgradeFut) -> Result<(), WebSocketError> {
 
 async fn server_upgrade(
     mut req: Request<Incoming>,
+    tx: tokio::sync::broadcast::Sender<DoraTokioBroadcast>,
 ) -> Result<Response<Empty<Bytes>>, WebSocketError> {
     let (response, fut) = upgrade::upgrade(&mut req)?;
 
     tokio::task::spawn(async move {
-        if let Err(e) = tokio::task::unconstrained(handle_client(fut)).await {
+        if let Err(e) = tokio::task::unconstrained(handle_client(fut, tx)).await {
             eprintln!("Error in websocket connection: {}", e);
         }
     });
@@ -735,19 +668,88 @@ pub fn lib_main() -> Result<(), WebSocketError> {
         let addr = format!("{}:{}", host, port);
         let listener = TcpListener::bind(&addr).await?;
         println!("Server started, listening on {}", addr);
-        loop {
-            let (stream, _) = listener.accept().await?;
-            println!("Client connected");
-            tokio::spawn(async move {
-                let io = hyper_util::rt::TokioIo::new(stream);
-                let conn_fut = http1::Builder::new()
-                    .serve_connection(io, service_fn(server_upgrade))
-                    .with_upgrades();
-                if let Err(e) = conn_fut.await {
-                    println!("An error occurred: {:?}", e);
+        let (mut node, mut events) = DoraNode::init_from_env().unwrap();
+
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<DoraTokioBroadcast>(16);
+        let tx_dora = tx.clone();
+        let dora_thread_handle = tokio::spawn(async move {
+            loop {
+                let event_fut = rx.recv().map(Either::Left);
+                let frame_fut = events.recv_async().map(Either::Right);
+                let event_stream = (event_fut, frame_fut).race();
+
+                match event_stream.await {
+                    futures_util::future::Either::Right(Some(Event::Input {
+                        id,
+                        metadata,
+                        data,
+                    })) => {
+                        tx_dora
+                            .send(DoraTokioBroadcast::Input(
+                                id,
+                                metadata.parameters,
+                                data.into(),
+                            ))
+                            .unwrap();
+                    }
+                    futures_util::future::Either::Right(Some(Event::Stop(_))) => {
+                        println!("Received stop event, shutting down.");
+                        break;
+                    }
+                    futures_util::future::Either::Right(Some(_)) => {}
+                    futures_util::future::Either::Right(None) => {
+                        eprintln!("Error receiving event");
+                        break;
+                    }
+                    futures_util::future::Either::Left(Ok(DoraTokioBroadcast::Output(
+                        id,
+                        metadata,
+                        data,
+                    ))) => {
+                        if id != DataId::from("audio".to_string()) {
+                            println!("Got the following output text: {}", id);
+                        }
+                        node.send_output(id, metadata, make_array(data)).unwrap();
+                    }
+                    futures_util::future::Either::Left(Ok(DoraTokioBroadcast::Input(
+                        _id,
+                        _metadata,
+                        _data,
+                    ))) => {}
+                    futures_util::future::Either::Left(Err(_)) => {
+                        eprintln!("Error receiving from channel");
+                        break;
+                    }
                 }
-            });
-        }
+            }
+        });
+        tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, _)) => {
+                        println!("Client connected");
+                        let tx2 = tx.clone();
+                        tokio::spawn(async move {
+                            let io = hyper_util::rt::TokioIo::new(stream);
+                            let conn_fut = http1::Builder::new()
+                                .serve_connection(
+                                    io,
+                                    service_fn(move |req| server_upgrade(req, tx2.clone())),
+                                )
+                                .with_upgrades();
+                            if let Err(e) = conn_fut.await {
+                                println!("An error occurred: {:?}", e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        println!("Failed to accept connection: {:?}", e);
+                    }
+                }
+            }
+        });
+        dora_thread_handle.await.unwrap();
+        Ok(())
     })
 }
 
