@@ -181,12 +181,21 @@ def cut_repetition(text, min_repeat_length=4, max_repeat_length=50):
 
 def main():
     """TODO: Add docstring."""
-    node = Node()
     text_noise = ""
     noise_timestamp = time.time()
-    # For macos use mlx:
+    # Load model
     if sys.platform != "darwin":
         pipe = load_model()
+    else:
+        import mlx_whisper
+
+        result = mlx_whisper.transcribe(
+            [],
+            path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
+            append_punctuations=".",
+        )
+
+    node = Node()
 
     for event in node:
         if event["type"] == "INPUT":
@@ -236,5 +245,7 @@ def main():
                 if text.strip() == "" or text.strip() == ".":
                     continue
                 node.send_output(
-                    "text", pa.array([text]), {"language": TARGET_LANGUAGE, "primitive": "text"},
+                    "text",
+                    pa.array([text]),
+                    {"language": TARGET_LANGUAGE, "primitive": "text"},
                 )
