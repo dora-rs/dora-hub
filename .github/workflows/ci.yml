@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  RUST_LOG: DEBUG
+  CI: true
+
+jobs:
+  test:
+    name: "Test"
+    strategy:
+      matrix:
+        platform: [ubuntu-latest, macos-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - uses: r7kamura/rust-problem-matchers@v1.1.0
+      - run: cargo --version --verbose
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-provider: buildjet
+          cache-on-failure: true
+          # only save caches for `main` branch
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-directories: ${{ env.CARGO_TARGET_DIR }}
+
+      - name: "Check"
+        run: cargo check --all --exclude dora-dav1d --exclude dora-rav1e
+      - name: "Build"
+        run: cargo build --all --exclude dora-dav1d --exclude dora-rav1e
+      - name: "Test"
+        run: cargo test --all --exclude dora-dav1d --exclude dora-rav1e
+
+  clippy:
+    name: "Clippy"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: r7kamura/rust-problem-matchers@v1.1.0
+      - run: cargo --version --verbose
+
+      - name: "Clippy"
+        run: cargo clippy --all --exclude dora-dav1d --exclude dora-rav1e
+
+  rustfmt:
+    name: "Formatting"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: r7kamura/rust-problem-matchers@v1.1.0
+      - name: "rustfmt"
+        run: cargo fmt --all -- --check
+
+  typos:
+    name: Typos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      - name: Typos check with custom config file
+        uses: crate-ci/typos@master
