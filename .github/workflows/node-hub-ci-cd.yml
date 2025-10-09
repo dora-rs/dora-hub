@@ -96,5 +96,5 @@ jobs:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_PASS }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          chmod +x ../.github/workflows/node_hub_test.sh
-          ../.github/workflows/node_hub_test.sh
+          chmod +x ../../.github/workflows/node_hub_test.sh
+          ../../.github/workflows/node_hub_test.sh
