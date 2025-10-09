@@ -18,7 +18,7 @@ base_dir=$(basename "$dir")
 
 export GIT_LFS_SKIP_SMUDGE=1 
 # Large node list requiring space cleanup
-large_node=("dora-phi4")
+large_node=("dora-phi4", "dora-qwen2-5-vl")
 
 export PYTEST_ADDOPTS="-x"
 
