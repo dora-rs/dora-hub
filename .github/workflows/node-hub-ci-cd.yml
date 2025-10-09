@@ -32,7 +32,7 @@ jobs:
       - id: jobs
         uses: kmanimaran/list-folder-action@v4
         with:
-          path: .
+          path: node-hub
 
   ci:
     runs-on: ${{ matrix.platform }}
