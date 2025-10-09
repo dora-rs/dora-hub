@@ -31,7 +31,6 @@ dora-node-api = { version = "0.3.13", default-features = false }
 dora-operator-api = { version = "0.3.13", default-features = false }
 dora-operator-api-macros = { version = "0.3.13" }
 dora-operator-api-types = { version = "0.3.13" }
-dora-operator-api-python = { version = "0.3.13" }
 dora-operator-api-c = { version = "0.3.13" }
 dora-node-api-c = { version = "0.3.13" }
 dora-core = { version = "0.3.13" }
@@ -42,9 +41,6 @@ dora-download = { version = "0.3.13" }
 shared-memory-server = { version = "0.3.13" }
 communication-layer-request-reply = { version = "0.3.13" }
 dora-cli = { version = "0.3.13" }
-dora-runtime = { version = "0.3.13" }
-dora-daemon = { version = "0.3.13" }
-dora-coordinator = { version = "0.3.13" }
 dora-ros2-bridge = { version = "0.3.13" }
 dora-ros2-bridge-msg-gen = { version = "0.3.13" }
 # versioned independently from the other dora crates
@@ -75,12 +71,6 @@ publish = false
 [dev-dependencies]
 eyre = "0.6.8"
 tokio = "1.24.2"
-dora-cli = { workspace = true }
-dora-coordinator = { workspace = true }
-dora-core = { workspace = true }
-dora-message = { workspace = true }
-dora-tracing = { workspace = true }
-dora-download = { workspace = true }
 dunce = "1.0.2"
 serde_yaml = "0.8.23"
 uuid = { version = "1.7", features = ["v7", "serde"] }
@@ -111,3 +101,7 @@ path = "examples/benchmark/run.rs"
 [[example]]
 name = "rerun-viewer"
 path = "examples/rerun-viewer/run.rs"
+
+[dependencies]
+eyre = "0.6.8"
+sha1 = "0.10.6"

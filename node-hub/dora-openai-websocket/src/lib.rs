@@ -13,6 +13,8 @@ use dora_node_api::arrow::array::make_array;
 use dora_node_api::arrow::datatypes::DataType;
 use dora_node_api::dora_core::config::DataId;
 use dora_node_api::into_vec;
+use eyre::Context;
+use eyre::Result;
 use fastwebsockets::Frame;
 use fastwebsockets::OpCode;
 use fastwebsockets::Payload;
@@ -22,7 +24,7 @@ use futures_concurrency::future::Race;
 use futures_util::FutureExt;
 use futures_util::future;
 use futures_util::future::Either;
-use http_body_util::Empty;
+use http_body_util::BodyExt;
 use hyper::Request;
 use hyper::Response;
 use hyper::body::Bytes;
@@ -33,7 +35,19 @@ use serde;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::value::RawValue;
+use sha1::Digest;
 use tokio::net::TcpListener;
+mod message;
+mod model;
+use crate::message::ChatCompletionObject;
+use crate::message::ChatCompletionObjectChoice;
+use crate::message::ChatCompletionObjectMessage;
+use crate::message::ChatCompletionRequest;
+use crate::message::FinishReason;
+use crate::message::Usage;
+use crate::model::ListModelsResponse;
+use crate::model::Model;
+use tokio::sync::broadcast;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ErrorDetails {
@@ -310,14 +324,14 @@ fn convert_f32_to_pcm16(samples: &[f32]) -> Vec<u8> {
 }
 
 #[derive(Debug, Clone)]
-enum DoraTokioBroadcast {
+enum BroadcastMessage {
     Output(DataId, MetadataParameters, ArrayData),
     Input(DataId, MetadataParameters, ArrayRef),
 }
 
 async fn handle_client(
     fut: upgrade::UpgradeFut,
-    tx: tokio::sync::broadcast::Sender<DoraTokioBroadcast>,
+    tx: tokio::sync::broadcast::Sender<BroadcastMessage>,
 ) -> Result<(), WebSocketError> {
     let mut ws = fastwebsockets::FragmentCollector::new(fut.await?);
 
@@ -338,13 +352,13 @@ async fn handle_client(
         session: serde_json::Value::Null,
     };
 
-    tx.send(DoraTokioBroadcast::Output(
+    tx.send(BroadcastMessage::Output(
         DataId::from("system_prompt".to_string()),
         MetadataParameters::default(),
         system_prompt.into_arrow().to_data(),
     ))
     .unwrap();
-    tx.send(DoraTokioBroadcast::Output(
+    tx.send(BroadcastMessage::Output(
         DataId::from("tools".to_string()),
         MetadataParameters::default(),
         tools.into_arrow().to_data(),
@@ -365,7 +379,7 @@ async fn handle_client(
         let frame_fut = ws.read_frame().map(Either::Right);
         let event_stream = (event_fut, frame_fut).race();
         let frame = match event_stream.await {
-            future::Either::Left(Ok(DoraTokioBroadcast::Input(id, _metadata, data))) => {
+            future::Either::Left(Ok(BroadcastMessage::Input(id, _metadata, data))) => {
                 let frame = if data.data_type() == &DataType::Utf8 && id.contains("transcript") {
                     let data = data.as_string::<i32>();
                     let str = data.value(0);
@@ -549,7 +563,7 @@ async fn handle_client(
 
                 Some(frame)
             }
-            future::Either::Left(Ok(DoraTokioBroadcast::Output(_, _, _))) => {
+            future::Either::Left(Ok(BroadcastMessage::Output(_, _, _))) => {
                 todo!("Handle Output variant")
             }
             future::Either::Left(Err(_)) => {
@@ -579,7 +593,7 @@ async fn handle_client(
                                         "sample_rate".to_string(),
                                         dora_node_api::Parameter::Integer(16000),
                                     );
-                                    tx.send(DoraTokioBroadcast::Output(
+                                    tx.send(BroadcastMessage::Output(
                                         DataId::from("audio".to_string()),
                                         parameter,
                                         f32_data.into_arrow().to_data(),
@@ -595,7 +609,7 @@ async fn handle_client(
                                         "tools".to_string(),
                                         dora_node_api::Parameter::String("[]".to_string()),
                                     );
-                                    tx.send(DoraTokioBroadcast::Output(
+                                    tx.send(BroadcastMessage::Output(
                                         DataId::from("response.create".to_string()),
                                         parameter,
                                         text.into_arrow().to_data(),
@@ -611,7 +625,7 @@ async fn handle_client(
                                         "tools".to_string(),
                                         dora_node_api::Parameter::String("[]".to_string()),
                                     );
-                                    tx.send(DoraTokioBroadcast::Output(
+                                    tx.send(BroadcastMessage::Output(
                                         DataId::from("function_call_output".to_string()),
                                         parameter,
                                         item.output
@@ -640,19 +654,85 @@ async fn handle_client(
     Ok(())
 }
 
+/// List all models available.
+pub(crate) fn models_handler() -> Result<Response<http_body_util::Full<Bytes>>> {
+    // log
+    let custom_model = Model {
+        id: "custom model".to_string(),
+        created: 123,
+        object: "model".to_string(),
+        owned_by: "dora".to_string(),
+    };
+    let list_models = vec![custom_model];
+
+    let list_models_response = ListModelsResponse {
+        object: "list".to_string(),
+        data: list_models,
+    };
+    // serialize response
+    let s = serde_json::to_string(&list_models_response).context("Failed to serialize response")?;
+
+    // return response
+    Response::builder()
+        .header("Access-Control-Allow-Origin", "*")
+        .header("Access-Control-Allow-Methods", "*")
+        .header("Access-Control-Allow-Headers", "*")
+        .header("Content-Type", "application/json")
+        .body(s.into())
+        .context("Failed to build response")
+}
+
+fn sec_websocket_protocol(key: &[u8]) -> String {
+    use base64::engine::general_purpose::STANDARD;
+    use sha1::Sha1;
+    let mut sha1 = Sha1::new();
+    sha1.update(key);
+    sha1.update(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"); // magic string
+    let result = sha1.finalize();
+    STANDARD.encode(&result[..])
+}
+
 async fn server_upgrade(
     mut req: Request<Incoming>,
-    tx: tokio::sync::broadcast::Sender<DoraTokioBroadcast>,
-) -> Result<Response<Empty<Bytes>>, WebSocketError> {
-    let (response, fut) = upgrade::upgrade(&mut req)?;
+    tx: tokio::sync::broadcast::Sender<BroadcastMessage>,
+) -> Result<Response<http_body_util::Full<Bytes>>> {
+    match req.uri().path() {
+        "/realtime" | "/v1/realtime" => {
+            let (_response, fut) = upgrade::upgrade(&mut req)?;
 
-    tokio::task::spawn(async move {
-        if let Err(e) = tokio::task::unconstrained(handle_client(fut, tx)).await {
-            eprintln!("Error in websocket connection: {}", e);
+            tokio::task::spawn(async move {
+                if let Err(e) = tokio::task::unconstrained(handle_client(fut, tx)).await {
+                    eprintln!("Error in websocket connection: {}", e);
+                }
+            });
+            let key = req
+                .headers()
+                .get("Sec-WebSocket-Key")
+                .ok_or(WebSocketError::MissingSecWebSocketKey)?;
+            let response = Response::builder()
+                .status(hyper::StatusCode::SWITCHING_PROTOCOLS)
+                .header(hyper::header::CONNECTION, "upgrade")
+                .header(hyper::header::UPGRADE, "websocket")
+                .header(
+                    "Sec-WebSocket-Accept",
+                    &sec_websocket_protocol(key.as_bytes()),
+                )
+                .body("123".into())
+                .expect("bug: failed to build response");
+
+            Ok(response)
         }
-    });
-
-    Ok(response)
+        "/v1/chat/completions" => chat_completions_handler(req, tx).await,
+        "/models" | "/v1/models" => models_handler(),
+        _ => {
+            let response = Response::builder()
+                .status(hyper::StatusCode::NOT_FOUND)
+                .body("Not found".into())
+                .expect("bug: failed to build response");
+            print!("Unknown path: {}", req.uri().path());
+            return Ok(response);
+        }
+    }
 }
 
 pub fn lib_main() -> Result<(), WebSocketError> {
@@ -670,7 +750,7 @@ pub fn lib_main() -> Result<(), WebSocketError> {
         println!("Server started, listening on {}", addr);
         let (mut node, mut events) = DoraNode::init_from_env().unwrap();
 
-        let (tx, mut rx) = tokio::sync::broadcast::channel::<DoraTokioBroadcast>(16);
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<BroadcastMessage>(16);
         let tx_dora = tx.clone();
         let dora_thread_handle = tokio::spawn(async move {
             loop {
@@ -685,7 +765,7 @@ pub fn lib_main() -> Result<(), WebSocketError> {
                         data,
                     })) => {
                         tx_dora
-                            .send(DoraTokioBroadcast::Input(
+                            .send(BroadcastMessage::Input(
                                 id,
                                 metadata.parameters,
                                 data.into(),
@@ -701,7 +781,7 @@ pub fn lib_main() -> Result<(), WebSocketError> {
                         eprintln!("Error receiving event");
                         break;
                     }
-                    futures_util::future::Either::Left(Ok(DoraTokioBroadcast::Output(
+                    futures_util::future::Either::Left(Ok(BroadcastMessage::Output(
                         id,
                         metadata,
                         data,
@@ -711,7 +791,7 @@ pub fn lib_main() -> Result<(), WebSocketError> {
                         }
                         node.send_output(id, metadata, make_array(data)).unwrap();
                     }
-                    futures_util::future::Either::Left(Ok(DoraTokioBroadcast::Input(
+                    futures_util::future::Either::Left(Ok(BroadcastMessage::Input(
                         _id,
                         _metadata,
                         _data,
@@ -729,6 +809,7 @@ pub fn lib_main() -> Result<(), WebSocketError> {
                     Ok((stream, _)) => {
                         println!("Client connected");
                         let tx2 = tx.clone();
+
                         tokio::spawn(async move {
                             let io = hyper_util::rt::TokioIo::new(stream);
                             let conn_fut = http1::Builder::new()
@@ -751,6 +832,90 @@ pub fn lib_main() -> Result<(), WebSocketError> {
         dora_thread_handle.await.unwrap();
         Ok(())
     })
+}
+
+// Forked from https://github.com/LlamaEdge/LlamaEdge/blob/6bfe9c12c85bf390c47d6065686caeca700feffa/llama-api-server/src/backend/ggml.rs#L301
+async fn chat_completions_handler(
+    req: Request<Incoming>,
+    request_tx: broadcast::Sender<BroadcastMessage>,
+) -> Result<Response<http_body_util::Full<Bytes>>> {
+    if req.method().eq(&hyper::http::Method::OPTIONS) {
+        let result = Response::builder()
+            .header("Access-Control-Allow-Origin", "*")
+            .header("Access-Control-Allow-Methods", "*")
+            .header("Access-Control-Allow-Headers", "*")
+            .header("Content-Type", "application/json")
+            .body("".into())
+            .context("Failed to build response")?;
+        return Ok(result);
+    }
+    // parse request
+    let body_bytes = req.collect().await.context("Failed to read request body")?;
+    let chat_request: ChatCompletionRequest = serde_json::from_slice(&body_bytes.to_bytes())
+        .context("Failed to deserialize chat completion request")?;
+
+    let mut rx = request_tx.subscribe();
+    request_tx
+        .send(BroadcastMessage::Output(
+            DataId::from("response.create".to_string()),
+            MetadataParameters::default(),
+            chat_request.to_texts().into_arrow().to_data(),
+        ))
+        .context("failed to send request")?;
+    let res = loop {
+        match rx.recv().await {
+            Ok(BroadcastMessage::Input(id, _metadata, data)) => {
+                let s = if data.data_type() == &DataType::Utf8 && id.contains("text") {
+                    let data = data.as_string::<i32>();
+                    let str = data.iter().fold("".to_owned(), |mut acc, x| {
+                        if let Some(x) = x {
+                            acc.push('\n');
+                            acc.push_str(x);
+                        }
+                        acc
+                    });
+                    str.to_owned()
+                } else {
+                    "".to_owned()
+                };
+                let chat_completion_object = ChatCompletionObject {
+                    id: "123".to_string(),
+                    object: "chat.completion".to_string(),
+                    created: 123,
+                    model: "123".to_string(),
+                    choices: vec![ChatCompletionObjectChoice {
+                        index: 0,
+                        message: ChatCompletionObjectMessage {
+                            content: Some(s),
+                            role: message::ChatCompletionRole::Assistant,
+                            tool_calls: vec![],
+                            function_call: None,
+                        },
+                        finish_reason: FinishReason::stop,
+                        logprobs: None,
+                    }],
+                    usage: Usage {
+                        prompt_tokens: 0,
+                        completion_tokens: 0,
+                        total_tokens: 0,
+                    },
+                };
+                let s = serde_json::to_string(&chat_completion_object)
+                    .context("Failed to serialize response")?;
+                // return response
+                let result = Response::builder()
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Access-Control-Allow-Methods", "*")
+                    .header("Access-Control-Allow-Headers", "*")
+                    .header("Content-Type", "application/json")
+                    .body(s.into());
+                break result;
+            }
+            _ => {}
+        }
+    };
+
+    res.context("Failed to build response")
 }
 
 #[cfg(feature = "python")]

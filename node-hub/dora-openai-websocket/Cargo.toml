@@ -42,7 +42,10 @@ pyo3 = { workspace = true, features = [
     "eyre",
     "generate-import-lib",
 ], optional = true }
-
+eyre = "0.6.12"
+indexmap = "2.11.4"
+url = "2.5.7"
+sha1 = "0.10.5"
 
 [[bin]]
 name = "dora-openai-websocket"
