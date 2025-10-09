@@ -43,11 +43,11 @@ jobs:
           cache-directories: ${{ env.CARGO_TARGET_DIR }}
 
       - name: "Check"
-        run: cargo check --all --exclude dora-dav1d --exclude dora-rav1e
+        run: cargo check --all --exclude dora-dav1d --exclude dora-rav1e  --exclude dora-qwen-omni
       - name: "Build"
-        run: cargo build --all --exclude dora-dav1d --exclude dora-rav1e
+        run: cargo build --all --exclude dora-dav1d --exclude dora-rav1e --exclude dora-qwen-omni
       - name: "Test"
-        run: cargo test --all --exclude dora-dav1d --exclude dora-rav1e
+        run: cargo test --all --exclude dora-dav1d --exclude dora-rav1e --exclude dora-qwen-omni
 
   clippy:
     name: "Clippy"
@@ -59,7 +59,7 @@ jobs:
       - run: cargo --version --verbose
 
       - name: "Clippy"
-        run: cargo clippy --all --exclude dora-dav1d --exclude dora-rav1e
+        run: cargo clippy --all --exclude dora-dav1d --exclude dora-rav1e --exclude dora-qwen-omni
 
   rustfmt:
     name: "Formatting"
