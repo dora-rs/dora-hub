@@ -13,6 +13,7 @@ members = [
     "node-hub/dora-rav1e",
     "node-hub/dora-dav1d",
     "node-hub/dora-rustypot",
+    "node-hub/dora-qwen-omni",
 ]
 
 [workspace.package]
