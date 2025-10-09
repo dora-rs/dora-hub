@@ -2156,7 +2156,8 @@ dependencies = [
 [[package]]
 name = "communication-layer-request-reply"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b499787307a803839e3fe0becad8f50a84f5d9ab48457a194c82fa63a9a43bee"
 
 [[package]]
 name = "concat-idents"
@@ -3504,7 +3505,8 @@ dependencies = [
 [[package]]
 name = "dora-arrow-convert"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0af1790d82745638304d85ec3161dc03f0857f139829e31b3518b13cd159cda"
 dependencies = [
  "arrow 54.3.1",
  "chrono",
@@ -3516,7 +3518,8 @@ dependencies = [
 [[package]]
 name = "dora-cli"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "de76d4122c0dd5da4121967c7ca14e93c7e295dcb170cf15a785cdc92b09ff9a"
 dependencies = [
  "bat",
  "clap 4.5.46",
@@ -3560,7 +3563,8 @@ dependencies = [
 [[package]]
 name = "dora-coordinator"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "345741f26d66cbb66f066fccd00a9577710354736de63a05a02e051bf51a5cec"
 dependencies = [
  "ctrlc",
  "dora-core",
@@ -3582,7 +3586,8 @@ dependencies = [
 [[package]]
 name = "dora-core"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "255a1fcbe74b0caa20e83d132a7dbcad3b20769263eb6b748d91dd6c56354bce"
 dependencies = [
  "dora-message 0.6.0",
  "dunce",
@@ -3608,7 +3613,8 @@ dependencies = [
 [[package]]
 name = "dora-daemon"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6d517e6625d48786254c1e24c1ba0e27a5be6b19faa542d5d9621bd793223ed"
 dependencies = [
  "aligned-vec 0.5.0",
  "async-trait",
@@ -3661,7 +3667,8 @@ dependencies = [
 [[package]]
 name = "dora-download"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5bfc2f21c14771b682f57927e7f495442409fbdb1ff5c469ec4497b7e1bf56f2"
 dependencies = [
  "eyre",
  "reqwest",
@@ -3777,7 +3784,8 @@ dependencies = [
 [[package]]
 name = "dora-message"
 version = "0.6.0"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e02396e7fd23f14f0bcdb852a746e0a261004701aa4058fba5f2cb7c428cd3e"
 dependencies = [
  "aligned-vec 0.5.0",
  "arrow-data 54.3.1",
@@ -3799,7 +3807,8 @@ dependencies = [
 [[package]]
 name = "dora-metrics"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56d192d5b9ccefd5089b379a251e8c332e870237dffab5f8d420248f031a63e2"
 dependencies = [
  "eyre",
  "opentelemetry 0.29.1",
@@ -3822,7 +3831,8 @@ dependencies = [
 [[package]]
 name = "dora-node-api"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21a6bbd54b585aeb2bab3cd460fcbf522ad539f793879f8b4ae750ebd7f6de76"
 dependencies = [
  "aligned-vec 0.5.0",
  "arrow 54.3.1",
@@ -3847,7 +3857,8 @@ dependencies = [
 [[package]]
 name = "dora-node-api-c"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cd02f1ac647dbe54931786fb02766fc81fe70522d37e032db2eadd99f5625d8"
 dependencies = [
  "arrow-array 54.3.1",
  "dora-node-api",
@@ -3888,7 +3899,8 @@ dependencies = [
 [[package]]
 name = "dora-operator-api-c"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "012119a07beae463d45aec1ea4cb893bc40fe81614ff7ce858fb41481002e52f"
 dependencies = [
  "dora-operator-api-types",
 ]
@@ -3896,7 +3908,8 @@ dependencies = [
 [[package]]
 name = "dora-operator-api-types"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2a1670c2f51545b7450687a09321eef5ac1e51d85f243964a08368925b48e195"
 dependencies = [
  "arrow 54.3.1",
  "dora-arrow-convert",
@@ -3948,7 +3961,8 @@ dependencies = [
 [[package]]
 name = "dora-runtime"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0cfa9f5fec6b32e35b661e8b1078198914d31a32df3b6270277d878262d69882"
 dependencies = [
  "aligned-vec 0.5.0",
  "arrow 54.3.1",
@@ -3984,7 +3998,8 @@ dependencies = [
 [[package]]
 name = "dora-tracing"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1b3c71657809ba0772bdb00a0d289ccd4dc2da6a6cd736dd2d5d00550f803b2"
 dependencies = [
  "eyre",
  "opentelemetry 0.23.0",
@@ -13107,7 +13122,8 @@ dependencies = [
 [[package]]
 name = "shared-memory-server"
 version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2712bb95a9726b80a00cab3fc76db35221c691ef7a4d7d44c35e4bae0d43bed2"
 dependencies = [
  "bincode",
  "eyre",
@@ -17459,28 +17475,3 @@ dependencies = [
  "syn 2.0.106",
  "winnow",
 ]
-
-[[patch.unused]]
-name = "dora-operator-api"
-version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
-
-[[patch.unused]]
-name = "dora-operator-api-macros"
-version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
-
-[[patch.unused]]
-name = "dora-operator-api-python"
-version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
-
-[[patch.unused]]
-name = "dora-ros2-bridge"
-version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
-
-[[patch.unused]]
-name = "dora-ros2-bridge-msg-gen"
-version = "0.3.13"
-source = "git+https://github.com/dora-rs/dora.git?branch=bump-dora-v0.3.13#686fe24ff792f8c0a2db699159dfb3c8f1d22b4b"
