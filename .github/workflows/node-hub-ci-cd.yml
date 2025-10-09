@@ -39,7 +39,7 @@ jobs:
     needs: [find-jobs]
     defaults:
       run:
-        working-directory: ${{ matrix.folder }}
+        working-directory: node-hub/${{ matrix.folder }}
     strategy:
       fail-fast: ${{ github.event_name != 'workflow_dispatch' && !(github.event_name == 'release' && startsWith(github.ref, 'refs/tags/')) }}
       matrix:
