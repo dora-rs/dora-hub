@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use llm_json::{repair_json, RepairOptions};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
 pub struct BoundingBox {
@@ -9,60 +9,60 @@ pub struct BoundingBox {
 }
 
 /// Parses bounding box JSON from model output, handling malformed JSON and markdown wrappers.
-/// 
+///
 /// This function handles various edge cases including:
 /// - JSON wrapped in markdown code blocks (```json ... ```)
 /// - Missing commas between objects
 /// - Trailing commas (fixed in this version)
 /// - Incomplete/truncated JSON
-/// 
+///
 /// # Example
 /// ```
 /// use dora_qwen_omni::parse_bounding_boxes;
-/// 
+///
 /// // Standard case with markdown wrapper
 /// let json = r#"```json
 /// [
 ///   {"bbox_2d": [100, 100, 200, 200], "text_content": "Hello"}
 /// ]
 /// ```"#;
-/// 
+///
 /// let result = parse_bounding_boxes(json).unwrap();
 /// assert_eq!(result.len(), 1);
-/// 
+///
 /// // Handles trailing commas (previously caused errors)
 /// let json_with_trailing_comma = r#"```json
 /// [
 ///   {"bbox_2d": [100, 100, 200, 200], "text_content": "Hello"},
 /// ]
 /// ```"#;
-/// 
+///
 /// let result = parse_bounding_boxes(json_with_trailing_comma).unwrap();
 /// assert_eq!(result.len(), 1);
 /// ```
 pub fn parse_bounding_boxes(json_str: &str) -> Result<Vec<BoundingBox>, serde_json::Error> {
     let mut cleaned = json_str.trim();
-    
+
     // Handle case where there's explanatory text before the JSON
     // Look for the start of JSON content - either '[' or markdown block
     if let Some(json_start) = find_json_start(cleaned) {
         cleaned = &cleaned[json_start..];
     }
-    
+
     // Remove starting markers
     if cleaned.starts_with("```json\n") {
         cleaned = &cleaned[8..]; // Remove "```json\n"
     } else if cleaned.starts_with("```json") {
         cleaned = &cleaned[7..]; // Remove "```json"
     }
-    
+
     // Remove ending markers
     if cleaned.ends_with("\n```") {
-        cleaned = &cleaned[..cleaned.len()-4]; // Remove "\n```"
+        cleaned = &cleaned[..cleaned.len() - 4]; // Remove "\n```"
     } else if cleaned.ends_with("```") {
-        cleaned = &cleaned[..cleaned.len()-3]; // Remove "```"
+        cleaned = &cleaned[..cleaned.len() - 3]; // Remove "```"
     }
-    
+
     // Handle case where there are trailing characters after valid JSON
     // Find the end of the JSON array by looking for the last ']' that closes the main array
     let mut cleaned_str = cleaned.trim().to_string();
@@ -70,7 +70,7 @@ pub fn parse_bounding_boxes(json_str: &str) -> Result<Vec<BoundingBox>, serde_js
         // Truncate at the end of the main array to remove trailing characters
         cleaned_str = cleaned_str[..=main_array_end].to_string();
     }
-    
+
     let cleaned = cleaned_str;
 
     // Try to parse the cleaned JSON first
@@ -79,28 +79,30 @@ pub fn parse_bounding_boxes(json_str: &str) -> Result<Vec<BoundingBox>, serde_js
         Err(_) => {
             // Try to fix unescaped quotes first
             let mut fixed_json = fix_unescaped_quotes(cleaned.clone());
-            
+
             // Try parsing with quote fixes
             match serde_json::from_str::<Vec<BoundingBox>>(&fixed_json) {
                 Ok(result) => Ok(result),
                 Err(_) => {
                     // Try to fix missing commas between objects
                     fixed_json = fix_missing_commas(fixed_json);
-                    
+
                     // Try parsing with comma fixes
                     match serde_json::from_str::<Vec<BoundingBox>>(&fixed_json) {
                         Ok(result) => Ok(result),
                         Err(_) => {
                             // If that fails, try to handle common truncation issues
                             fixed_json = attempt_completion(fixed_json);
-                            
+
                             // Try parsing the fixed version
                             match serde_json::from_str::<Vec<BoundingBox>>(&fixed_json) {
                                 Ok(result) => Ok(result),
                                 Err(_) => {
                                     // If that fails, try using llm_json to repair it
-                                    let repaired = repair_json(&fixed_json, &RepairOptions::default()).unwrap_or(fixed_json.clone());
-                                    
+                                    let repaired =
+                                        repair_json(&fixed_json, &RepairOptions::default())
+                                            .unwrap_or(fixed_json.clone());
+
                                     // Check if the repaired version is still an array
                                     if repaired.trim_start().starts_with('[') {
                                         serde_json::from_str(&repaired)
@@ -122,18 +124,18 @@ fn find_json_start(text: &str) -> Option<usize> {
     // Look for the first occurrence of either:
     // 1. A markdown code block starting with ```json
     // 2. A direct JSON array starting with '['
-    
+
     // First, try to find ```json
     if let Some(markdown_pos) = text.find("```json") {
         return Some(markdown_pos);
     }
-    
+
     // If no markdown block, look for the first '[' that starts an array
     if let Some(bracket_pos) = text.find('[') {
         // Make sure this '[' looks like the start of a JSON array
         // by checking that what comes before it doesn't suggest it's part of a string
         let before_bracket = &text[..bracket_pos];
-        
+
         // Simple heuristic: if there's explanatory text before the bracket,
         // and the bracket appears to be at the start of a new section/line,
         // then it's likely the JSON start
@@ -141,7 +143,7 @@ fn find_json_start(text: &str) -> Option<usize> {
             return Some(bracket_pos);
         }
     }
-    
+
     None
 }
 
@@ -153,13 +155,13 @@ fn find_main_array_end(text: &str) -> Option<usize> {
     let mut in_string = false;
     let mut escape_next = false;
     let mut found_first_bracket = false;
-    
+
     for (i, ch) in text.char_indices() {
         if escape_next {
             escape_next = false;
             continue;
         }
-        
+
         match ch {
             '"' if !escape_next => in_string = !in_string,
             '\\' if in_string => escape_next = true,
@@ -179,7 +181,7 @@ fn find_main_array_end(text: &str) -> Option<usize> {
             _ => {}
         }
     }
-    
+
     None
 }
 
@@ -192,17 +194,17 @@ fn fix_missing_commas(json: String) -> String {
     let mut escape_next = false;
     let mut brace_count = 0i32;
     let mut bracket_count = 0i32;
-    
+
     while i < chars.len() {
         let ch = chars[i];
-        
+
         if escape_next {
             escape_next = false;
             result.push(ch);
             i += 1;
             continue;
         }
-        
+
         match ch {
             '"' if !in_string => {
                 in_string = true;
@@ -231,15 +233,20 @@ fn fix_missing_commas(json: String) -> String {
             '}' if !in_string => {
                 brace_count -= 1;
                 result.push(ch);
-                
+
                 // If we just closed an object and we're in an array, check if we need a comma
                 if brace_count == 0 && bracket_count > 0 {
                     // Look ahead to see if there's another object starting
                     let mut j = i + 1;
-                    while j < chars.len() && (chars[j].is_whitespace() || chars[j] == '\n' || chars[j] == '\r' || chars[j] == '\t') {
+                    while j < chars.len()
+                        && (chars[j].is_whitespace()
+                            || chars[j] == '\n'
+                            || chars[j] == '\r'
+                            || chars[j] == '\t')
+                    {
                         j += 1;
                     }
-                    
+
                     // If the next non-whitespace character is '{', we need a comma
                     if j < chars.len() && chars[j] == '{' {
                         result.push(',');
@@ -250,36 +257,36 @@ fn fix_missing_commas(json: String) -> String {
                 result.push(ch);
             }
         }
-        
+
         i += 1;
     }
-    
+
     result
 }
 
 fn attempt_completion(mut json: String) -> String {
     let trimmed = json.trim();
-    
+
     // Handle case where JSON is completely truncated mid-object or mid-array
     if !trimmed.is_empty() {
         // First, handle trailing commas before doing completion
         json = remove_trailing_commas(json);
-        
+
         // Fix truncated strings that end with unusual characters like '$'
         json = fix_truncated_strings(json);
-        
+
         // If it looks like we're in the middle of parsing an object/array, try to close it
         let mut brace_count = 0i32;
         let mut bracket_count = 0i32;
         let mut in_string = false;
         let mut escape_next = false;
-        
+
         for ch in json.chars() {
             if escape_next {
                 escape_next = false;
                 continue;
             }
-            
+
             match ch {
                 '"' if !escape_next => in_string = !in_string,
                 '\\' if in_string => escape_next = true,
@@ -290,26 +297,26 @@ fn attempt_completion(mut json: String) -> String {
                 _ => {}
             }
         }
-        
+
         // If we're in a string that wasn't closed, close it
         if in_string {
             json.push('"');
         }
-        
+
         // Close any open objects
         for _ in 0..brace_count {
             json.push('}');
         }
-        
-        // Close any open arrays  
+
+        // Close any open arrays
         for _ in 0..bracket_count {
             json.push(']');
         }
-        
+
         // Final cleanup for any remaining trailing commas
         json = remove_trailing_commas(json);
     }
-    
+
     json
 }
 
@@ -320,17 +327,17 @@ fn fix_unescaped_quotes(json: String) -> String {
     let mut i = 0;
     let mut in_string = false;
     let mut escape_next = false;
-    
+
     while i < chars.len() {
         let ch = chars[i];
-        
+
         if escape_next {
             escape_next = false;
             result.push(ch);
             i += 1;
             continue;
         }
-        
+
         match ch {
             '"' if !in_string => {
                 // Starting a string
@@ -341,18 +348,18 @@ fn fix_unescaped_quotes(json: String) -> String {
                 // This could be either:
                 // 1. The end of the current string (if followed by , } ] or whitespace leading to those)
                 // 2. An unescaped quote within the string that needs escaping
-                
+
                 // Look ahead to see what comes after this quote
                 let mut j = i + 1;
                 while j < chars.len() && chars[j].is_whitespace() {
                     j += 1;
                 }
-                
+
                 // For string values (not keys), we only expect comma, closing brace, or closing bracket
                 // For string keys, we expect a colon
-                let is_end_of_string = j >= chars.len() || 
-                    matches!(chars[j], ',' | '}' | ']' | ':');
-                
+                let is_end_of_string =
+                    j >= chars.len() || matches!(chars[j], ',' | '}' | ']' | ':');
+
                 if is_end_of_string {
                     // This is the end of the string
                     in_string = false;
@@ -371,10 +378,10 @@ fn fix_unescaped_quotes(json: String) -> String {
                 result.push(ch);
             }
         }
-        
+
         i += 1;
     }
-    
+
     result
 }
 
@@ -385,17 +392,17 @@ fn fix_truncated_strings(json: String) -> String {
     let mut i = 0;
     let mut in_string = false;
     let mut escape_next = false;
-    
+
     while i < chars.len() {
         let ch = chars[i];
-        
+
         if escape_next {
             escape_next = false;
             result.push(ch);
             i += 1;
             continue;
         }
-        
+
         match ch {
             '"' if !in_string => {
                 in_string = true;
@@ -419,10 +426,10 @@ fn fix_truncated_strings(json: String) -> String {
                 result.push(ch);
             }
         }
-        
+
         i += 1;
     }
-    
+
     result
 }
 
@@ -431,14 +438,14 @@ fn remove_trailing_commas(json: String) -> String {
     let mut i = 0;
     let mut in_string = false;
     let mut escape_next = false;
-    
+
     while i < chars.len() {
         if escape_next {
             escape_next = false;
             i += 1;
             continue;
         }
-        
+
         match chars[i] {
             '"' if !escape_next => in_string = !in_string,
             '\\' if in_string => escape_next = true,
@@ -446,7 +453,7 @@ fn remove_trailing_commas(json: String) -> String {
                 // Found a comma outside of a string, check if it's a trailing comma
                 let mut j = i + 1;
                 let mut found_closing = false;
-                
+
                 // Look ahead to see what comes after this comma
                 while j < chars.len() {
                     match chars[j] {
@@ -461,7 +468,7 @@ fn remove_trailing_commas(json: String) -> String {
                         _ => break,
                     }
                 }
-                
+
                 // If we found a closing bracket/brace after only whitespace, remove the comma
                 if found_closing {
                     chars.remove(i);
@@ -470,10 +477,10 @@ fn remove_trailing_commas(json: String) -> String {
             }
             _ => {}
         }
-        
+
         i += 1;
     }
-    
+
     chars.into_iter().collect()
 }
 
@@ -491,7 +498,10 @@ mod tests {
         let result = parse_bounding_boxes(json).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].bbox_2d, [110, 194, 291, 235]);
-        assert_eq!(result[0].text_content, Some("Looking for international students urgently".to_string()));
+        assert_eq!(
+            result[0].text_content,
+            Some("Looking for international students urgently".to_string())
+        );
         assert_eq!(result[0].label, None);
     }
 
@@ -507,7 +517,10 @@ mod tests {
         let result = parse_bounding_boxes(json).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].bbox_2d, [110, 194, 291, 235]);
-        assert_eq!(result[0].text_content, Some("Looking for international students urgently".to_string()));
+        assert_eq!(
+            result[0].text_content,
+            Some("Looking for international students urgently".to_string())
+        );
     }
 
     #[test]
@@ -570,7 +583,10 @@ mod tests {
             Ok(boxes) => {
                 assert_eq!(boxes.len(), 1);
                 assert_eq!(boxes[0].bbox_2d, [110, 194, 291, 235]);
-                assert_eq!(boxes[0].text_content, Some("Looking for international students urgently".to_string()));
+                assert_eq!(
+                    boxes[0].text_content,
+                    Some("Looking for international students urgently".to_string())
+                );
             }
             Err(_) => {
                 // If llm_json can't repair it, that's expected behavior too
@@ -617,7 +633,10 @@ mod tests {
         let result = parse_bounding_boxes(json).unwrap();
         assert_eq!(result.len(), 28);
         assert_eq!(result[0].bbox_2d, [110, 194, 291, 235]);
-        assert_eq!(result[0].text_content, Some("Looking for international students urgently".to_string()));
+        assert_eq!(
+            result[0].text_content,
+            Some("Looking for international students urgently".to_string())
+        );
         assert_eq!(result[27].bbox_2d, [660, 804, 728, 822]);
         assert_eq!(result[27].text_content, Some("Refresh content".to_string()));
     }
@@ -660,8 +679,11 @@ mod tests {
                 // If parsing succeeds, should have at least the first complete object
                 assert!(boxes.len() >= 1);
                 assert_eq!(boxes[0].bbox_2d, [110, 194, 291, 235]);
-                assert_eq!(boxes[0].text_content, Some("Looking for international students urgently".to_string()));
-                
+                assert_eq!(
+                    boxes[0].text_content,
+                    Some("Looking for international students urgently".to_string())
+                );
+
                 // Second entry might be fixed by completion, but we don't guarantee it
                 if boxes.len() > 1 {
                     assert_eq!(boxes[1].bbox_2d, [162, 235, 235, 252]);
@@ -675,7 +697,7 @@ mod tests {
         }
     }
 
-    #[test] 
+    #[test]
     fn test_parse_truncated_in_object() {
         let json = r#"[
             {"bbox_2d": [110, 194, 291, 235], "text_content": "Looking for international students urgently"},
@@ -829,11 +851,17 @@ mod tests {
 
         // This should no longer fail with "expected `,` or `]`" error
         let result = parse_bounding_boxes(json);
-        assert!(result.is_ok(), "Should successfully parse JSON with missing commas");
-        
+        assert!(
+            result.is_ok(),
+            "Should successfully parse JSON with missing commas"
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 27);
-        assert_eq!(boxes[0].text_content, Some("Are there any positions available for this month, full-time?".to_string()));
+        assert_eq!(
+            boxes[0].text_content,
+            Some("Are there any positions available for this month, full-time?".to_string())
+        );
         assert_eq!(boxes[26].text_content, Some("Refresh Content".to_string()));
     }
 
@@ -850,11 +878,20 @@ mod tests {
         let result = parse_bounding_boxes(json).unwrap();
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].bbox_2d, [20, 119, 314, 166]);
-        assert_eq!(result[0].text_content, Some("Are there any positions available for this month, full-time?".to_string()));
+        assert_eq!(
+            result[0].text_content,
+            Some("Are there any positions available for this month, full-time?".to_string())
+        );
         assert_eq!(result[1].bbox_2d, [10, 152, 100, 172]);
-        assert_eq!(result[1].text_content, Some("Internships are also available.".to_string()));
+        assert_eq!(
+            result[1].text_content,
+            Some("Internships are also available.".to_string())
+        );
         assert_eq!(result[2].bbox_2d, [10, 184, 109, 202]);
-        assert_eq!(result[2].text_content, Some("10,000 people are interested.".to_string()));
+        assert_eq!(
+            result[2].text_content,
+            Some("10,000 people are interested.".to_string())
+        );
     }
 
     #[test]
@@ -887,12 +924,19 @@ mod tests {
 ```"#;
 
         let result = parse_bounding_boxes(json);
-        assert!(result.is_ok(), "Should successfully parse JSON with trailing comma: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Should successfully parse JSON with trailing comma: {:?}",
+            result
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 21);
         assert_eq!(boxes[0].text_content, Some("This small puddle".to_string()));
-        assert_eq!(boxes[7].text_content, Some("Tiger Tooth Youth Plus · 10 hours ago".to_string()));
+        assert_eq!(
+            boxes[7].text_content,
+            Some("Tiger Tooth Youth Plus · 10 hours ago".to_string())
+        );
         assert_eq!(boxes[20].text_content, Some("Refresh content".to_string()));
     }
 
@@ -909,8 +953,12 @@ mod tests {
 some trailing text that should be ignored"#;
 
         let result = parse_bounding_boxes(json_with_trailing);
-        assert!(result.is_ok(), "Should successfully parse JSON with trailing characters: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Should successfully parse JSON with trailing characters: {:?}",
+            result
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 4);
         assert_eq!(boxes[0].text_content, Some("10:37 PM".to_string()));
@@ -932,15 +980,19 @@ some trailing text that should be ignored"#;
 extensive trailing text with Chinese characters: 事件经过与延迟通报疑云山景城（Mountain View）警方在初步勘查后表示，现场"没有任何可疑活动或行为的迹象""#;
 
         let result = parse_bounding_boxes(json_with_extensive_trailing);
-        assert!(result.is_ok(), "Should successfully parse JSON with extensive trailing characters: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Should successfully parse JSON with extensive trailing characters: {:?}",
+            result
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 4);
         assert_eq!(boxes[0].text_content, Some("10:37 PM".to_string()));
         assert_eq!(boxes[3].text_content, Some("2025".to_string()));
     }
 
-    #[test] 
+    #[test]
     fn test_parse_user_reported_exact_case() {
         // The exact case from the user's error message - truncated at specific position
         let problematic_json = r#"```json
@@ -959,8 +1011,12 @@ extensive trailing text with Chinese characters: 事件经过与延迟通报疑�
 and then lots of trailing text that should be ignored"#;
 
         let result = parse_bounding_boxes(problematic_json);
-        assert!(result.is_ok(), "Should handle user's specific case: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Should handle user's specific case: {:?}",
+            result
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 10);
         assert_eq!(boxes[0].text_content, Some("10:37 PM".to_string()));
@@ -982,13 +1038,29 @@ and then lots of trailing text that should be ignored"#;
 ```"#;
 
         let result = parse_bounding_boxes(json_with_leading);
-        assert!(result.is_ok(), "Should successfully parse JSON with leading text: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Should successfully parse JSON with leading text: {:?}",
+            result
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 3);
-        assert_eq!(boxes[0].text_content, Some("Home News Education Home Health Food Fashion Travel View".to_string()));
-        assert_eq!(boxes[1].text_content, Some("Focus News Entertainment News Life Bait Talk".to_string()));
-        assert_eq!(boxes[2].text_content, Some("Dong Xuan is really not a love brain? Zhang Wei's good you don't understand".to_string()));
+        assert_eq!(
+            boxes[0].text_content,
+            Some("Home News Education Home Health Food Fashion Travel View".to_string())
+        );
+        assert_eq!(
+            boxes[1].text_content,
+            Some("Focus News Entertainment News Life Bait Talk".to_string())
+        );
+        assert_eq!(
+            boxes[2].text_content,
+            Some(
+                "Dong Xuan is really not a love brain? Zhang Wei's good you don't understand"
+                    .to_string()
+            )
+        );
     }
 
     #[test]
@@ -1002,12 +1074,22 @@ and then lots of trailing text that should be ignored"#;
 ]"#;
 
         let result = parse_bounding_boxes(json_with_leading);
-        assert!(result.is_ok(), "Should successfully parse JSON with leading text and no markdown: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Should successfully parse JSON with leading text and no markdown: {:?}",
+            result
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 2);
-        assert_eq!(boxes[0].text_content, Some("Home News Education".to_string()));
-        assert_eq!(boxes[1].text_content, Some("Focus News Entertainment".to_string()));
+        assert_eq!(
+            boxes[0].text_content,
+            Some("Home News Education".to_string())
+        );
+        assert_eq!(
+            boxes[1].text_content,
+            Some("Focus News Entertainment".to_string())
+        );
     }
 
     #[test]
@@ -1026,12 +1108,22 @@ and then lots of trailing text that should be ignored"#;
 ```"#;
 
         let result = parse_bounding_boxes(problematic_json);
-        assert!(result.is_ok(), "Should handle user's specific leading text case: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Should handle user's specific leading text case: {:?}",
+            result
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 5);
-        assert_eq!(boxes[0].text_content, Some("Home News Education Home Health Food Fashion Travel View".to_string()));
-        assert_eq!(boxes[3].text_content, Some("37204886498253! The U.S. debt limit is about to be untenable!".to_string()));
+        assert_eq!(
+            boxes[0].text_content,
+            Some("Home News Education Home Health Food Fashion Travel View".to_string())
+        );
+        assert_eq!(
+            boxes[3].text_content,
+            Some("37204886498253! The U.S. debt limit is about to be untenable!".to_string())
+        );
         assert_eq!(boxes[4].text_content, Some("Jia Ling's new film wraps up, facing resistance, the whole network questions 'repeating the same trick'".to_string()));
     }
 
@@ -1052,8 +1144,12 @@ The image appears to be a Chinese news website or application interface. Here ar
 Note: These coordinates are approximate and may need adjustment for production use."#;
 
         let result = parse_bounding_boxes(json_with_complex_leading);
-        assert!(result.is_ok(), "Should handle complex leading text: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Should handle complex leading text: {:?}",
+            result
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 2);
         assert_eq!(boxes[0].text_content, Some("Breaking News".to_string()));
@@ -1075,8 +1171,12 @@ Note: These coordinates are approximate and may need adjustment for production u
 Additional notes: The parsing was successful and all text elements were extracted."#;
 
         let result = parse_bounding_boxes(json_with_both);
-        assert!(result.is_ok(), "Should handle both leading and trailing text: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Should handle both leading and trailing text: {:?}",
+            result
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 2);
         assert_eq!(boxes[0].text_content, Some("Header".to_string()));
@@ -1144,10 +1244,16 @@ Additional notes: The parsing was successful and all text elements were extracte
         let result = parse_bounding_boxes(json).unwrap();
         assert_eq!(result.len(), 27);
         assert_eq!(result[0].bbox_2d, [20, 119, 314, 166]);
-        assert_eq!(result[0].text_content, Some("Are there any positions available for this month, full-time?".to_string()));
+        assert_eq!(
+            result[0].text_content,
+            Some("Are there any positions available for this month, full-time?".to_string())
+        );
         assert_eq!(result[26].bbox_2d, [676, 808, 748, 824]);
         assert_eq!(result[26].text_content, Some("Refresh Content".to_string()));
-        assert_eq!(result[13].text_content, Some("2024 KPL King's Dream Team: Time difference five".to_string()));
+        assert_eq!(
+            result[13].text_content,
+            Some("2024 KPL King's Dream Team: Time difference five".to_string())
+        );
     }
 
     #[test]
@@ -1163,14 +1269,29 @@ Additional notes: The parsing was successful and all text elements were extracte
 ```"#;
 
         let result = parse_bounding_boxes(json_with_unescaped_quotes);
-        assert!(result.is_ok(), "Should successfully parse JSON with unescaped quotes: {:?}", result);
-        
+        assert!(
+            result.is_ok(),
+            "Should successfully parse JSON with unescaped quotes: {:?}",
+            result
+        );
+
         let boxes = result.unwrap();
         assert_eq!(boxes.len(), 4);
         assert_eq!(boxes[0].text_content, Some("health".to_string()));
-        assert_eq!(boxes[1].text_content, Some("How bad is sitting for too long? More than you think".to_string()));
-        assert!(boxes[2].text_content.as_ref().unwrap().contains("as bad as smoking"));
-        assert!(boxes[3].text_content.as_ref().unwrap().contains("Sitting actually accelerates aging"));
+        assert_eq!(
+            boxes[1].text_content,
+            Some("How bad is sitting for too long? More than you think".to_string())
+        );
+        assert!(boxes[2]
+            .text_content
+            .as_ref()
+            .unwrap()
+            .contains("as bad as smoking"));
+        assert!(boxes[3]
+            .text_content
+            .as_ref()
+            .unwrap()
+            .contains("Sitting actually accelerates aging"));
     }
 
     #[test]
