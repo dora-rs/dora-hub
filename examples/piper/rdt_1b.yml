@@ -1,6 +1,6 @@
 nodes:
   - id: piper_left
-    build: pip install -e ../../dora-piper
+    build: pip install -e ../../node-hub/dora-piper
     path: dora-piper
     inputs:
       tick: dora/timer/millis/100
@@ -13,7 +13,7 @@ nodes:
       CAN_BUS: can_left
 
   - id: piper_right
-    build: pip install -e ../../dora-piper
+    build: pip install -e ../../node-hub/dora-piper
     path: dora-piper
     inputs:
       tick: dora/timer/millis/100
@@ -26,7 +26,7 @@ nodes:
       CAN_BUS: can_right
 
   - id: camera_left
-    build: pip install -e ../../dora-pyorbbecksdk
+    build: pip install -e ../../node-hub/dora-pyorbbecksdk
     path: dora-pyorbbecksdk
     inputs:
       tick: dora/timer/millis/100
@@ -37,7 +37,7 @@ nodes:
       ENCODING: jpeg
 
   - id: camera_center
-    build: pip install -e ../../dora-pyorbbecksdk
+    build: pip install -e ../../node-hub/dora-pyorbbecksdk
     path: dora-pyorbbecksdk
     inputs:
       tick: dora/timer/millis/100
@@ -48,7 +48,7 @@ nodes:
       ENCODING: jpeg
 
   - id: camera_right
-    build: pip install -e ../../dora-pyorbbecksdk
+    build: pip install -e ../../node-hub/dora-pyorbbecksdk
     path: dora-pyorbbecksdk
     inputs:
       tick: dora/timer/millis/100

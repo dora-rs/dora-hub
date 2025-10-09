@@ -14,7 +14,7 @@ nodes:
       IDS: 1 2 3 4 5 6
 
   - id: camera
-    build: pip install -e ../../dora-pyrealsense
+    build: pip install -e ../../node-hub/dora-pyrealsense
     path: dora-pyrealsense
     inputs:
       tick: dora/timer/millis/33
@@ -23,7 +23,7 @@ nodes:
       - depth
 
   - id: pytorch-kinematics
-    build: pip install -e ../../dora-pytorch-kinematics
+    build: pip install -e ../../node-hub/dora-pytorch-kinematics
     path: dora-pytorch-kinematics
     inputs:
       pose: so100/pose
@@ -41,7 +41,7 @@ nodes:
       TRANSFORM: -0.2 -0.01 -0.57 0.7 0 0 0.7
 
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     path: dora-rerun
     inputs:
       #series_so100: so100/pose
@@ -61,7 +61,7 @@ nodes:
       CAMERA_PITCH: -3.1415
 
   - id: dora-microphone
-    build: pip install -e ../../dora-microphone
+    build: pip install -e ../../node-hub/dora-microphone
     path: dora-microphone
     inputs:
       tick: dora/timer/millis/2000
@@ -76,7 +76,7 @@ nodes:
       - text
 
   - id: dora-qwenvl
-    build: pip install -e ../../dora-qwen2-5-vl
+    build: pip install -e ../../node-hub/dora-qwen2-5-vl
     path: dora-qwen2-5-vl
     inputs:
       image: camera/image
@@ -97,7 +97,7 @@ nodes:
       IMAGE_RESIZE_RATIO: "1.0"
 
   - id: sam2
-    build: pip install -e ../../dora-sam2
+    build: pip install -e ../../node-hub/dora-sam2
     path: dora-sam2
     inputs:
       image: camera/image
@@ -106,7 +106,7 @@ nodes:
       - masks
 
   - id: box_coordinates
-    build: pip install -e ../../dora-object-to-pose
+    build: pip install -e ../../node-hub/dora-object-to-pose
     path: dora-object-to-pose
     inputs:
       depth: camera/depth
@@ -124,7 +124,7 @@ nodes:
       - action
 
   - id: dora-vad
-    build: pip install -e ../../dora-vad
+    build: pip install -e ../../node-hub/dora-vad
     path: dora-vad
     inputs:
       audio: dora-microphone/audio
@@ -132,7 +132,7 @@ nodes:
       - audio
 
   - id: dora-distil-whisper
-    build: pip install -e ../../dora-distil-whisper
+    build: pip install -e ../../node-hub/dora-distil-whisper
     path: dora-distil-whisper
     inputs:
       input: dora-vad/audio

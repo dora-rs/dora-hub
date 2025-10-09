@@ -8,7 +8,7 @@ nodes:
       text: dora-echo/echo
 
   - id: dora-echo
-    build: pip install -e ../../dora-echo
+    build: pip install -e ../../node-hub/dora-echo
     path: dora-echo
     inputs:
       echo: dora-openai-server/text

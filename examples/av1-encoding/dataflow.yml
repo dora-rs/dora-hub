@@ -1,6 +1,6 @@
 nodes:
   - id: camera
-    build: pip install -e ../../opencv-video-capture
+    build: pip install -e ../../node-hub/opencv-video-capture
     path: opencv-video-capture
     _unstable_deploy:
       machine: encoder
@@ -54,7 +54,7 @@ nodes:
       - image
 
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     _unstable_deploy:
       machine: encoder
     path: dora-rerun

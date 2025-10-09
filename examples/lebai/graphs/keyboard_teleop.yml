@@ -1,6 +1,6 @@
 nodes:
   - id: lebai-client
-    build: pip install -e ../../../lebai-client
+    build: pip install -e ../../../node-hub/lebai-client
     path: lebai-client
     inputs:
       movec:
@@ -74,7 +74,7 @@ nodes:
       IMAGE_HEIGHT: 480
 
   - id: dora-qwenvl-recorder
-    build: pip install -e ../../../dora/node-hub/llama-factory-recorder
+    build: pip install -e ../../../node-hub/llama-factory-recorder
     path: llama-factory-recorder
     inputs:
       image:

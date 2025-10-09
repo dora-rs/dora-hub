@@ -8,7 +8,7 @@ nodes:
       text: dora-qwen2.5-vl/text
 
   - id: dora-qwen2.5-vl
-    build: pip install -e ../../dora-qwen2-5-vl
+    build: pip install -e ../../node-hub/dora-qwen2-5-vl
     path: dora-qwen2-5-vl
     inputs:
       text: dora-openai-server/text

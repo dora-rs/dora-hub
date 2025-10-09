@@ -10,7 +10,7 @@ nodes:
       CAPTURE_PATH: 0
 
   - id: dora-qwenvl
-    build: pip install -e ../../dora-qwen2-5-vl
+    build: pip install -e ../../node-hub/dora-qwen2-5-vl
     path: dora-qwen2-5-vl
     inputs:
       image: camera/image

@@ -1,18 +1,18 @@
 [workspace]
 resolver = "3"
 members = [
-    "dora-mcp-host",
-    "dora-mcp-server",
-    "dora-record",
-    "dora-rerun",
-    "terminal-print",
-    "openai-proxy-server",
-    "dora-kit-car",
-    "dora-object-to-pose",
-    "dora-mistral-rs",
-    "dora-rav1e",
-    "dora-dav1d",
-    "dora-rustypot",
+    "node-hub/dora-mcp-host",
+    "node-hub/dora-mcp-server",
+    "node-hub/dora-record",
+    "node-hub/dora-rerun",
+    "node-hub/terminal-print",
+    "node-hub/openai-proxy-server",
+    "node-hub/dora-kit-car",
+    "node-hub/dora-object-to-pose",
+    "node-hub/dora-mistral-rs",
+    "node-hub/dora-rav1e",
+    "node-hub/dora-dav1d",
+    "node-hub/dora-rustypot",
 ]
 
 [workspace.package]

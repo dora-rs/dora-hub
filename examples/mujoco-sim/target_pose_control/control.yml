@@ -1,6 +1,6 @@
 nodes:
   - id: mujoco_sim
-    build: pip install -e ../../../dora-mujoco
+    build: pip install -e ../../../node-hub/dora-mujoco
     path: dora-mujoco
     inputs:
       tick: dora/timer/millis/2
@@ -25,7 +25,7 @@ nodes:
       - joint_state
 
   - id: pytorch_kinematics
-    build: pip install -e ../../../dora-pytorch-kinematics
+    build: pip install -e ../../../node-hub/dora-pytorch-kinematics
     path: dora-pytorch-kinematics
     inputs:
       ik_request: controller/ik_request

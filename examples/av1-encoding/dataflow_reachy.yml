@@ -58,7 +58,7 @@ nodes:
       - depth
 
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     _unstable_deploy:
       machine: plot
     path: dora-rerun

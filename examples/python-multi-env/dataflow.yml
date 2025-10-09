@@ -1,6 +1,6 @@
 nodes:
   - id: camera
-    build: pip install -e ../../opencv-video-capture
+    build: pip install -e ../../node-hub/opencv-video-capture
     path: opencv-video-capture
     inputs:
       tick: dora/timer/millis/20
@@ -13,7 +13,7 @@ nodes:
       VIRTUAL_ENV: env_1
 
   - id: object-detection
-    build: pip install -e ../../dora-yolo
+    build: pip install -e ../../node-hub/dora-yolo
     path: dora-yolo
     inputs:
       image: camera/image
@@ -23,7 +23,7 @@ nodes:
       VIRTUAL_ENV: env_2
 
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     path: dora-rerun
     inputs:
       image: camera/image

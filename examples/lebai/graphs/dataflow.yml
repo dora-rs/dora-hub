@@ -1,6 +1,6 @@
 nodes:
   - id: lebai-client
-    build: pip install -e ../../../lebai-client
+    build: pip install -e ../../../node-hub/lebai-client
     path: lebai-client
     inputs:
       movec:

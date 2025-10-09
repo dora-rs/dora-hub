@@ -8,7 +8,7 @@ nodes:
       DATA: "[1, 2, 3, 4, 5]"
 
   - id: dora-echo
-    build: pip install -e ../../dora-echo
+    build: pip install -e ../../node-hub/dora-echo
     path: dora-echo
     inputs:
       data: pyarrow-sender/data
