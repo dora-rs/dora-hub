@@ -1,5 +1,7 @@
 //! Based on the mtmd cli example from llama.cpp.
 
+use base64::Engine;
+use clap::Parser;
 use dora_qwen_omni::parse_bounding_boxes;
 use image::DynamicImage;
 use img_hash::{HashBytes, HasherConfig, ImageHash};
@@ -7,9 +9,6 @@ use std::ffi::CString;
 use std::io::Cursor;
 use std::num::NonZeroU32;
 use std::path::Path;
-u
-use base64::Engine;
-use clap::Parser;
 
 use dora_node_api::arrow::array::AsArray;
 use dora_node_api::dora_core::config::DataId;
@@ -30,8 +29,6 @@ use llm_json::{repair_json, RepairOptions};
 use rusttype::{Font, Scale};
 use serde::{Deserialize, Serialize};
 use text_on_image::{text_on_image_with_background, FontBundle};
-
-const FONT: &[u8] = include_bytes!("NotoSansCJKsc-Bold.otf");
 
 /// Command line parameters for the MTMD CLI application
 #[derive(clap::Parser, Debug)]
@@ -255,7 +252,6 @@ fn run_single_turn(
     // Add media marker if not present
     let (mut node, mut events) = DoraNode::init_from_env().unwrap();
     let mut ctx = MtmdCliContext::new(&params, &model)?;
-    let mut last_image = None;
     let mut never_debounced = true;
     loop {
         match events.recv() {
@@ -317,127 +313,6 @@ fn run_single_turn(
                     Default::default(),
                     text.clone().into_arrow(),
                 )?;
-
-                if let Some(mut img) = img {
-                    let font = Vec::from(FONT);
-                    let font = Font::try_from_vec(font).unwrap();
-
-                    match parse_bounding_boxes(&text.clone()) {
-                        Ok(boxes) => {
-                            let need_translation = boxes
-                                .iter()
-                                .map(|bbox| {
-                                    bbox.text_content
-                                        .clone()
-                                        .unwrap_or_else(|| bbox.label.clone().unwrap_or_default())
-                                })
-                                .reduce(|mut x, y| {
-                                    x.push_str("\n- ");
-                                    x.push_str(&y);
-                                    x
-                                })
-                                .unwrap_or_default();
-                            let mut translation_prompt =
-                                "Translate Chinese into English as a list: \n- ".to_string();
-                            translation_prompt.push_str(&need_translation);
-                            println!("test: {}", translation_prompt);
-                            let msg =
-                                LlamaChatMessage::new("user".to_string(), translation_prompt)?;
-                            let instant3 = std::time::Instant::now();
-                            ctx.eval_message(model, context, msg, true)?;
-
-                            // Generate response (decode)
-                            let translated_text =
-                                ctx.generate_response(model, context, sampler, params.n_predict)?;
-                            let translated_texts: Vec<&str> = translated_text.split("\n").collect();
-                            println!("translated texts: {:#?}", translated_texts);
-                            let elapsed = instant3.elapsed();
-                            println!("got translation in {:.2?}", elapsed);
-                            let elapsed = instant.elapsed();
-                            println!("\nResponse generated in {:.2?}", elapsed);
-                            for (i, bbox) in boxes.iter().enumerate() {
-                                let text = translated_texts.get(i + 2).unwrap_or(&"");
-                                let text = text.strip_prefix("- ").unwrap_or_default();
-                                if text == "" {
-                                    continue;
-                                }
-                                let resize = f32::max(
-                                    img.height() as f32 / 1000.,
-                                    img.width() as f32 / 1000.,
-                                );
-
-                                // Ensure coordinates are in the correct order (min, min, max, max)
-                                let x1 = bbox.bbox_2d[0];
-                                let y1 = bbox.bbox_2d[1];
-                                let x2 = bbox.bbox_2d[2];
-                                let y2 = bbox.bbox_2d[3];
-
-                                // Calculate width and height - guaranteed to be positive
-                                let width = f32::clamp(
-                                    (x2 - x1) as f32,
-                                    10.,
-                                    img.width() as f32 * resize * 1.2,
-                                );
-                                let y_scale = f32::clamp(resize * (y2 - y1) as f32, 10., 32.);
-
-                                // Skip if the bounding box has no area
-                                if y_scale <= 0. || width <= 0. {
-                                    continue;
-                                }
-
-                                let font_bundle = FontBundle::new(
-                                    &font,
-                                    Scale {
-                                        x: y_scale,
-                                        y: y_scale,
-                                    },
-                                    Rgba([20, 20, 20, 0]),
-                                );
-
-                                let wrap = text_on_image::WrapBehavior::Wrap(
-                                    (width as f32 * resize)
-                                        .min(img.width() as f32 * resize - resize * (x1 as f32))
-                                        as u32,
-                                );
-
-                                text_on_image_with_background(
-                                    &mut img,
-                                    text,
-                                    &font_bundle,
-                                    (resize * (x1 as f32)) as i32,
-                                    (resize * (y1 as f32) * 1.1) as i32,
-                                    text_on_image::TextJustify::Left,
-                                    text_on_image::VerticalAnchor::Top,
-                                    wrap,
-                                    Rgba([248, 252, 255, 0]),
-                                );
-                            }
-                        }
-
-                        Err(e) => {
-                            img = last_image.unwrap_or(img).clone();
-                            eprintln!("Failed to parse JSON: {}, text: {:#?}", e, text)
-                        }
-                    }
-                    let mut bytes: Vec<u8> = Vec::new();
-                    img.write_to(
-                        &mut Cursor::new(&mut bytes),
-                        image::ImageOutputFormat::Jpeg(100),
-                    )?;
-                    img.save("test.jpeg")?;
-                    last_image = Some(img);
-                    let engine = base64::engine::general_purpose::STANDARD;
-                    let base64_encoded = engine.encode(bytes);
-                    let mut string = "data:image/png;base64,".to_string();
-
-                    string.push_str(&base64_encoded);
-                    node.send_output(
-                        DataId::from("image".to_string()),
-                        Default::default(),
-                        string.into_arrow(),
-                    )?;
-                    println!("sent Image")
-                }
             }
             _ => break,
         }
