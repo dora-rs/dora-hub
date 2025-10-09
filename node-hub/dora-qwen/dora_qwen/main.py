@@ -97,7 +97,93 @@ def main():
     for event in node:
         if event["type"] == "INPUT":
             # Warning: Make sure to add my_output_id and my_input_id within the dataflow.
-            text = event["value"][0].as_py()
+            texts = event["value"].to_pylist()
+
+            for text in texts:
+                if text.startswith("<|system|>\n"):
+                    history.append(
+                        {
+                            "role": "system",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text.replace("<|system|>\n", ""),
+                                },
+                            ],
+                        }
+                    )
+                elif text.startswith("<|assistant|>\n"):
+                    history.append(
+                        {
+                            "role": "assistant",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text.replace("<|assistant|>\n", ""),
+                                },
+                            ],
+                        }
+                    )
+                elif text.startswith("<|tool|>\n"):
+                    history.append(
+                        {
+                            "role": "tool",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text.replace("<|tool|>\n", ""),
+                                },
+                            ],
+                        }
+                    )
+                elif text.startswith("<|user|>\n<|im_start|>\n"):
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "text",
+                                    "text": text.replace(
+                                        "<|user|>\n<|im_start|>\n", ""
+                                    ),
+                                },
+                            ],
+                        }
+                    )
+                elif text.startswith("<|user|>\n<|vision_start|>\n"):
+                    # Handle the case where the text starts with <|user|>\n<|vision_start|>
+                    image_url = text.replace("<|user|>\n<|vision_start|>\n", "")
+
+                    # If the last message was from the user, append the image URL to it
+                    if history[-1]["role"] == "user":
+                        history[-1]["content"].append(
+                            {
+                                "type": "image",
+                                "image": image_url,
+                            }
+                        )
+                    else:
+                        history.append(
+                            {
+                                "role": "user",
+                                "content": [
+                                    {
+                                        "type": "image",
+                                        "image": image_url,
+                                    },
+                                ],
+                            }
+                        )
+                else:
+                    history.append(
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": text},
+                            ],
+                        }
+                    )
+
             words = text.lower().split()
 
             if "system_prompt" in event["id"]:
@@ -115,6 +201,7 @@ def main():
             if len(ACTIVATION_WORDS) == 0 or any(
                 word in ACTIVATION_WORDS for word in words
             ):
+                print(f"Received input: {text}")
                 # On linux, Windows
                 if sys.platform == "darwin":
                     response = model.create_chat_completion(
