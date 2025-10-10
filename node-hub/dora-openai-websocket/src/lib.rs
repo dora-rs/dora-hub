@@ -442,7 +442,7 @@ async fn handle_client(
 pub(crate) fn models_handler() -> Result<Response<http_body_util::Full<Bytes>>> {
     // log
     let custom_model = Model {
-        id: "custom_model".to_string(),
+        id: "gpt-5".to_string(),
         created: 123,
         object: "model".to_string(),
         owned_by: "dora".to_string(),
