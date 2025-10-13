@@ -1,6 +1,6 @@
 nodes:
   - id: dora-microphone
-    build: pip install -e ../../dora-microphone
+    build: pip install -e ../../node-hub/dora-microphone
     path: dora-microphone
     inputs:
       tick: dora/timer/millis/2000
@@ -8,7 +8,7 @@ nodes:
       - audio
 
   - id: sam2
-    build: pip install -e ../../dora-sam2
+    build: pip install -e ../../node-hub/dora-sam2
     path: dora-sam2
     inputs:
       image_depth: reachy-camera/image_depth
@@ -17,7 +17,7 @@ nodes:
       - masks
 
   - id: dora-vad
-    build: pip install -e ../../dora-vad
+    build: pip install -e ../../node-hub/dora-vad
     path: dora-vad
     inputs:
       audio: dora-microphone/audio
@@ -25,7 +25,7 @@ nodes:
       - audio
 
   - id: dora-distil-whisper
-    build: pip install -e ../../dora-distil-whisper
+    build: pip install -e ../../node-hub/dora-distil-whisper
     path: dora-distil-whisper
     inputs:
       input: dora-vad/audio
@@ -36,7 +36,7 @@ nodes:
       TRANSLATE: true
 
   - id: reachy-mobile-base
-    build: pip install -e ../../dora-reachy2
+    build: pip install -e ../../node-hub/dora-reachy2
     path: dora-reachy2-mobile-base
     inputs:
       action_base: state_machine/action_base
@@ -44,7 +44,7 @@ nodes:
       - response_base
 
   - id: reachy-left-arm
-    build: pip install -e ../../dora-reachy2
+    build: pip install -e ../../node-hub/dora-reachy2
     path: dora-reachy2-left-arm
     inputs:
       pose: state_machine/action_l_arm
@@ -52,7 +52,7 @@ nodes:
       - response_l_arm
 
   - id: reachy-right-arm
-    build: pip install -e ../../dora-reachy2
+    build: pip install -e ../../node-hub/dora-reachy2
     path: dora-reachy2-right-arm
     inputs:
       pose: state_machine/action_r_arm
@@ -60,7 +60,7 @@ nodes:
       - response_r_arm
 
   - id: reachy-camera
-    build: pip install -e ../../dora-reachy2
+    build: pip install -e ../../node-hub/dora-reachy2
     path: dora-reachy2-camera
     inputs:
       tick: dora/timer/millis/50
@@ -71,14 +71,14 @@ nodes:
       - depth
 
   - id: reachy-head
-    build: pip install -e ../../dora-reachy2
+    build: pip install -e ../../node-hub/dora-reachy2
     path: dora-reachy2-head
     inputs:
       boxes2d: parse_bbox/bbox_face
       look: state_machine/look
 
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     path: dora-rerun
     inputs:
       camera_left/image_right: reachy-camera/image_right
@@ -91,7 +91,7 @@ nodes:
       RERUN_MEMORY_LIMIT: 5%
 
   - id: dora-qwenvl
-    build: pip install -e ../../dora-qwen2-5-vl
+    build: pip install -e ../../node-hub/dora-qwen2-5-vl
     path: dora-qwen2-5-vl
     inputs:
       image_depth: reachy-camera/image_depth
@@ -119,7 +119,7 @@ nodes:
       IMAGE_RESIZE_RATIO: "0.5"
 
   - id: box_coordinates
-    build: pip install -e ../../dora-object-to-pose
+    build: pip install -e ../../node-hub/dora-object-to-pose
     path: dora-object-to-pose
     inputs:
       depth: reachy-camera/depth
@@ -128,7 +128,7 @@ nodes:
       - pose
 
   - id: keyboard
-    build: pip install -e ../../dora-keyboard
+    build: pip install -e ../../node-hub/dora-keyboard
     path: dora-keyboard
     inputs:
       tick: dora/timer/millis/1000

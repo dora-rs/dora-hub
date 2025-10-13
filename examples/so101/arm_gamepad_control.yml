@@ -1,6 +1,6 @@
 nodes:
   - id: so101
-    build: pip install -e ../../dora-rustypot
+    build: pip install -e ../../node-hub/dora-rustypot
     path: dora-rustypot
     inputs:
       tick: dora/timer/millis/10
@@ -12,7 +12,7 @@ nodes:
       IDS: 1 2 3 4 5
 
   - id: pytorch_kinematics
-    build: pip install -e ../../dora-pytorch-kinematics
+    build: pip install -e ../../node-hub/dora-pytorch-kinematics
     path: dora-pytorch-kinematics
     inputs:
       cmd_vel: gamepad/cmd_vel
@@ -26,7 +26,7 @@ nodes:
       ROTATION_TOLERANCE: 0.03
 
   - id: gamepad
-    build: pip install -e ../../gamepad
+    build: pip install -e ../../../node-hub/gamepad
     path: gamepad
     outputs:
       - cmd_vel
@@ -39,7 +39,7 @@ nodes:
 
   # comment below path if you don't want to visualize the arm in rerun
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     path: dora-rerun
     inputs:
       jointstate_so101_new_calib: so101/pose

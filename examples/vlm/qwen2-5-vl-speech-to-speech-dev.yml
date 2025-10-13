@@ -10,7 +10,7 @@ nodes:
       CAPTURE_PATH: 1
 
   - id: dora-microphone
-    build: pip install -e ../../dora-microphone
+    build: pip install -e ../../node-hub/dora-microphone
     path: dora-microphone
     inputs:
       tick: dora/timer/millis/2000
@@ -18,7 +18,7 @@ nodes:
       - audio
 
   - id: dora-vad
-    build: pip install -e ../../dora-vad
+    build: pip install -e ../../node-hub/dora-vad
     path: dora-vad
     inputs:
       audio: dora-microphone/audio
@@ -26,7 +26,7 @@ nodes:
       - audio
 
   - id: dora-distil-whisper
-    build: pip install -e ../../dora-distil-whisper
+    build: pip install -e ../../node-hub/dora-distil-whisper
     path: dora-distil-whisper
     inputs:
       input: dora-vad/audio
@@ -36,7 +36,7 @@ nodes:
       TARGET_LANGUAGE: english
 
   - id: dora-qwenvl
-    build: pip install -e ../../dora-qwen2-5-vl
+    build: pip install -e ../../node-hub/dora-qwen2-5-vl
     path: dora-qwen2-5-vl
     inputs:
       image: camera/image
@@ -56,7 +56,7 @@ nodes:
       text_whisper: dora-distil-whisper/text
 
   - id: dora-kokoro-tts
-    build: pip install -e ../../dora-kokoro-tts
+    build: pip install -e ../../node-hub/dora-kokoro-tts
     path: dora-kokoro-tts
     inputs:
       text: dora-qwenvl/text
@@ -64,7 +64,7 @@ nodes:
       - audio
 
   - id: dora-pyaudio
-    build: pip install -e ../../dora-pyaudio
+    build: pip install -e ../../node-hub/dora-pyaudio
     path: dora-pyaudio
     inputs:
       audio: dora-kokoro-tts/audio

@@ -1,6 +1,6 @@
 nodes:
   - id: dora-reachy1
-    build: pip install -e ../../../dora-reachy1
+    build: pip install -e ../../node-hub/dora-reachy1
     path: dora-reachy1
     inputs:
       head_action: text-interpolation/head_action
@@ -33,7 +33,7 @@ nodes:
       - question
 
   - id: camera
-    build: pip install -e ../../../dora-reachy1
+    build: pip install -e ../../node-hub/dora-reachy1
     path: dora-reachy1-vision
     inputs:
       tick: dora/timer/millis/16
@@ -57,7 +57,7 @@ nodes:
       IMAGE_HEIGHT: 480
 
   - id: dora-qwenvl-recorder
-    build: pip install -e ../../../../dora/node-hub/llama-factory-recorder
+    build: pip install -e ../../../../node-hub/llama-factory-recorder
     path: llama-factory-recorder
     inputs:
       image:

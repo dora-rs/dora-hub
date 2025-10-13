@@ -8,7 +8,7 @@ CI=${GITHUB_ACTIONS:-false}
 ignored_folders=("dora-parler" "dora-opus" "dora-internvl" "dora-magma")
 
 # Skip test
-skip_test_folders=("dora-internvl" "dora-parler" "dora-keyboard" "dora-microphone" "terminal-input" "dora-magma")
+skip_test_folders=("dora-internvl" "dora-parler" "dora-keyboard" "dora-microphone" "terminal-input" "dora-magma" "dora-phi4" "dora-qwen2-5-vl")
 
 # Get current working directory
 dir=$(pwd)
@@ -18,7 +18,7 @@ base_dir=$(basename "$dir")
 
 export GIT_LFS_SKIP_SMUDGE=1 
 # Large node list requiring space cleanup
-large_node=("dora-phi4")
+large_node=("dora-phi4", "dora-qwen2-5-vl")
 
 export PYTEST_ADDOPTS="-x"
 

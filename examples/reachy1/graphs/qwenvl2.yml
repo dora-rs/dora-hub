@@ -1,6 +1,6 @@
 nodes:
   - id: dora-reachy1
-    build: pip install -e ../../../dora-reachy1
+    build: pip install -e ../../node-hub/dora-reachy1
     path: dora-reachy1
     inputs:
       head_action: text-interpolation/head_action
@@ -35,7 +35,7 @@ nodes:
       - r_arm_action
 
   - id: camera
-    build: pip install -e ../../../dora-reachy1
+    build: pip install -e ../../node-hub/dora-reachy1
     path: dora-reachy1-vision
     inputs:
       tick: dora/timer/millis/16
@@ -59,7 +59,7 @@ nodes:
       IMAGE_HEIGHT: 480
 
   - id: dora-qwenvl
-    build: pip install -e ../../../../dora/node-hub/dora-qwenvl
+    build: pip install -e ../../node-hub/dora-qwenvl
     path: dora-qwenvl
     inputs:
       image:

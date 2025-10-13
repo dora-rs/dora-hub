@@ -1,6 +1,6 @@
 nodes:
   - id: camera
-    build: pip install -e ../../opencv-video-capture
+    build: pip install -e ../../node-hub/opencv-video-capture
     path: opencv-video-capture
     inputs:
       tick: dora/timer/millis/100
@@ -13,7 +13,7 @@ nodes:
       IMAGE_HEIGHT: "480"
 
   - id: dora-qwenvl
-    build: pip install -e ../../dora-qwen2-5-vl
+    build: pip install -e ../../node-hub/dora-qwen2-5-vl
     path: dora-qwen2-5-vl
     inputs:
       image: camera/image
@@ -36,7 +36,7 @@ nodes:
       IMAGE_RESIZE_RATIO: "0.5"
 
   - id: tracker
-    build: pip install -e ../../dora-cotracker
+    build: pip install -e ../../node-hub/dora-cotracker
     path: dora-cotracker
     inputs:
       image: camera/image
@@ -49,7 +49,7 @@ nodes:
       INTERACTIVE_MODE: false
 
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     path: dora-rerun
     inputs:
       image: camera/image

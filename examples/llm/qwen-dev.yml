@@ -1,6 +1,6 @@
 nodes:
   - id: dora-microphone
-    build: pip install -e ../../dora-microphone
+    build: pip install -e ../../node-hub/dora-microphone
     path: dora-microphone
     inputs:
       tick: dora/timer/millis/2000
@@ -8,7 +8,7 @@ nodes:
       - audio
 
   - id: dora-vad
-    build: pip install -e ../../dora-vad
+    build: pip install -e ../../node-hub/dora-vad
     path: dora-vad
     inputs:
       audio: dora-microphone/audio
@@ -16,7 +16,7 @@ nodes:
       - audio
 
   - id: dora-distil-whisper
-    build: pip install -e ../../dora-distil-whisper
+    build: pip install -e ../../node-hub/dora-distil-whisper
     path: dora-distil-whisper
     inputs:
       text_noise: dora-qwen/text
@@ -27,7 +27,7 @@ nodes:
       TARGET_LANGUAGE: english
 
   - id: dora-qwen
-    build: pip install -e ../../dora-qwen
+    build: pip install -e ../../node-hub/dora-qwen
     path: dora-qwen
     inputs:
       text: dora-distil-whisper/text
@@ -35,14 +35,14 @@ nodes:
       - text
 
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     path: dora-rerun
     inputs:
       text_qwen: dora-qwen/text
       text_whisper: dora-distil-whisper/text
 
   - id: dora-kokoro-tts
-    build: pip install -e ../../dora-kokoro-tts
+    build: pip install -e ../../node-hub/dora-kokoro-tts
     path: dora-kokoro-tts
     inputs:
       text: dora-qwen/text
@@ -52,7 +52,7 @@ nodes:
       ACTIVATION_WORDS: you
 
   - id: dora-pyaudio
-    build: pip install -e ../../dora-pyaudio
+    build: pip install -e ../../node-hub/dora-pyaudio
     path: dora-pyaudio
     inputs:
       audio: dora-kokoro-tts/audio

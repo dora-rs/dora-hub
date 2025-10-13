@@ -1,6 +1,6 @@
 nodes:
   - id: so101
-    build: pip install -e ../../dora-rustypot
+    build: pip install -e ../../node-hub/dora-rustypot
     path: dora-rustypot
     inputs:
       tick: dora/timer/millis/10
@@ -12,7 +12,7 @@ nodes:
       IDS: 1 2 3 4 5 6
 
   - id: leader_interface
-    build: pip install -e ../../dora-rustypot
+    build: pip install -e ../../node-hub/dora-rustypot
     path: dora-rustypot
     inputs:
       tick: dora/timer/millis/10
@@ -24,7 +24,7 @@ nodes:
 
   # comment below path if you don't want to visualize the arms in rerun
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     path: dora-rerun
     inputs:
       jointstate_so101_new_calib: so101/pose

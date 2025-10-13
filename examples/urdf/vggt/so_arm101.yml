@@ -1,6 +1,6 @@
 nodes:
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     path: dora-rerun
     inputs:
       jointstate_so101_new_calib: pytorch_kinematics/cmd_vel
@@ -11,7 +11,7 @@ nodes:
       so101_new_calib_transform: .14 -0. 0.4 -.5 .5 .5 -.5
 
   - id: gamepad
-    build: pip install -e ../../gamepad
+    build: pip install -e ../../../node-hub/gamepad
     path: gamepad
     outputs:
       - cmd_vel
@@ -23,7 +23,7 @@ nodes:
       MAX_ANGULAR_SPEED: 0.05
 
   - id: pytorch_kinematics
-    build: pip install -e ../../dora-pytorch-kinematics
+    build: pip install -e ../../node-hub/dora-pytorch-kinematics
     path: dora-pytorch-kinematics
     inputs:
       cmd_vel: gamepad/cmd_vel
@@ -37,7 +37,7 @@ nodes:
       ROTATION_TOLERANCE: 0.03
 
   - id: camera
-    build: pip install -e ../../../opencv-video-capture
+    build: pip install -e ../../node-hub/opencv-video-capture
     path: opencv-video-capture
     inputs:
       tick: dora/timer/millis/100
@@ -47,7 +47,7 @@ nodes:
       CAPTURE_PATH: 4
 
   - id: camera2
-    build: pip install -e ../../../opencv-video-capture
+    build: pip install -e ../../node-hub/opencv-video-capture
     path: opencv-video-capture
     inputs:
       tick: dora/timer/millis/100
@@ -57,7 +57,7 @@ nodes:
       CAPTURE_PATH: 6
 
   - id: dora-vggt
-    build: pip install -e ../../../dora-vggt
+    build: pip install -e ../../node-hub/dora-vggt
     path: dora-vggt
     inputs:
       image: camera/image

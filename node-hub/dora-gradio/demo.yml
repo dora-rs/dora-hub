@@ -16,7 +16,7 @@ nodes:
       text_whisper: dora-distil-whisper/text
 
   - id: dora-vad
-    build: pip install -e ../../dora-vad
+    build: pip install -e ../../node-hub/dora-vad
     path: dora-vad
     inputs:
       audio: ui/audio
@@ -25,7 +25,7 @@ nodes:
       - timestamp_start
 
   - id: dora-distil-whisper
-    build: pip install -e ../../dora-distil-whisper
+    build: pip install -e ../../node-hub/dora-distil-whisper
     path: dora-distil-whisper
     inputs:
       input: dora-vad/audio

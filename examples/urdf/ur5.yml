@@ -1,6 +1,6 @@
 nodes:
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     path: dora-rerun
     inputs:
       jointstate_ur5_robot: pytorch_kinematics/cmd_vel
@@ -9,7 +9,7 @@ nodes:
       ur5_robot_transform: "0. 0. 0. 1. 0. 0. 0."
 
   - id: gamepad
-    build: pip install -e ../../gamepad
+    build: pip install -e ../../../node-hub/gamepad
     path: gamepad
     outputs:
       - cmd_vel
@@ -21,7 +21,7 @@ nodes:
       MAX_ANGULAR_SPEED: 0.05
 
   - id: pytorch_kinematics
-    build: pip install -e ../../dora-pytorch-kinematics
+    build: pip install -e ../../node-hub/dora-pytorch-kinematics
     path: dora-pytorch-kinematics
     inputs:
       cmd_vel: gamepad/cmd_vel

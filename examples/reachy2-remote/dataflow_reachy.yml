@@ -15,7 +15,7 @@ nodes:
       ROBOT_IP: 127.0.0.1
 
   - id: reachy-left-arm
-    build: pip install -e ../../dora-reachy2
+    build: pip install -e ../../node-hub/dora-reachy2
     path: dora-reachy2-left-arm
     _unstable_deploy:
       machine: encoder
@@ -27,7 +27,7 @@ nodes:
       ROBOT_IP: 127.0.0.1
 
   - id: reachy-right-arm
-    build: pip install -e ../../dora-reachy2
+    build: pip install -e ../../node-hub/dora-reachy2
     path: dora-reachy2-right-arm
     _unstable_deploy:
       machine: encoder
@@ -79,7 +79,7 @@ nodes:
       - depth
 
   - id: dora-microphone
-    build: pip install -e ../../dora-microphone
+    build: pip install -e ../../node-hub/dora-microphone
     path: dora-microphone
     _unstable_deploy:
       machine: macbook
@@ -89,7 +89,7 @@ nodes:
       - audio
 
   - id: dora-vad
-    build: pip install -e ../../dora-vad
+    build: pip install -e ../../node-hub/dora-vad
     _unstable_deploy:
       machine: macbook
     path: dora-vad
@@ -99,7 +99,7 @@ nodes:
       - audio
 
   - id: dora-distil-whisper
-    build: pip install -e ../../dora-distil-whisper
+    build: pip install -e ../../node-hub/dora-distil-whisper
     _unstable_deploy:
       machine: gpu
     path: dora-distil-whisper
@@ -128,7 +128,7 @@ nodes:
       IMAGE_RESIZE_RATIO: "1.0"
 
   - id: dora-qwenvl
-    build: pip install -e ../../dora-qwen2-5-vl
+    build: pip install -e ../../node-hub/dora-qwen2-5-vl
     path: dora-qwen2-5-vl
     _unstable_deploy:
       machine: gpu
@@ -156,7 +156,7 @@ nodes:
       IMAGE_RESIZE_RATIO: "1.0"
 
   - id: sam2
-    build: pip install -e ../../dora-sam2
+    build: pip install -e ../../node-hub/dora-sam2
     path: dora-sam2
     _unstable_deploy:
       machine: gpu
@@ -167,7 +167,7 @@ nodes:
       - masks
 
   - id: tracker
-    build: pip install -e ../../dora-cotracker
+    build: pip install -e ../../node-hub/dora-cotracker
     path: dora-cotracker
     _unstable_deploy:
       machine: gpu
@@ -181,7 +181,7 @@ nodes:
       INTERACTIVE_MODE: false
 
   - id: box_coordinates
-    build: pip install -e ../../dora-object-to-pose
+    build: pip install -e ../../node-hub/dora-object-to-pose
     path: dora-object-to-pose
     _unstable_deploy:
       machine: gpu
@@ -220,7 +220,7 @@ nodes:
       IMAGE_RESIZE_RATIO: "1.0"
 
   - id: reachy-mobile-base
-    build: pip install -e ../../dora-reachy2
+    build: pip install -e ../../node-hub/dora-reachy2
     path: dora-reachy2-mobile-base
     _unstable_deploy:
       machine: encoder
@@ -233,7 +233,7 @@ nodes:
       ROBOT_IP: 127.0.0.1
 
   - id: plot
-    build: pip install -e ../../dora-rerun
+    build: pip install -e ../../node-hub/dora-rerun
     path: dora-rerun
     _unstable_deploy:
       machine: macbook

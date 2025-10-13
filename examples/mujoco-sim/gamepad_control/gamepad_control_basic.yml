@@ -1,6 +1,6 @@
 nodes:
   - id: gamepad
-    build: pip install -e ../../../gamepad
+    build: pip install -e ../../../node-hub/gamepad
     path: gamepad
     outputs:
       - cmd_vel
@@ -9,7 +9,7 @@ nodes:
       tick: dora/timer/millis/10
 
   - id: mujoco_sim
-    build: pip install -e ../../../dora-mujoco
+    build: pip install -e ../../../node-hub/dora-mujoco
     path: dora-mujoco
     inputs:
       tick: dora/timer/millis/2 # 500 Hz simulation
@@ -23,7 +23,7 @@ nodes:
       MODEL_NAME: "iiwa14_mj_description"
 
   - id: pytorch_kinematics
-    build: pip install -e ../../../dora-pytorch-kinematics
+    build: pip install -e ../../../node-hub/dora-pytorch-kinematics
     path: dora-pytorch-kinematics
     inputs:
       cmd_vel: gamepad/cmd_vel
