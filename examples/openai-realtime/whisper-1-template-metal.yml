@@ -17,7 +17,7 @@ nodes:
       - tools
 
   - id: dora-vad
-    build: pip install -e ../../dora-vad
+    build: pip install -e ../../node-hub/dora-vad
     path: dora-vad
     inputs:
       audio:
@@ -33,7 +33,7 @@ nodes:
       THRESHOLD: 0.6
 
   - id: stt
-    build: pip install -e ../../dora-distil-whisper
+    build: pip install -e ../../node-hub/dora-distil-whisper
     path: dora-distil-whisper
     inputs:
       audio:
@@ -47,7 +47,7 @@ nodes:
       TARGET_LANGUAGE: english
 
   - id: llm
-    build: pip install -e ../../dora-qwen
+    build: pip install -e ../../node-hub/dora-qwen
     path: dora-qwen
     inputs:
       text: stt/text
@@ -65,7 +65,7 @@ nodes:
       CONTEXT_SIZE: 10_000
 
   - id: tts
-    build: pip install -e ../../dora-kokoro-tts
+    build: pip install -e ../../node-hub/dora-kokoro-tts
     path: dora-kokoro-tts
     inputs:
       text: llm/text
