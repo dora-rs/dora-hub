@@ -1,4 +1,4 @@
-use llm_json::{repair_json, RepairOptions};
+use llm_json::{RepairOptions, repair_json};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize, PartialEq)]
@@ -1282,16 +1282,20 @@ Additional notes: The parsing was successful and all text elements were extracte
             boxes[1].text_content,
             Some("How bad is sitting for too long? More than you think".to_string())
         );
-        assert!(boxes[2]
-            .text_content
-            .as_ref()
-            .unwrap()
-            .contains("as bad as smoking"));
-        assert!(boxes[3]
-            .text_content
-            .as_ref()
-            .unwrap()
-            .contains("Sitting actually accelerates aging"));
+        assert!(
+            boxes[2]
+                .text_content
+                .as_ref()
+                .unwrap()
+                .contains("as bad as smoking")
+        );
+        assert!(
+            boxes[3]
+                .text_content
+                .as_ref()
+                .unwrap()
+                .contains("Sitting actually accelerates aging")
+        );
     }
 
     #[test]
