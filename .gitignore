@@ -7,6 +7,9 @@ examples/**/*.txt
 # Remove arrow file from dora-record
 **/*.arrow
 *.pt
+**.gguf
+**.mmproj
+
 
 # Remove hdf and stl files
 *.stl
