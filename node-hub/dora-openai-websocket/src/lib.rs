@@ -662,11 +662,12 @@ async fn chat_completions_handler(
                 } else {
                     "".to_owned()
                 };
+                println!("Got the following chat completion text: {}", s);
                 let chat_completion_object = ChatCompletionObject {
                     id: "123".to_string(),
                     object: "chat.completion".to_string(),
                     created: 123,
-                    model: "123".to_string(),
+                    model: "gpt-5".to_string(),
                     choices: vec![ChatCompletionObjectChoice {
                         index: 0,
                         message: ChatCompletionObjectMessage {
@@ -686,14 +687,29 @@ async fn chat_completions_handler(
                 };
                 let s = serde_json::to_string(&chat_completion_object)
                     .context("Failed to serialize response")?;
-                // return response
-                let result = Response::builder()
-                    .header("Access-Control-Allow-Origin", "*")
-                    .header("Access-Control-Allow-Methods", "*")
-                    .header("Access-Control-Allow-Headers", "*")
-                    .header("Content-Type", "application/json")
-                    .body(s.into());
-                break result;
+                let streaming = chat_request.stream.unwrap_or(false);
+                if streaming {
+                    println!("Streaming not supported yet, returning full response");
+                    let result = Response::builder()
+                        .header("Access-Control-Allow-Origin", "*")
+                        .header("Access-Control-Allow-Methods", "*")
+                        .header("Access-Control-Allow-Headers", "*")
+                        .header("Content-Type", "application/json")
+                        .header("Cache-Control", "no-cache")
+                        .header("Connection", "keep-alive")
+                        .header("dora", "no-streaming")
+                        .body(s.into());
+
+                    break result;
+                } else {
+                    let result = Response::builder()
+                        .header("Access-Control-Allow-Origin", "*")
+                        .header("Access-Control-Allow-Methods", "*")
+                        .header("Access-Control-Allow-Headers", "*")
+                        .header("Content-Type", "application/json")
+                        .body(s.into());
+                    break result;
+                }
             }
             _ => {}
         }
