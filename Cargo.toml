@@ -13,6 +13,7 @@ members = [
     "node-hub/dora-rav1e",
     "node-hub/dora-dav1d",
     "node-hub/dora-rustypot",
+    "node-hub/dora-openai-websocket",
 ]
 
 [workspace.package]
@@ -30,7 +31,6 @@ dora-node-api = { version = "0.3.13", default-features = false }
 dora-operator-api = { version = "0.3.13", default-features = false }
 dora-operator-api-macros = { version = "0.3.13" }
 dora-operator-api-types = { version = "0.3.13" }
-dora-operator-api-python = { version = "0.3.13" }
 dora-operator-api-c = { version = "0.3.13" }
 dora-node-api-c = { version = "0.3.13" }
 dora-core = { version = "0.3.13" }
@@ -41,24 +41,20 @@ dora-download = { version = "0.3.13" }
 shared-memory-server = { version = "0.3.13" }
 communication-layer-request-reply = { version = "0.3.13" }
 dora-cli = { version = "0.3.13" }
-dora-runtime = { version = "0.3.13" }
-dora-daemon = { version = "0.3.13" }
-dora-coordinator = { version = "0.3.13" }
 dora-ros2-bridge = { version = "0.3.13" }
 dora-ros2-bridge-msg-gen = { version = "0.3.13" }
 # versioned independently from the other dora crates
-dora-message = { version = "0.5.0" }
+dora-message = { version = "0.6.0" }
 arrow = { version = "54.2.1" }
 arrow-schema = { version = "54.2.1" }
 arrow-data = { version = "54.2.1" }
 arrow-array = { version = "54.2.1" }
 parquet = { version = "54.2.1" }
-pyo3 = { version = "0.23", features = [
+pyo3 = { version = "0.25", features = [
     "eyre",
     "abi3-py37",
     "multiple-pymethods",
 ] }
-pythonize = "0.23"
 git2 = { version = "0.18.0", features = ["vendored-openssl"] }
 serde_yaml = "0.9.33"
 
@@ -74,18 +70,14 @@ publish = false
 [dev-dependencies]
 eyre = "0.6.8"
 tokio = "1.24.2"
-dora-cli = { workspace = true }
-dora-coordinator = { workspace = true }
-dora-core = { workspace = true }
-dora-message = { workspace = true }
-dora-tracing = { workspace = true }
-dora-download = { workspace = true }
 dunce = "1.0.2"
 serde_yaml = "0.8.23"
 uuid = { version = "1.7", features = ["v7", "serde"] }
 tracing = "0.1.36"
 futures = "0.3.25"
 tokio-stream = "0.1.11"
+dora-core = { version = "0.3.13" }
+dora-tracing = { version = "0.3.13" }
 
 [[example]]
 name = "camera"
@@ -110,3 +102,7 @@ path = "examples/benchmark/run.rs"
 [[example]]
 name = "rerun-viewer"
 path = "examples/rerun-viewer/run.rs"
+
+[dependencies]
+eyre = "0.6.8"
+sha1 = "0.10.6"
