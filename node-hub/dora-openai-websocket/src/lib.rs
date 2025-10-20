@@ -358,10 +358,6 @@ async fn handle_client(
                             OpenAIRealtimeMessage::ResponseCreate { response } => {
                                 if let Some(text) = response.instructions {
                                     let mut parameter = MetadataParameters::default();
-                                    parameter.insert(
-                                        "tools".to_string(),
-                                        dora_node_api::Parameter::String("[]".to_string()),
-                                    );
                                     tx.send(BroadcastMessage::Output(
                                         DataId::from("response.create".to_string()),
                                         parameter,
@@ -375,10 +371,6 @@ async fn handle_client(
                                 match item.item_type.as_str() {
                                     "function_call_output" => {
                                         let mut parameter = MetadataParameters::default();
-                                        parameter.insert(
-                                            "tools".to_string(),
-                                            dora_node_api::Parameter::String("[]".to_string()),
-                                        );
                                         tx.send(BroadcastMessage::Output(
                                             DataId::from("function_call_output".to_string()),
                                             parameter,

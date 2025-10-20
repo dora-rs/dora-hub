@@ -99,6 +99,12 @@ def main():
             # Warning: Make sure to add my_output_id and my_input_id within the dataflow.
             texts = event["value"].to_pylist()
 
+            if "system_prompt" in event["id"]:
+                history += [{"role": "system", "content": texts[0]}]
+                continue
+            if "tools" in event["id"]:
+                tools = json.loads(texts[0])
+                continue
             for text in texts:
                 if text.startswith("<|system|>\n"):
                     history.append(
@@ -178,22 +184,11 @@ def main():
                     history.append(
                         {
                             "role": "user",
-                            "content": [
-                                {"type": "text", "text": text},
-                            ],
+                            "content": text,
                         }
                     )
 
             words = text.lower().split()
-
-            if "system_prompt" in event["id"]:
-                history += [{"role": "system", "content": text}]
-                print(f"System prompt set to: {text}")
-                continue
-            if "tools" in event["id"]:
-                tools = json.loads(text)
-                print(f"Tools set to: {tools}")
-                continue
 
             tmp_tools = event["metadata"].get("tools")
             tmp_tools = json.loads(tmp_tools) if tmp_tools is not None else tools
@@ -201,14 +196,16 @@ def main():
             if len(ACTIVATION_WORDS) == 0 or any(
                 word in ACTIVATION_WORDS for word in words
             ):
-                print(f"Received input: {text}")
+                print(f"Received input: {history}")
                 # On linux, Windows
                 if sys.platform == "darwin":
                     response = model.create_chat_completion(
-                        messages=[{"role": "user", "content": text}],  # Prompt
-                        max_tokens=200,
+                        messages=history,  # Prompt
+                        max_tokens=150,
                         tools=tools,
                     )["choices"][0]["message"]["content"]
+
+                    history += [{"role": "assistant", "content": response}]
                 elif sys.platform == "linux":
                     response, history = generate_hf(model, tokenizer, text, history)
                 else:

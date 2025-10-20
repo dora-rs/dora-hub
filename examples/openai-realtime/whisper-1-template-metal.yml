@@ -71,3 +71,5 @@ nodes:
       text: llm/text
     outputs:
       - audio
+    env:
+      VOICE: am_fenrir

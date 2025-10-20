@@ -56,11 +56,6 @@ def main():
             )
 
             if len(speech_timestamps) == 0 and should_stop > 0:
-                node.send_output(
-                    "timestamp_end",
-                    pa.array([last_speech_timestamps[-1]["end"]]),
-                )
-
                 should_stop += 1
             if len(speech_timestamps) == 0:
                 if should_stop < 3:
@@ -87,3 +82,8 @@ def main():
                 metadata={"sample_rate": sr},
             )
             last_audios = []
+
+            node.send_output(
+                "timestamp_end",
+                pa.array([last_speech_timestamps[-1]["end"]]),
+            )
