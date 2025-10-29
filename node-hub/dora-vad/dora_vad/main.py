@@ -85,5 +85,5 @@ def main():
 
             node.send_output(
                 "timestamp_end",
-                pa.array([last_speech_timestamps[-1]["end"]]),
+                pa.array([speech_timestamps[-1]["end"]]),
             )

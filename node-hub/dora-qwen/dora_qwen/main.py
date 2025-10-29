@@ -196,7 +196,6 @@ def main():
             if len(ACTIVATION_WORDS) == 0 or any(
                 word in ACTIVATION_WORDS for word in words
             ):
-                print(f"Received input: {history}")
                 # On linux, Windows
                 if sys.platform == "darwin":
                     response = model.create_chat_completion(
@@ -218,7 +217,7 @@ def main():
                         verbose=False,
                         max_tokens=50,
                     )
-
+                print(response)
                 node.send_output(
                     output_id="text",
                     data=pa.array([response]),
