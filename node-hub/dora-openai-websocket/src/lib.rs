@@ -153,10 +153,12 @@ async fn handle_client(
                     let data = data.as_string::<i32>();
                     let orig_str = data.value(0);
                     // If response start and finish with <tool_call> parse it.
-                    let frame = if orig_str.starts_with("<tool_call>") {
+                    let frame = if orig_str.contains("<tool_call>") {
                         let str = orig_str
-                            .trim_start_matches("<tool_call>")
-                            .trim_end_matches("</tool_call>");
+                            .split("<tool_call>")
+                            .nth(1)
+                            .unwrap_or_default()
+                            .replace("</tool_call>", "");
 
                         // Replace double curly braces with single curly braces
                         let str = if str.contains("{{") {
