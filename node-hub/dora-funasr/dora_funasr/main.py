@@ -154,6 +154,7 @@ def main():
     # For macos use mlx:
     model = load_model()
 
+    model.generate([np.zeros(16000)])  # warm up
     node = Node()
     noise_timestamp = time.time()
     cache_audio = None

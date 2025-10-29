@@ -9,9 +9,9 @@ from dora import Node
 from kokoro import KPipeline
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-REPO_ID = "hexgrad/Kokoro-82M"
+REPO_ID = os.getenv("REPO_ID", "hexgrad/Kokoro-82M")
 
-LANGUAGE = os.getenv("LANGUAGE", "en")
+LANGUAGE = os.getenv("LANGUAGE", "a")
 VOICE = os.getenv("VOICE", "af_heart")
 
 
@@ -30,9 +30,18 @@ def main():
     """TODO: Add docstring."""
     # Set up pipelines for English and Chinese
     pipeline = KPipeline(
-        lang_code="z",
+        lang_code=LANGUAGE,
         repo_id=REPO_ID,
     )  # <= make sure lang_code matches voice
+    # warm up voice
+    generator = pipeline(
+        "hello",
+        voice=VOICE,
+        speed=1.2,
+        split_pattern=r"\n+",
+    )
+    for _, (_, _, audio) in enumerate(generator):
+        pass
     node = Node()
 
     for event in node:
@@ -49,8 +58,21 @@ def main():
                         continue
                 # Split text with point or comma even chinese version
                 texts = re.sub(r"([。,.，?!:])", r"\1\n", text)
+
                 for text in texts.split("\n"):
                     # Skip if text start with <tool_call>
+                    if (
+                        re.findall(r"[\u4e00-\u9fff]+", text)
+                        and pipeline.lang_code != "z"
+                    ):
+                        pipeline = KPipeline(repo_id=REPO_ID, lang_code="z")
+                    elif (
+                        not re.findall(r"[\u4e00-\u9fff]+", text)
+                        and pipeline.lang_code == "z"
+                    ):
+                        pipeline = KPipeline(
+                            repo_id=REPO_ID, lang_code="a"
+                        )  # reset to default
 
                     generator = pipeline(
                         text,
