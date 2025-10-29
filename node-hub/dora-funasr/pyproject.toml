@@ -1,0 +1,27 @@
+[project]
+name = "dora-funasr"
+version = "0.0.0"
+authors = [{ name = "Your Name", email = "email@email.com" }]
+description = "dora-funasr"
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.8"
+
+dependencies = [
+    "dora-rs >= 0.3.9",
+    "funasr",
+    "torch>=2.5.1",
+    "torchaudio>=2.5.1",
+]
+
+[dependency-groups]
+dev = ["pytest >=8.1.1", "ruff >=0.9.1"]
+
+[project.scripts]
+dora-funasr = "dora_funasr.main:main"
+
+[tool.ruff.lint]
+extend-select = [
+  "D",  # pydocstyle
+  "UP",
+]

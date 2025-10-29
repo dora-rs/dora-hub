@@ -33,8 +33,8 @@ nodes:
       THRESHOLD: 0.6
 
   - id: stt
-    build: pip install -e ../../node-hub/dora-distil-whisper
-    path: dora-distil-whisper
+    build: pip install -e ../../node-hub/dora-funasr
+    path: dora-funasr
     inputs:
       audio:
         source: dora-vad/audio
