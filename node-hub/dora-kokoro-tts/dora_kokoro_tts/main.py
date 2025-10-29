@@ -15,17 +15,6 @@ LANGUAGE = os.getenv("LANGUAGE", "a")
 VOICE = os.getenv("VOICE", "af_heart")
 
 
-# HACK: Mitigate rushing caused by lack of training data beyond ~100 tokens
-# Simple piecewise linear fn that decreases speed as len_ps increases
-def speed_callable(len_ps):
-    speed = 0.8
-    if len_ps <= 83:
-        speed = 1
-    elif len_ps < 183:
-        speed = 1 - (len_ps - 83) / 500
-    return speed * 1.1
-
-
 def main():
     """TODO: Add docstring."""
     # Set up pipelines for English and Chinese
@@ -71,7 +60,7 @@ def main():
                         and pipeline.lang_code == "z"
                     ):
                         pipeline = KPipeline(
-                            repo_id=REPO_ID, lang_code="a"
+                            repo_id=REPO_ID, lang_code=LANGUAGE
                         )  # reset to default
 
                     generator = pipeline(
