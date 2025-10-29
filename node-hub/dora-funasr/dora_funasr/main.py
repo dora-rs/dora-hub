@@ -1,7 +1,6 @@
 """TODO: Add docstring."""
 
 import re
-import time
 
 import numpy as np
 import pyarrow as pa
@@ -58,6 +57,7 @@ def remove_text_noise(text: str, text_noise="") -> str:
 
 # Load model
 def load_model():
+    """Load funasr model."""
     from funasr import AutoModel
 
     return AutoModel(
@@ -156,7 +156,6 @@ def main():
 
     model.generate([np.zeros(16000)])  # warm up
     node = Node()
-    noise_timestamp = time.time()
     cache_audio = None
     for event in node:
         if event["type"] == "INPUT":
@@ -168,7 +167,6 @@ def main():
                     .replace("[", "")
                     .replace("]", "")
                 )
-                noise_timestamp = time.time()
             else:
                 audio_input = event["value"].to_numpy()
                 if cache_audio is not None:
