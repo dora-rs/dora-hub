@@ -191,6 +191,7 @@ def main():
             words = text.lower().split()
 
             tmp_tools = event["metadata"].get("tools")
+            tool_choice = event["metadata"].get("tool_choice", "auto")
             tmp_tools = json.loads(tmp_tools) if tmp_tools is not None else tools
 
             if len(ACTIVATION_WORDS) == 0 or any(
@@ -202,6 +203,7 @@ def main():
                         messages=history,  # Prompt
                         max_tokens=150,
                         tools=tools,
+                        tool_choice=tool_choice,
                     )["choices"][0]["message"]["content"]
 
                     history += [{"role": "assistant", "content": response}]

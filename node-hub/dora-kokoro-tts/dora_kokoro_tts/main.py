@@ -46,9 +46,11 @@ def main():
                     if text == "":
                         continue
                 # Split text with point or comma even chinese version
-                texts = re.sub(r"([。,.，?!:])", r"\1\n", text)
+                texts = re.sub(r"([。.，?!:])", r"\1\n", text)
 
                 for text in texts.split("\n"):
+                    if text.strip() == "":
+                        continue
                     # Skip if text start with <tool_call>
                     if (
                         re.findall(r"[\u4e00-\u9fff]+", text)

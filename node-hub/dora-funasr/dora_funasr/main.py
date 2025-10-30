@@ -179,8 +179,8 @@ def main():
                 )[0]
 
                 text = result["text"]
-                print(f"Raw text: {text}")
                 text = text.replace(" ", "")
+                print(f"Raw text: {text}")
                 if text.strip() == "" or text.strip() == ".":
                     continue
 
