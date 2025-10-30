@@ -49,21 +49,21 @@ def main():
                 texts = re.sub(r"([。.，?!:])", r"\1\n", text)
 
                 for text in texts.split("\n"):
-                    if text.strip() == "":
+                    # if text is empty, skip
+                    if text.strip() == "" or text.strip() == "." or text.strip() == '"':
                         continue
+                    print(f"Processing text: {text}")
                     # Skip if text start with <tool_call>
                     if (
                         re.findall(r"[\u4e00-\u9fff]+", text)
                         and pipeline.lang_code != "z"
                     ):
-                        pipeline = KPipeline(repo_id=REPO_ID, lang_code="z")
+                        pipeline.lang_code = "z"  # switch to chinese
                     elif (
                         not re.findall(r"[\u4e00-\u9fff]+", text)
                         and pipeline.lang_code == "z"
                     ):
-                        pipeline = KPipeline(
-                            repo_id=REPO_ID, lang_code=LANGUAGE
-                        )  # reset to default
+                        pipeline.lang_code = "a"  # switch to english
 
                     generator = pipeline(
                         text,
