@@ -615,7 +615,7 @@ impl ChatCompletionUserMessageContent {
     pub fn to_texts(&self) -> Vec<String> {
         match self {
             ChatCompletionUserMessageContent::Text(text) => {
-                vec![String::from("user: ") + &text.clone()]
+                vec![text.clone()]
             }
             ChatCompletionUserMessageContent::Parts(parts) => parts
                 .iter()

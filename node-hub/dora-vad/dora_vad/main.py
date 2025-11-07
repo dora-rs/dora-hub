@@ -32,17 +32,11 @@ def main():
             sr = event["metadata"].get("sample_rate", 16000)
 
             tmp_audio += [audio]
-            if (len(tmp_audio) * len(audio) / (sr)) < 0.1:
+            if (len(tmp_audio) * len(audio) / (sr)) < 0.05:
                 continue
             audio = np.concatenate(tmp_audio)
             last_audios += [audio]
             tmp_audio = []
-
-            if (len(audio) / sr) < 0.1:
-                continue
-            # If the block of audio are less than 100ms skip some of them
-            if ((10 * sr) // len(audio)) < len(last_audios) and should_stop == 0:
-                last_audios = last_audios[-(10 * sr) // len(audio) :]
 
             audio = np.concatenate(last_audios)
             speech_timestamps = get_speech_timestamps(
