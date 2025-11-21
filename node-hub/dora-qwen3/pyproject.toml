@@ -5,9 +5,9 @@ authors = [{ name = "Your Name", email = "email@email.com" }]
 description = "dora-qwen3"
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 
-dependencies = ["dora-rs >= 0.3.9"]
+dependencies = ["dora-rs >= 0.3.9", "mlx-lm>=0.21"]
 
 [dependency-groups]
 dev = ["pytest >=8.1.1", "ruff >=0.9.1"]
@@ -17,6 +17,6 @@ dora-qwen3 = "dora_qwen3.main:main"
 
 [tool.ruff.lint]
 extend-select = [
-  "D",   # pydocstyle
-  "UP"
+  "D",  # pydocstyle
+  "UP",
 ]
