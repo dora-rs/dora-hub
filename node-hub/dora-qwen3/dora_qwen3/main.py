@@ -114,12 +114,16 @@ def main() -> None:
                         if hasattr(token_response, "text")
                         else str(token_response)
                     )
+                    token_text = token_text.replace("<|im_start|>", "").replace(
+                        "<|im_end|>", ""
+                    )
                     chunk_buffer += token_text
 
                     # Skip if it's part of thinking tags
                     if "</think>" in chunk_buffer:
                         think = False
-                        chunk_buffer = chunk_buffer.partition("</think>")[2]
+                        chunk_buffer = chunk_buffer.partition("</think>\n")[2]
+                        continue
                     elif "<think>" in chunk_buffer or think:
                         think = True
                         chunk_buffer = ""
