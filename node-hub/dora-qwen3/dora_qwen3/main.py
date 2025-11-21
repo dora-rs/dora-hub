@@ -2,11 +2,10 @@
 
 import json
 import os
-import sys
 
 import pyarrow as pa
 from dora import Node
-from mlx_lm import load, generate, stream_generate
+from mlx_lm import generate, load, stream_generate
 
 SYSTEM_PROMPT = os.getenv(
     "SYSTEM_PROMPT",
@@ -25,7 +24,7 @@ response = generate(model, tokenizer, prompt=prompt, verbose=False)
 ACTIVATION_WORDS = os.getenv("ACTIVATION_WORDS", "").split()
 
 
-def main():
+def main() -> None:
     """TODO: Add docstring."""
     history = []
     tools = None
@@ -49,21 +48,21 @@ def main():
                         {
                             "role": "system",
                             "content": text.replace("<|system|>\n", ""),
-                        }
+                        },
                     )
                 elif text.startswith("<|assistant|>\n"):
                     history.append(
                         {
                             "role": "assistant",
                             "content": text.replace("<|assistant|>\n", ""),
-                        }
+                        },
                     )
                 elif text.startswith("<|tool|>\n"):
                     history.append(
                         {
                             "role": "tool",
                             "content": text.replace("<|tool|>\n", ""),
-                        }
+                        },
                     )
                 elif text.startswith("<|user|>\n<|im_start|>\n"):
                     history.append(
@@ -71,7 +70,7 @@ def main():
                             "role": "user",
                             "content": text.replace("<|user|>\n<|im_start|>\n", "")
                             + " /no_think",
-                        }
+                        },
                     )
                     # If the last message was from the user, append the image URL to it
 
@@ -80,13 +79,13 @@ def main():
                         {
                             "role": "user",
                             "content": text + " /no_think",
-                        }
+                        },
                     )
 
             words = text.lower().split()
 
             tmp_tools = event["metadata"].get("tools")
-            tool_choice = event["metadata"].get("tool_choice", "auto")
+            event["metadata"].get("tool_choice", "auto")
             tmp_tools = json.loads(tmp_tools) if tmp_tools is not None else tools
 
             if len(ACTIVATION_WORDS) == 0 or any(
@@ -129,19 +128,19 @@ def main():
                         tool_buffer = chunk_buffer
                         tool_call = True
                         continue
-                    elif tool_call:
+                    if tool_call:
                         tool_buffer += chunk_buffer
                         tool_call = True
                         continue
-                    elif "</tool_call>" in chunk_buffer:
+                    if "</tool_call>" in chunk_buffer:
                         tool_call = False
                         node.send_output(
                             output_id="text",
                             data=pa.array(
                                 [
                                     tool_buffer.partition("</tool_call>")[0]
-                                    + "</tool_call>"
-                                ]
+                                    + "</tool_call>",
+                                ],
                             ),
                         )
                         chunk_buffer = chunk_buffer.partition("</tool_call>")[2]
