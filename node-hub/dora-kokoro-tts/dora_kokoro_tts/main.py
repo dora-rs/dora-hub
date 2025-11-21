@@ -58,17 +58,23 @@ def main():
                         re.findall(r"[\u4e00-\u9fff]+", text)
                         and pipeline.lang_code != "z"
                     ):
-                        pipeline.lang_code = "z"  # switch to chinese
+                        pipeline = KPipeline(
+                            lang_code="z",
+                            repo_id=REPO_ID,
+                        )
                     elif (
                         not re.findall(r"[\u4e00-\u9fff]+", text)
                         and pipeline.lang_code == "z"
                     ):
-                        pipeline.lang_code = "a"  # switch to english
+                        pipeline = KPipeline(
+                            lang_code="a",
+                            repo_id=REPO_ID,
+                        )
 
                     generator = pipeline(
                         text,
                         voice=VOICE,
-                        speed=1.2,
+                        speed=1.1,
                         split_pattern=r"\n+",
                     )
                     for _, (_, _, audio) in enumerate(generator):
