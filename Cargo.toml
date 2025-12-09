@@ -15,6 +15,7 @@ members = [
     "node-hub/dora-rustypot",
     "node-hub/dora-openai-websocket",
     "node-hub/dora-qwen-omni",
+    "node-hub/data-switch",
 ]
 
 [workspace.package]
