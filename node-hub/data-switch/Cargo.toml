@@ -1,0 +1,19 @@
+[package]
+name = "data-switch"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description.workspace = true
+documentation.workspace = true
+readme.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+bincode = { version = "2.0.1", features = ["serde"] }
+dora-node-api = { workspace = true, features = ["tracing"] }
+dora-message = { workspace = true }
+eyre = "0.6.8"
+mcap = "0.24.0"
+serde = { version = "1.0.228", features = ["derive"] }
+memmap2 = "0.9.9"
