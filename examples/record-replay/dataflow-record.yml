@@ -1,0 +1,25 @@
+nodes:
+  - id: pyarrow-sender
+    build: pip install -e ../../node-hub/pyarrow-sender
+    path: pyarrow-sender
+    outputs:
+      - data
+    env:
+      DATA: "[1, 2, 3, 4, 5]"
+
+  - id: switch
+    build: cargo install data-switch
+    env:
+      MODE: record
+    inputs:
+      data: pyarrow-sender/data
+    outputs:
+      - data
+
+  - id: pyarrow-assert
+    build: pip install -e ../../node-hub/pyarrow-assert
+    path: pyarrow-assert
+    inputs:
+      data: switch/data
+    env:
+      DATA: "[1, 2, 3, 4, 5]"
