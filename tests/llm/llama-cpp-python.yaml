@@ -1,6 +1,6 @@
 nodes:
   - id: pyarrow-sender
-    build: pip install -e ../../pyarrow-sender
+    build: pip install -e ../../node-hub/pyarrow-sender
     path: pyarrow-sender
     outputs:
       - data
@@ -8,7 +8,7 @@ nodes:
       DATA: "Please only output: This is a test"
 
   - id: dora-llama-cpp-python
-    build: pip install -e ../../dora-llama-cpp-python
+    build: pip install -e ../../node-hub/dora-llama-cpp-python
     path: dora-llama-cpp-python
     inputs:
       text: pyarrow-sender/data
@@ -25,7 +25,7 @@ nodes:
       CONTEXT_SIZE: "4096" # Maximum context window
 
   - id: pyarrow-assert
-    build: pip install -e ../../pyarrow-assert
+    build: pip install -e ../../node-hub/pyarrow-assert
     path: pyarrow-assert
     inputs:
       data: dora-llama-cpp-python/text

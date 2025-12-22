@@ -1,6 +1,6 @@
 nodes:
   - id: pyarrow-sender
-    build: pip install -e ../../pyarrow-sender
+    build: pip install -e ../../node-hub/pyarrow-sender
     path: pyarrow-sender
     outputs:
       - data
@@ -8,7 +8,7 @@ nodes:
       DATA: "Please only generate the following output: This is a test"
 
   - id: dora-phi4
-    build: pip install -e ../../dora-phi4
+    build: pip install -e ../../node-archive/dora-phi4
     path: dora-phi4
     inputs:
       text: pyarrow-sender/data
@@ -16,7 +16,7 @@ nodes:
       - text
 
   - id: pyarrow-assert
-    build: pip install -e ../../pyarrow-assert
+    build: pip install -e ../../node-hub/pyarrow-assert
     path: pyarrow-assert
     inputs:
       data: dora-phi4/text

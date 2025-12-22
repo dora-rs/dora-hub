@@ -1,6 +1,6 @@
 nodes:
   - id: pyarrow-sender
-    build: pip install -e ../../pyarrow-sender
+    build: pip install -e ../../node-hub/pyarrow-sender
     path: pyarrow-sender
     outputs:
       - data
@@ -16,7 +16,7 @@ nodes:
       - data
 
   - id: pyarrow-assert
-    build: pip install -e ../../pyarrow-assert
+    build: pip install -e ../../node-hub/pyarrow-assert
     path: pyarrow-assert
     inputs:
       data: dora-echo/data
