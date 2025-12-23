@@ -59,11 +59,6 @@ async fn handle_post(req: &mut Request, depot: &mut Depot, res: &mut Response) -
         | ClientJsonRpcMessage::Error(_) => {
             res.render(StatusCode::ACCEPTED);
         }
-        _ => {
-            res.render(
-                StatusError::not_implemented().brief("Batch requests are not supported yet"),
-            );
-        }
     }
 
     tracing::debug!("Send the chat completion response.");
