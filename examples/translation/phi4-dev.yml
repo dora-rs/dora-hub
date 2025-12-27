@@ -30,7 +30,7 @@ nodes:
       LEAD_MODALITY: audio
 
   - id: sender
-    build: pip install -e ../../pyarrow-sender
+    build: pip install -e ../../node-hub/pyarrow-sender
     path: pyarrow-sender
     outputs:
       - data
