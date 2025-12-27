@@ -32,7 +32,14 @@ impl McpServer {
                 name: tool_config.name.clone().into(),
                 description: tool_config.description.clone().map(|s| s.into()),
                 input_schema: Arc::new(tool_config.input_schema.schema()),
+                output_schema: tool_config
+                    .output_schema
+                    .as_ref()
+                    .map(|s| Arc::new(s.schema())),
                 annotations: tool_config.annotations.clone(),
+                icons: tool_config.icons.clone(),
+                title: tool_config.title.clone(),
+                meta: tool_config.meta.clone(),
             };
             tools.push(McpTool {
                 inner: tool,
@@ -44,6 +51,9 @@ impl McpServer {
             server_info: Implementation {
                 name: config.name.clone(),
                 version: config.version.clone(),
+                icons: config.icons.clone(),
+                title: config.title.clone(),
+                website_url: config.website.clone(),
             },
         }
     }
@@ -74,6 +84,7 @@ impl McpServer {
         Ok(ListToolsResult {
             tools: self.tools.iter().map(|t| t.inner.clone()).collect(),
             next_cursor: None,
+            meta: None,
         })
     }
 

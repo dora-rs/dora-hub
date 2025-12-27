@@ -18,16 +18,16 @@ figment = { version = "0.10.0", features = ["env", "json", "toml", "yaml"] }
 futures = "0.3.31"
 indexmap = { version = "2.6.0", features = ["serde"] }
 mime_guess = "2.0.4"
-outfox-openai = { version = "0.1.0", git = "https://github.com/outfox-ai/outfox.git" }
+outfox-openai = { version = "0.2.0" }
 reqwest = { version = "0.12.22" }
-rmcp = { version = "0.3.2", git = "https://github.com/modelcontextprotocol/rust-sdk.git", rev = "fbc7ab7", features = [
+rmcp = { version = "0.12.0", features = [
     "client",
     "transport-child-process",
-    "transport-sse-client",
     "transport-streamable-http-client",
+    "transport-streamable-http-client-reqwest",
     "reqwest",
 ] }
-salvo = { version = "0.81.0", default-features = false, features = [
+salvo = { version = "0.86.0", default-features = false, features = [
     "affix-state",
     "cors",
     "server",

@@ -198,9 +198,6 @@ pub enum McpServerTransportConfig {
     Streamable {
         url: String,
     },
-    Sse {
-        url: String,
-    },
     Stdio {
         command: String,
         #[serde(default)]
@@ -227,11 +224,6 @@ impl McpServerTransportConfig {
                     }
                 }
                 eyre::bail!("failed to start streamable transport after 5 attempts");
-            }
-            McpServerTransportConfig::Sse { url } => {
-                let transport =
-                    rmcp::transport::sse_client::SseClientTransport::start(url.to_owned()).await?;
-                ().serve(transport).await?
             }
             McpServerTransportConfig::Stdio {
                 command,

@@ -55,6 +55,10 @@ pub struct Config {
     pub name: String,
     pub version: String,
 
+    pub icons: Option<Vec<rmcp::model::Icon>>,
+    pub title: Option<String>,
+    pub website: Option<String>,
+
     pub mcp_tools: Vec<McpToolConfig>,
 }
 fn default_listen_addr() -> String {
@@ -75,26 +79,35 @@ pub struct McpToolConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// A JSON Schema object defining the expected parameters for the tool
-    pub input_schema: InputSchema,
+    pub input_schema: JsonSchema,
+    /// A JSON Schema object defining the structure of the tool's output
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<JsonSchema>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     /// Optional properties describing tool behavior
     pub annotations: Option<ToolAnnotations>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icons: Option<Vec<rmcp::model::Icon>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub meta: Option<rmcp::model::Meta>,
 
     pub output: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum InputSchema {
+pub enum JsonSchema {
     Object(JsonObject),
     FilePath(String),
 }
 
-impl InputSchema {
+impl JsonSchema {
     pub fn schema(&self) -> JsonObject {
         match self {
-            InputSchema::Object(obj) => obj.clone(),
-            InputSchema::FilePath(path) => figment_from_path(path)
+            Self::Object(obj) => obj.clone(),
+            Self::FilePath(path) => figment_from_path(path)
                 .extract::<JsonObject>()
                 .expect("should read input schema from file"),
         }
