@@ -1,0 +1,39 @@
+nodes:
+  - id: benchmark_script
+    path: benchmark_script.py
+    inputs:
+      audio: tts/audio
+      transcript: stt/text
+      text: llm/text
+    outputs:
+      - audio
+
+  - id: stt
+    build: pip install -e ../../node-hub/dora-funasr
+    path: dora-funasr
+    inputs:
+      audio: benchmark_script/audio
+    outputs:
+      - text
+      - word
+      - speech_started
+    env:
+      TARGET_LANGUAGE: english
+
+  - id: llm
+    build: pip install -e ../../node-hub/dora-qwen3
+    path: dora-qwen3
+    inputs:
+      text: stt/text
+    outputs:
+      - text
+
+  - id: tts
+    build: pip install -e ../../node-hub/dora-kokoro-tts
+    path: dora-kokoro-tts
+    inputs:
+      text: llm/text
+    outputs:
+      - audio
+    env:
+      VOICE: am_fenrir
