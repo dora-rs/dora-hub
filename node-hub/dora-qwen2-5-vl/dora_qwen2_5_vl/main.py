@@ -1,11 +1,13 @@
 """TODO: Add docstring."""
 
 import os
+import platform
 from pathlib import Path
 
 import cv2
 import numpy as np
 import pyarrow as pa
+import torch
 from dora import Node
 from PIL import Image
 from qwen_vl_utils import process_vision_info
@@ -36,21 +38,36 @@ HISTORY = os.getenv("HISTORY", "False") in ["True", "true"]
 ADAPTER_PATH = os.getenv("ADAPTER_PATH", "")
 
 
-# Check if flash_attn is installed
+def get_device_config():
+    """Get device configuration based on platform."""
+    if platform.system() == "Darwin" and torch.backends.mps.is_available():
+        # Apple Silicon with MPS support
+        return {"device_map": "mps", "torch_dtype": torch.float16}
+    elif torch.cuda.is_available():
+        # NVIDIA GPU
+        return {"device_map": "auto", "torch_dtype": "auto"}
+    else:
+        # CPU fallback
+        return {"device_map": "cpu", "torch_dtype": torch.float32}
+
+
+device_config = get_device_config()
+
+# Check if flash_attn is installed (not available on macOS)
 try:
     import flash_attn as _  # noqa
 
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         MODEL_NAME_OR_PATH,
-        torch_dtype="auto",
-        device_map="auto",
+        torch_dtype=device_config["torch_dtype"],
+        device_map=device_config["device_map"],
         attn_implementation="flash_attention_2",
     )
 except (ImportError, ModuleNotFoundError):
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         MODEL_NAME_OR_PATH,
-        torch_dtype="auto",
-        device_map="auto",
+        torch_dtype=device_config["torch_dtype"],
+        device_map=device_config["device_map"],
     )
 
 

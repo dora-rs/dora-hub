@@ -1,5 +1,14 @@
 # Release Notes
 
+## v0.3.17
+
+### Changes
+- Fixed Apple Silicon (MPS) compatibility for dora-qwen2-5-vl node
+  - Added platform detection for macOS with MPS backend
+  - Fixed KeyError: 'cpu' when using device_map="auto" on Apple Silicon
+  - Set appropriate torch_dtype (float16) for MPS devices
+  - Maintains CUDA and CPU fallback support
+
 ## v0.3.16
 
 ### Changes
