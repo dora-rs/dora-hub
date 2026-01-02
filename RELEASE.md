@@ -1,5 +1,15 @@
 # Release Notes
 
+## v0.3.16
+
+### Changes
+- Updated VLM example README.md with Apple Silicon support documentation
+  - Added system requirements table for all platforms
+  - Added Apple Silicon (M1/M2/M3/M4) specific requirements and notes
+  - Added MPS backend verification instructions
+  - Added troubleshooting section for macOS users
+  - Added available configurations table
+
 ## v0.3.15
 
 ### Changes
