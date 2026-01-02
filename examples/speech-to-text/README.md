@@ -1,119 +1,112 @@
-# Dora Speech to Text Example
-
-This example demonstrates real-time speech-to-text transcription using Dora's dataflow architecture with Whisper model integration.
+# Speech to Text Example
 
 ## Overview
 
-This example showcases a complete speech-to-text pipeline using Dora's node-based architecture. It captures audio from a microphone, performs voice activity detection (VAD), transcribes speech using Whisper, and displays results in Rerun.
+This dataflow creates a complete speech-to-text pipeline:
 
-## Architecture
+```
+Microphone -> VAD -> Whisper (STT) -> Rerun (Display)
+```
 
-The system consists of the following components:
+The pipeline captures audio from your microphone, detects when you're speaking, transcribes your speech to text using the Whisper model, and displays the results in the Rerun viewer.
 
-### Core Components
+## Nodes
 
-1. **dora-microphone** (`dora-microphone`)
-   - Captures audio from the system microphone
-   - Triggered every 2 seconds by a timer
-   - Outputs audio data for processing
-
-2. **dora-vad** (`dora-vad`)
-   - Voice Activity Detection using Silero VAD
-   - Filters audio to only process segments containing speech
-   - Reduces unnecessary processing of silence
-
-3. **dora-whisper** (`dora-distil-whisper`)
-   - Transcribes speech to text using Whisper model
-   - Configurable target language (default: English)
-   - Uses MLX-optimized Whisper for Apple Silicon
-
-4. **dora-rerun** (`dora-rerun`)
-   - Visualizes transcription results
-   - Provides real-time monitoring of the pipeline
-
-### Data Flow
-
-1. Timer triggers microphone to capture audio (every 2 seconds)
-2. Audio is sent to VAD for speech detection
-3. Detected speech segments are forwarded to Whisper
-4. Whisper transcribes the audio to text
-5. Text is displayed in Rerun viewer
+- **dora-microphone**: Captures audio from microphone
+- **dora-vad**: Voice Activity Detection - detects when you're speaking
+- **dora-distil-whisper**: Speech-to-text using Distil-Whisper model
+- **dora-rerun**: Visualizes transcription in Rerun viewer
 
 ## Prerequisites
 
-Make sure you have the following installed:
-- **dora**: Dora framework (`pip install dora-rs-cli` or build from source)
-- **uv**: Python package manager
-- **Python 3.11+**: For Python nodes
+- Python 3.11+
+- dora-rs
+- Microphone
+- uv (Python package manager)
 
-## Setup and Running
+## Getting Started
 
-### 1. Environment Setup
+### 1. Install dora
+
+```bash
+# Install dora CLI
+cargo install dora-cli
+
+# Or install Python package (must match CLI version)
+pip install dora-rs
+```
+
+### 2. Build and Run
 
 ```bash
 cd examples/speech-to-text
 
-# Create Python virtual environment
+# Create virtual environment
 uv venv --seed -p 3.11
-```
 
-### 2. Build the System
-
-```bash
-# Build all components (this will download dependencies)
+# Build dataflow
 dora build whisper.yml --uv
-```
 
-### 3. Run the System
-
-```bash
-# Start the dataflow
+# Run dataflow
 dora run whisper.yml --uv
-
-# Note: Wait for the Whisper model to download on first run (may take some time)
 ```
 
-### 4. View Results
+### 3. View Results
 
-Connect to Rerun viewer to see transcription results:
 ```bash
+# Connect to Rerun viewer
 rerun --connect rerun+http://127.0.0.1:9876/proxy
 ```
 
 ## Configuration
 
-### Environment Variables
+### Whisper Node Configuration
 
-- `TARGET_LANGUAGE`: Set the transcription target language (default: `english`)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TARGET_LANGUAGE` | Target language for transcription | `english` |
 
-### Available Dataflows
+## Dataflow Variants
 
-- `whisper.yml`: Production dataflow with pre-packaged nodes
-- `whisper-dev.yml`: Development dataflow for local development
+- `whisper.yml`: Production version using pre-packaged nodes
+- `whisper-dev.yml`: Development version for local development
 
-## Graph Visualization
+## Architecture
 
-```mermaid
-flowchart TB
-  dora-microphone
-  dora-vad
-  dora-distil-whisper
-  dora-rerun[/dora-rerun\]
-subgraph ___dora___ [dora]
-  subgraph ___timer_timer___ [timer]
-    dora/timer/secs/2[\secs/2/]
-  end
-end
-  dora/timer/secs/2 -- tick --> dora-microphone
-  dora-microphone -- audio --> dora-vad
-  dora-vad -- audio as input --> dora-distil-whisper
-  dora-distil-whisper -- text as original_text --> dora-rerun
+```
++------------+     +---------+     +------------------+
+| Microphone | --> |   VAD   | --> | distil-whisper   |
++------------+     +---------+     | (Speech-to-Text) |
+                                   +------------------+
+                                            |
+                                            v
+                                       +--------+
+                                       | rerun  |
+                                       |(Display)|
+                                       +--------+
 ```
 
 ## Troubleshooting
 
-### Common Issues
+### Microphone Issues
+- Check system microphone permissions
+- Verify correct audio input device is selected
+- Test microphone in other applications first
 
-1. **Microphone permissions**: Ensure your terminal/application has microphone access permissions
-2. **Model download**: First run may take time to download the Whisper model
-3. **Rerun version mismatch**: If you see version warnings, install matching Rerun SDK version
+### Model Download Slow
+- First run downloads the Whisper model which may take time
+- Ensure stable internet connection
+- Model is cached after first download
+
+### Rerun Version Mismatch
+- If you see version warnings, install matching Rerun SDK:
+  ```bash
+  pip install rerun-sdk==<version>
+  ```
+
+## Source Code
+
+- [dora-microphone](https://github.com/dora-rs/dora-hub/tree/main/node-hub/dora-microphone)
+- [dora-vad](https://github.com/dora-rs/dora-hub/tree/main/node-hub/dora-vad)
+- [dora-distil-whisper](https://github.com/dora-rs/dora-hub/tree/main/node-hub/dora-distil-whisper)
+- [dora-rerun](https://github.com/dora-rs/dora-hub/tree/main/node-hub/dora-rerun)
