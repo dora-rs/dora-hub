@@ -46,27 +46,35 @@ def main():
                     if text == "":
                         continue
                 # Split text with point or comma even chinese version
-                texts = re.sub(r"([。,.，?!:])", r"\1\n", text)
+                texts = re.sub(r"([。.，?!:])", r"\1\n", text)
 
                 for text in texts.split("\n"):
+                    # if text is empty, skip
+                    if text.strip() == "" or text.strip() == "." or text.strip() == '"':
+                        continue
+                    print(f"Processing text: {text}")
                     # Skip if text start with <tool_call>
                     if (
                         re.findall(r"[\u4e00-\u9fff]+", text)
                         and pipeline.lang_code != "z"
                     ):
-                        pipeline = KPipeline(repo_id=REPO_ID, lang_code="z")
+                        pipeline = KPipeline(
+                            lang_code="z",
+                            repo_id=REPO_ID,
+                        )
                     elif (
                         not re.findall(r"[\u4e00-\u9fff]+", text)
                         and pipeline.lang_code == "z"
                     ):
                         pipeline = KPipeline(
-                            repo_id=REPO_ID, lang_code=LANGUAGE
-                        )  # reset to default
+                            lang_code="a",
+                            repo_id=REPO_ID,
+                        )
 
                     generator = pipeline(
                         text,
                         voice=VOICE,
-                        speed=1.2,
+                        speed=1.1,
                         split_pattern=r"\n+",
                     )
                     for _, (_, _, audio) in enumerate(generator):
