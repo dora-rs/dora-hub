@@ -340,7 +340,7 @@ wheels = [
 
 [[package]]
 name = "replay-client"
-version = "0.3.13"
+version = "0.3.14"
 source = { editable = "." }
 dependencies = [
     { name = "dora-rs" },

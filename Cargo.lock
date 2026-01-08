@@ -3640,7 +3640,7 @@ dependencies = [
 
 [[package]]
 name = "dora-arrow-convert"
-version = "0.3.13"
+version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0af1790d82745638304d85ec3161dc03f0857f139829e31b3518b13cd159cda"
 dependencies = [
@@ -3653,7 +3653,7 @@ dependencies = [
 
 [[package]]
 name = "dora-core"
-version = "0.3.13"
+version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "255a1fcbe74b0caa20e83d132a7dbcad3b20769263eb6b748d91dd6c56354bce"
 dependencies = [
@@ -3678,7 +3678,7 @@ dependencies = [
 
 [[package]]
 name = "dora-dav1d"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "bitstream-io 2.6.0",
  "bytemuck",
@@ -3709,7 +3709,7 @@ dependencies = [
 
 [[package]]
 name = "dora-kit-car"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "dora-node-api",
  "dotenv",
@@ -3723,7 +3723,7 @@ dependencies = [
 
 [[package]]
 name = "dora-mcp-host"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "chrono",
  "dora-node-api",
@@ -3748,7 +3748,7 @@ dependencies = [
 
 [[package]]
 name = "dora-mcp-server"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "chrono",
  "dora-node-api",
@@ -3805,7 +3805,7 @@ dependencies = [
 
 [[package]]
 name = "dora-node-api"
-version = "0.3.13"
+version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "21a6bbd54b585aeb2bab3cd460fcbf522ad539f793879f8b4ae750ebd7f6de76"
 dependencies = [
@@ -3831,7 +3831,7 @@ dependencies = [
 
 [[package]]
 name = "dora-object-to-pose"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "dora-node-api",
  "eyre",
@@ -3840,7 +3840,7 @@ dependencies = [
 
 [[package]]
 name = "dora-openai-proxy-server"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "chrono",
  "dora-node-api",
@@ -3861,7 +3861,7 @@ dependencies = [
 
 [[package]]
 name = "dora-openai-websocket"
-version = "0.3.13"
+version = "0.3.14"
 dependencies = [
  "anyhow",
  "assert2",
@@ -3915,7 +3915,7 @@ dependencies = [
 [[package]]
 name = "dora-rav1e"
 version = "0.3.13"
-dependencies = [
+dependencie0.3.14
  "avif-serialize",
  "bytemuck",
  "dora-node-api",
@@ -3929,7 +3929,7 @@ dependencies = [
 [[package]]
 name = "dora-record"
 version = "0.3.13"
-dependencies = [
+dependencie0.3.14
  "chrono",
  "dora-node-api",
  "dora-tracing",
@@ -3941,7 +3941,7 @@ dependencies = [
 [[package]]
 name = "dora-rerun"
 version = "0.3.13"
-dependencies = [
+dependencie0.3.14
  "bytemuck",
  "dora-node-api",
  "eyre",
@@ -3968,7 +3968,7 @@ dependencies = [
 [[package]]
 name = "dora-tracing"
 version = "0.3.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "r0.3.14y+https://github.com/rust-lang/crates.io-index"
 checksum = "f1b3c71657809ba0772bdb00a0d289ccd4dc2da6a6cd736dd2d5d00550f803b2"
 dependencies = [
  "eyre",
@@ -12975,7 +12975,7 @@ dependencies = [
 [[package]]
 name = "shared-memory-server"
 version = "0.3.13"
-source = "registry+https://github.com/rust-lang/crates.io-index"
+source = "r0.3.14y+https://github.com/rust-lang/crates.io-index"
 checksum = "2712bb95a9726b80a00cab3fc76db35221c691ef7a4d7d44c35e4bae0d43bed2"
 dependencies = [
  "bincode",
@@ -13902,7 +13902,7 @@ dependencies = [
 [[package]]
 name = "terminal-print"
 version = "0.3.13"
-dependencies = [
+dependencie0.3.14
  "dora-node-api",
  "eyre",
 ]
