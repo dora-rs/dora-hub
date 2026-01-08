@@ -1,6 +1,6 @@
 [project]
 name = "feetech-client"
-version = "0.3.13"
+version = "0.3.14"
 authors = [{ name = "Hennzau", email = "<dev@enzo-le-van.fr>" }]
 description = "Dora Node client for feetech motors."
 license = { text = "MIT" }
@@ -8,7 +8,7 @@ readme = "README.md"
 requires-python = ">=3.9"
 
 dependencies = [
-  "dora-rs == 0.3.13",
+  "dora-rs == 0.3.14",
   "numpy <=  2.0.0",
   "feetech-servo-sdk == 1.0.0",
   "pwm-position-control",

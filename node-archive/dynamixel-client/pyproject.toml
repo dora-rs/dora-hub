@@ -1,6 +1,6 @@
 [project]
 name = "dynamixel-client"
-version = "0.3.13"
+version = "0.3.14"
 authors = [{ name = "Hennzau", email = "<dev@enzo-le-van.fr>" }]
 description = "Dora Node client for dynamixel motors."
 license = { text = "MIT" }

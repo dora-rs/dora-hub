@@ -180,9 +180,7 @@ def replace_code_in_source(source_code, replacement_block: str):
     start_index, end_index = find_best_match_location(source_code, replacement_block)
     if start_index != -1 and end_index != -1:
         # Replace the best matching part with the replacement block
-        return (
-            source_code[:start_index] + replacement_block + source_code[end_index:]
-        )
+        return source_code[:start_index] + replacement_block + source_code[end_index:]
     return source_code
 
 
@@ -250,7 +248,7 @@ class Operator:
                     )
                 else:
                     print("Could not find the topic: {}".format(output["topic"]))
-            except:
+            except Exception as _err:
                 print("Could not parse json")
             # if data is not iterable, put data in a list
         elif dora_event["type"] == "INPUT" and dora_event["id"] == "assistant":
@@ -264,7 +262,6 @@ class Operator:
         return DoraStatus.CONTINUE
 
     def ask_llm(self, prompt):
-
         # Generate output
         # prompt = PROMPT_TEMPLATE.format(system_message=system_message, prompt=prompt))
         """TODO: Add docstring."""

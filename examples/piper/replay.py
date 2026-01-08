@@ -5,6 +5,10 @@ import os
 import h5py
 from dora import Node
 
+import time
+
+import pyarrow as pa
+
 EPISODE_PATH = os.getenv("EPISODE_PATH", "data/episode_0.hdf5")
 
 f = h5py.File(EPISODE_PATH, "r")
@@ -102,9 +106,6 @@ STATE_VEC_IDX_MAPPING = {
     # [103, 128): reserved
 }
 
-import time
-
-import pyarrow as pa
 
 node = Node()
 LEFT_UNI_STATE_INDICES = [
@@ -119,10 +120,12 @@ MOBILE_BASE_UNI_STATE_INDICES = [STATE_VEC_IDX_MAPPING["base_vel_x"]] + [
 
 for joint in data:
     node.send_output(
-        "jointstate_left", pa.array(joint[LEFT_UNI_STATE_INDICES], type=pa.float32()),
+        "jointstate_left",
+        pa.array(joint[LEFT_UNI_STATE_INDICES], type=pa.float32()),
     )
     node.send_output(
-        "jointstate_right", pa.array(joint[RIGHT_UNI_STATE_INDICES], type=pa.float32()),
+        "jointstate_right",
+        pa.array(joint[RIGHT_UNI_STATE_INDICES], type=pa.float32()),
     )
     # node.send_output(
     # "mobile_base", pa.array(joint[MOBILE_BASE_UNI_STATE_INDICES], type=pa.float32())

@@ -13,7 +13,9 @@ import os
 import time
 from dataclasses import dataclass
 
-from dynamixel_sdk import *  # Uses Dynamixel SDK library
+from dynamixel_sdk import PacketHandler, PortHandler  # noqa
+
+COMM_SUCCESS = 0
 
 
 class ReadAttribute(enum.Enum):
@@ -80,7 +82,7 @@ class Dynamixel:
         if self.config.device_name == "":
             for port_name in os.listdir("/dev"):
                 if "ttyUSB" in port_name or "ttyACM" in port_name:
-                    self.config.device_name = "/dev/" + port_name
+                    self.config.device_name = f"/dev/{port_name}"
                     print(f"using device {self.config.device_name}")
         self.portHandler = PortHandler(self.config.device_name)
         # self.portHandler.LA
@@ -120,7 +122,10 @@ class Dynamixel:
 
         # self._enable_torque(motor_id)
         dxl_comm_result, dxl_error = self.packetHandler.write4ByteTxRx(
-            self.portHandler, motor_id, self.ADDR_GOAL_POSITION, goal_position,
+            self.portHandler,
+            motor_id,
+            self.ADDR_GOAL_POSITION,
+            goal_position,
         )
         # self._process_response(dxl_comm_result, dxl_error)
         # print(f'set position of motor {motor_id} to {goal_position}')
@@ -142,7 +147,10 @@ class Dynamixel:
             self._enable_torque(motor_id)
             # print(f'enabling torque')
         dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
-            self.portHandler, motor_id, self.ADDR_GOAL_PWM, pwm_value,
+            self.portHandler,
+            motor_id,
+            self.ADDR_GOAL_PWM,
+            pwm_value,
         )
         # self._process_response(dxl_comm_result, dxl_error)
         # print(f'set pwm of motor {motor_id} to {pwm_value}')
@@ -278,12 +286,12 @@ class Dynamixel:
                             If False, change only servo with self.config.id
 
         """
-        if use_broadcast_id:
-            current_id = 254
-        else:
-            current_id = old_id
+        current_id = 254 if use_broadcast_id else old_id
         dxl_comm_result, dxl_error = self.packetHandler.write1ByteTxRx(
-            self.portHandler, current_id, self.ADDR_ID, new_id,
+            self.portHandler,
+            current_id,
+            self.ADDR_ID,
+            new_id,
         )
         self._process_response(dxl_comm_result, dxl_error, old_id)
         self.config.id = id
@@ -296,7 +304,10 @@ class Dynamixel:
 
         """
         dxl_comm_result, dxl_error = self.packetHandler.write1ByteTxRx(
-            self.portHandler, motor_id, self.ADDR_TORQUE_ENABLE, 1,
+            self.portHandler,
+            motor_id,
+            self.ADDR_TORQUE_ENABLE,
+            1,
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
         self.torque_enabled[motor_id] = True
@@ -309,7 +320,10 @@ class Dynamixel:
 
         """
         dxl_comm_result, dxl_error = self.packetHandler.write1ByteTxRx(
-            self.portHandler, motor_id, self.ADDR_TORQUE_ENABLE, 0,
+            self.portHandler,
+            motor_id,
+            self.ADDR_TORQUE_ENABLE,
+            0,
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
         self.torque_enabled[motor_id] = False
@@ -346,7 +360,10 @@ class Dynamixel:
 
         """
         dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
-            self.portHandler, motor_id, self.OPERATING_MODE_ADDR, operating_mode.value,
+            self.portHandler,
+            motor_id,
+            self.OPERATING_MODE_ADDR,
+            operating_mode.value,
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
         self.operating_modes[motor_id] = operating_mode
@@ -360,7 +377,10 @@ class Dynamixel:
 
         """
         dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
-            self.portHandler, motor_id, 36, limit,
+            self.portHandler,
+            motor_id,
+            36,
+            limit,
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
@@ -373,7 +393,10 @@ class Dynamixel:
 
         """
         dxl_comm_result, dxl_error = self.packetHandler.write4ByteTxRx(
-            self.portHandler, motor_id, self.ADDR_VELOCITY_LIMIT, velocity_limit,
+            self.portHandler,
+            motor_id,
+            self.ADDR_VELOCITY_LIMIT,
+            velocity_limit,
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
@@ -386,7 +409,10 @@ class Dynamixel:
 
         """
         dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
-            self.portHandler, motor_id, self.POSITION_P, p,
+            self.portHandler,
+            motor_id,
+            self.POSITION_P,
+            p,
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
@@ -399,7 +425,10 @@ class Dynamixel:
 
         """
         dxl_comm_result, dxl_error = self.packetHandler.write2ByteTxRx(
-            self.portHandler, motor_id, self.POSITION_I, i,
+            self.portHandler,
+            motor_id,
+            self.POSITION_I,
+            i,
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
@@ -431,7 +460,10 @@ class Dynamixel:
         """
         self._disable_torque(motor_id)
         dxl_comm_result, dxl_error = self.packetHandler.write4ByteTxRx(
-            self.portHandler, motor_id, ReadAttribute.HOMING_OFFSET.value, home_position,
+            self.portHandler,
+            motor_id,
+            ReadAttribute.HOMING_OFFSET.value,
+            home_position,
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
         self._enable_torque(motor_id)
@@ -460,7 +492,10 @@ class Dynamixel:
 
         self._disable_torque(motor_id)
         dxl_comm_result, dxl_error = self.packetHandler.write1ByteTxRx(
-            self.portHandler, motor_id, ReadAttribute.BAUDRATE.value, baudrate_id,
+            self.portHandler,
+            motor_id,
+            ReadAttribute.BAUDRATE.value,
+            baudrate_id,
         )
         self._process_response(dxl_comm_result, dxl_error, motor_id)
 
@@ -480,15 +515,21 @@ class Dynamixel:
         try:
             if num_bytes == 1:
                 value, dxl_comm_result, dxl_error = self.packetHandler.read1ByteTxRx(
-                    self.portHandler, motor_id, attribute.value,
+                    self.portHandler,
+                    motor_id,
+                    attribute.value,
                 )
             elif num_bytes == 2:
                 value, dxl_comm_result, dxl_error = self.packetHandler.read2ByteTxRx(
-                    self.portHandler, motor_id, attribute.value,
+                    self.portHandler,
+                    motor_id,
+                    attribute.value,
                 )
             elif num_bytes == 4:
                 value, dxl_comm_result, dxl_error = self.packetHandler.read4ByteTxRx(
-                    self.portHandler, motor_id, attribute.value,
+                    self.portHandler,
+                    motor_id,
+                    attribute.value,
                 )
         except Exception:
             if tries == 0:

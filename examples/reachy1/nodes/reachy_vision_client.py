@@ -6,6 +6,7 @@ from the Reachy robot's cameras and vision sensors.
 
 import time
 
+import cv2
 import numpy as np
 import pyarrow as pa
 from dora import Node
@@ -23,7 +24,6 @@ time.sleep(5)
 cam = SDKWrapper(get_config_file_path("CONFIG_SR"), fps=freq)
 # ret, image = cap.read()
 
-import cv2
 
 episode = 1
 dataset = LeRobotDataset("cadene/reachy2_teleop_remi")

@@ -3,6 +3,8 @@
 import os
 import shutil
 
+from dora import Node
+
 
 def clear_screen():
     # Clear the screen based on the operating system
@@ -16,16 +18,14 @@ def print_centered(texts):
     terminal_size = shutil.get_terminal_size()
 
     # Print newlines to move cursor to the middle vertically
-    for k, v in texts.items():
-        print(k)
+    for key, values in texts.items():
+        print(key)
         print("\n" * 1)
         # Calculate horizontal padding and print the centered text
-        for l in v:
-            print(l.center(terminal_size.columns))
+        for line in values:
+            print(line.center(terminal_size.columns))
         print("\n" * 1)
 
-
-from dora import Node
 
 node = Node("pretty-print")
 
@@ -38,7 +38,6 @@ for event in node:
         # The sentence to be printed
         sentence = event["value"][0].as_py()
         if event["id"] not in previous_texts:
-
             previous_texts[event["id"]] = ["", "", sentence]
         else:
             previous_texts[event["id"]] += [sentence]
