@@ -115,7 +115,7 @@ if not os.path.exists(DATA_DIR):
 
 def save_data(data_dict, dataset_path, data_size):
     """TODO: Add docstring."""
-    with h5py.File(dataset_path + ".hdf5", "w", rdcc_nbytes=1024**2 * 2) as root:
+    with h5py.File(f"{dataset_path}.hdf5", "w", rdcc_nbytes=1024**2 * 2) as root:
         root.attrs["sim"] = False
         root.attrs["compress"] = False
 
@@ -173,7 +173,7 @@ for event in node:
         if "save" in event["id"]:
             char = event["value"][0].as_py()
             if char == "p":
-                if start == False:
+                if not start:
                     continue
 
                 save_data(
@@ -222,7 +222,7 @@ for event in node:
         # Check if tmp dict is full
         if len(tmp_dict) != 7:
             continue
-        elif event["id"] == LEAD_CAMERA and start == True:
+        elif event["id"] == LEAD_CAMERA and start:
             values = np.concatenate(
                 [
                     tmp_dict["/observations/qpos_left"],

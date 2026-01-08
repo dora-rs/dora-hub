@@ -47,6 +47,6 @@ for event in node:
                     random_dish = random.choice(signature_dishes)
                     node.send_output("reply", pa.array([f'{{"content":[{{"type": "text", "text": "{{\\"signature_dish\\": \\"{random_dish}\\"}}"}}]}}']), metadata=event["metadata"])
                 case "happiest_kindergarten":
-                    node.send_output("reply", pa.array([f'{{"content":[{{"type": "text", "text": "{{\\"kindergarten\\":\\"Golden Sun Kindergarten\\", \\"children\\": 300}}"}}]}}']), metadata=event["metadata"])
+                    node.send_output("reply", pa.array(['{"content":[{"type": "text", "text": "{\\"kindergarten\\":\\"Golden Sun Kindergarten\\", \\"children\\": 300}"}]}']), metadata=event["metadata"])
                 case _:
                     print(f"Unknown command: {name}")

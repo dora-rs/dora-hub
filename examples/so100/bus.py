@@ -6,6 +6,7 @@ Feetech servo motors through a serial bus interface.
 
 import enum
 from typing import Union
+import numpy as np
 
 import pyarrow as pa
 from scservo_sdk import (
@@ -113,7 +114,7 @@ MODEL_CONTROL_TABLE = {
 
 class FeetechBus:
     """A class for managing communication with Feetech servo motors.
-    
+
     This class handles the low-level communication with Feetech servo motors
     through a serial bus interface, providing methods for reading and writing
     motor parameters.
@@ -278,7 +279,9 @@ class FeetechBus:
         values = pa.array(
             [
                 self.group_readers[group_key].getData(
-                    idx, packet_address, packet_bytes_size,
+                    idx,
+                    packet_address,
+                    packet_bytes_size,
                 )
                 for idx in motor_ids
             ],

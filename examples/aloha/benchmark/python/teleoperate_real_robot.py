@@ -6,18 +6,20 @@ teleoperation, allowing real-time control of robot movements and actions.
 
 from dynamixel import Dynamixel
 from robot import Robot
+import time
 
 leader_dynamixel = Dynamixel.Config(
-    baudrate=1_000_000, device_name="/dev/ttyDXL_master_right",
+    baudrate=1_000_000,
+    device_name="/dev/ttyDXL_master_right",
 ).instantiate()
 follower_dynamixel = Dynamixel.Config(
-    baudrate=1_000_000, device_name="/dev/ttyDXL_puppet_right",
+    baudrate=1_000_000,
+    device_name="/dev/ttyDXL_puppet_right",
 ).instantiate()
 follower = Robot(follower_dynamixel, servo_ids=[1, 2, 3, 4, 5, 6, 7, 8])
 leader = Robot(leader_dynamixel, servo_ids=[1, 2, 3, 4, 5, 6, 7, 8])
 # leader.set_trigger_torque()
 
-import time
 
 times_rec = []
 times_send = []

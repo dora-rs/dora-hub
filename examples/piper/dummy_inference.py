@@ -2,9 +2,14 @@
 
 from dora import Node
 
-node = Node()
+import time
+
+import pyarrow as pa
 
 import numpy as np
+
+node = Node()
+
 
 pred = np.array(
     [
@@ -220,10 +225,6 @@ pred = np.array(
         ],
     ],
 )
-
-import time
-
-import pyarrow as pa
 
 data = pred[0]
 for joint in data:

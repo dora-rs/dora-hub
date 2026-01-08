@@ -43,12 +43,12 @@ def get_device_config():
     if platform.system() == "Darwin" and torch.backends.mps.is_available():
         # Apple Silicon with MPS support
         return {"device_map": "mps", "torch_dtype": torch.float16}
-    elif torch.cuda.is_available():
+
+    if torch.cuda.is_available():
         # NVIDIA GPU
         return {"device_map": "auto", "torch_dtype": "auto"}
-    else:
-        # CPU fallback
-        return {"device_map": "cpu", "torch_dtype": torch.float32}
+    # CPU fallback
+    return {"device_map": "cpu", "torch_dtype": torch.float32}
 
 
 device_config = get_device_config()
