@@ -341,8 +341,7 @@ Make sure to name the dataflow as follows:
 ## Reference documentation
 
 - dora-rerun
-  - github: https://github.com/dora-rs/node-hub/blob/main/dora-rerun
-  - website: http://dora-rs.ai/docs/nodes/rerun
+  - github: https://github.com/dora-rs/dora-hub/blob/main/node-hub/dora-rerun
 - rerun
   - github: https://github.com/rerun-io/rerun
   - website: https://rerun.io
@@ -350,11 +349,9 @@ Make sure to name the dataflow as follows:
 ## Examples
 
 - speech to text
-  - github: https://github.com/dora-rs/node-hub/blob/main/examples/speech-to-text
-  - website: https://dora-rs.ai/docs/examples/stt
+  - github: https://github.com/dora-rs/dora-hub/blob/main/examples/speech-to-text
 - vision language model
-  - github: https://github.com/dora-rs/node-hub/blob/main/examples/vlm
-  - website: https://dora-rs.ai/docs/examples/vlm
+  - github: https://github.com/dora-rs/dora-hub/blob/main/examples/vlm
 
 ## License
 
