@@ -1,6 +1,6 @@
 [project]
 name = "video-encoder"
-version = "0.3.14"
+version = "0.4.0"
 authors = [{ name = "Hennzau", email = "<dev@enzo-le-van.fr>" }]
 description = "Dora Node for video encoding (LeRobot compatible)."
 license = { text = "MIT" }
