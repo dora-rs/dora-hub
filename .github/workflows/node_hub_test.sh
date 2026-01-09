@@ -60,29 +60,29 @@ else
             sudo rm -rf /usr/share/dotnet/
             sudo rm -rf /opt/ghc/
 
-            maturin publish --skip-existing --compatibility manylinux_2_28 --zig
             # aarch64-unknown-linux-gnu
             rustup target add aarch64-unknown-linux-gnu
-            maturin publish --target aarch64-unknown-linux-gnu --skip-existing --zig  --compatibility manylinux_2_28
-                
+            maturin build --release --target aarch64-unknown-linux-gnu --zig --compatibility manylinux_2_28
+
             # armv7-unknown-linux-musleabihf
             rustup target add armv7-unknown-linux-musleabihf
-            # If GITHUB_EVENT_NAME is release or workflow_dispatch, publish the wheel
-            maturin publish --target armv7-unknown-linux-musleabihf --skip-existing --zig
+            maturin build --release --target armv7-unknown-linux-musleabihf --zig
 
             # x86_64-pc-windows-gnu
             rustup target add x86_64-pc-windows-gnu
-            # If GITHUB_EVENT_NAME is release or workflow_dispatch, publish the wheel
-            maturin publish --target x86_64-pc-windows-gnu --skip-existing 
+            maturin build --release --target x86_64-pc-windows-gnu
+
+            # Publish all wheels at once
+            uv publish target/wheels/*.whl --check-url https://pypi.org/simple 
         fi
 
     elif [[ -f "Cargo.toml" && -f "pyproject.toml" &&  "$(uname)" = "Darwin" ]]; then
         pip install "maturin[zig, patchelf]"
         # aarch64-apple-darwin
-        maturin build  --release
+        maturin build --release
         # If GITHUB_EVENT_NAME is release or workflow_dispatch, publish the wheel
         if [ "$GITHUB_EVENT_NAME" == "release" ] || [ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]; then
-            maturin publish --skip-existing
+            uv publish target/wheels/*.whl --check-url https://pypi.org/simple
         fi
 
     elif [[ "$(uname)" = "Linux" ]] || [[ "$CI" == "false" ]]; then
