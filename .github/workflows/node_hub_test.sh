@@ -60,6 +60,9 @@ else
             sudo rm -rf /usr/share/dotnet/
             sudo rm -rf /opt/ghc/
 
+            # Build dav1d from source for cross-compilation targets
+            export SYSTEM_DEPS_DAV1D_BUILD_INTERNAL=always
+
             # aarch64-unknown-linux-gnu
             rustup target add aarch64-unknown-linux-gnu
             maturin build --release --target aarch64-unknown-linux-gnu --zig --compatibility manylinux_2_28
