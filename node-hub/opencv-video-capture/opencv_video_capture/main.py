@@ -92,6 +92,10 @@ def main():
                 ret, frame = video_capture.read()
 
                 if not ret:
+                    if not RUNNER_CI:
+                        raise RuntimeError(
+                            f"Error: cannot read frame from camera at path {video_capture_path}. For resiliency you can use: restart_policy: on-failure in the node definition.",
+                        )
                     frame = np.zeros((480, 640, 3), dtype=np.uint8)
                     cv2.putText(
                         frame,
