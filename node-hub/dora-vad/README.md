@@ -28,17 +28,15 @@ There's a maximum amount of voice duration, to avoid having no input for too lon
 
 ## Reference documentation
 
-- dora-sidero
-  - github: https://github.com/dora-rs/node-hub/blob/main/dora-vad
-  - website: http://dora-rs.ai/docs/nodes/sidero
-- Sidero
-  - github https://github.com/snakers4/silero-vad
+- dora-vad
+  - github: https://github.com/dora-rs/dora-hub/blob/main/node-hub/dora-vad
+- Silero VAD
+  - github: https://github.com/snakers4/silero-vad
 
 ## Examples
 
 - Speech to Text
-  - github: https://github.com/dora-rs/node-hub/blob/main/examples/speech-to-text
-  - website: https://dora-rs.ai/docs/examples/stt
+  - github: https://github.com/dora-rs/dora-hub/blob/main/examples/speech-to-text
 
 ## License
 
