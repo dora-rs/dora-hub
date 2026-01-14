@@ -212,6 +212,8 @@ jobs:
           dora stop --name rerun-viewer
 
       - name: Speech to text whisper
+        # disable because there are no microphones in GitHub Actions
+        if: false
         run: |
           dora build examples/speech-to-text/whisper.yml --uv
           dora start examples/speech-to-text/whisper.yml --name whisper --detach --uv
