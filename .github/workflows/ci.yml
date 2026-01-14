@@ -109,9 +109,10 @@ jobs:
       - run: cargo --version --verbose
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
+          activate-environment: true
 
       - name: Cache cargo binaries
         uses: actions/cache@v4
