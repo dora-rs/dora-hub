@@ -103,6 +103,8 @@ jobs:
     name: "Examples"
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    env:
+      OPERATING_MODE: SAVE
     steps:
       - uses: actions/checkout@v5
       - uses: r7kamura/rust-problem-matchers@v1.1.0
@@ -154,8 +156,6 @@ jobs:
           dora stop --name mcp-server
 
       - name: Object detection dataflow
-        env:
-          OPERATING_MODE: SAVE
         run: |
           dora build examples/object-detection/dataflow-object-detection.yml --uv
           dora start examples/object-detection/dataflow-object-detection.yml --name object-detection --detach --uv
@@ -163,8 +163,6 @@ jobs:
           dora stop --name object-detection
 
       - name: Object detection yolo
-        env:
-          OPERATING_MODE: SAVE
         run: |
           dora build examples/object-detection/yolo.yml --uv
           dora start examples/object-detection/yolo.yml --name yolo --detach --uv
