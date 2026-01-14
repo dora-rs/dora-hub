@@ -98,3 +98,117 @@ jobs:
           override: true
       - name: Typos check with custom config file
         uses: crate-ci/typos@master
+
+  examples:
+    name: "Examples"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: r7kamura/rust-problem-matchers@v1.1.0
+      - run: cargo --version --verbose
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install dora
+        run: cargo install dora-cli --locked
+
+      - name: Start dora daemon
+        run: dora up
+
+      - name: Echo example
+        run: |
+          dora start examples/echo/dataflow.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Keyboard example
+        run: |
+          dora start examples/keyboard/dataflow.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: MCP server example
+        run: |
+          dora start examples/mcp-server/dataflow.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Object detection dataflow
+        run: |
+          dora start examples/object-detection/dataflow-object-detection.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Object detection yolo
+        run: |
+          dora start examples/object-detection/yolo.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: OpenAI server dataflow
+        run: |
+          dora start examples/openai-server/dataflow.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: OpenAI server dataflow-rust
+        run: |
+          dora start examples/openai-server/dataflow-rust.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Python multi-env example
+        run: |
+          dora start examples/python-multi-env/dataflow.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Rerun viewer example
+        run: |
+          dora start examples/rerun-viewer/dataflow.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Speech to text whisper
+        run: |
+          dora start examples/speech-to-text/whisper.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Translation EN to FR
+        run: |
+          dora start examples/translation/dataflow_en_fr.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Translation EN to ZH
+        run: |
+          dora start examples/translation/dataflow_en_zh.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Translation EN to ZH terminal
+        run: |
+          dora start examples/translation/dataflow_en_zh_terminal.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Translation FR to EN
+        run: |
+          dora start examples/translation/dataflow_fr_en.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Translation ZH to EN
+        run: |
+          dora start examples/translation/dataflow_zh_en.yml --detach --uv
+          sleep 30
+          dora stop
+
+      - name: Stop dora daemon
+        if: always()
+        run: dora destroy
