@@ -4,8 +4,6 @@ nodes:
     path: dora-keyboard
     outputs:
       - char
-    env:
-      DISPLAY: $DISPLAY
 
   - id: rerun
     path: dora-rerun
