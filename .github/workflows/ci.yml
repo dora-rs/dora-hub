@@ -110,6 +110,20 @@ jobs:
       - uses: r7kamura/rust-problem-matchers@v1.1.0
       - run: cargo --version --verbose
 
+      - name: Install system-level dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt update
+          sudo apt-get install portaudio19-dev
+          sudo apt-get install libdav1d-dev nasm libudev-dev meson ninja-build
+          mkdir -p $HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib
+          mkdir -p $HOME/.rustup/toolchains/1.89.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib
+          ln -s /lib/x86_64-linux-gnu/libdav1d.so $HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libdav1d.so
+          ln -s /lib/x86_64-linux-gnu/libdav1d.so $HOME/.rustup/toolchains/1.89.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libdav1d.so
+
+          # Install mingw-w64 cross-compilers
+          sudo apt install g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64
+
       - name: Install uv
         uses: astral-sh/setup-uv@v7
         with:
