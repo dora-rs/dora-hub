@@ -114,16 +114,15 @@ jobs:
           enable-cache: true
           activate-environment: true
 
-      - name: Cache cargo binaries
-        uses: actions/cache@v4
+      - name: Restore cargo binaries cache
+        id: cache-cargo-restore
+        uses: actions/cache/restore@v4
         with:
           path: |
             ~/.cargo/bin
             ~/.cargo/.crates.toml
             ~/.cargo/.crates2.json
           key: ${{ runner.os }}-cargo-bins
-          restore-keys: |
-            ${{ runner.os }}-cargo-bins
 
       - name: Install dora
         run: cargo install dora-cli --locked
@@ -239,3 +238,13 @@ jobs:
       - name: Stop dora daemon
         if: always()
         run: dora destroy
+
+      - name: Save cargo binaries cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: ${{ runner.os }}-cargo-bins
