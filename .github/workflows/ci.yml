@@ -138,6 +138,8 @@ jobs:
           dora stop --name echo
 
       - name: Keyboard example
+        # IGNORE: DISPLAY variable not set in GitHub Actions
+        if: false
         run: |
           dora build examples/keyboard/dataflow.yml --uv
           dora start examples/keyboard/dataflow.yml --name keyboard --detach --uv
