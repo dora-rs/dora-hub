@@ -130,6 +130,12 @@ jobs:
           enable-cache: true
           activate-environment: true
 
+      - name: Get dora-cli version
+        id: dora-version
+        run: |
+          VERSION=$(curl -s https://crates.io/api/v1/crates/dora-cli | jq -r '.crate.max_version')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Restore cargo binaries cache
         id: cache-cargo-restore
         uses: actions/cache/restore@v4
@@ -138,7 +144,7 @@ jobs:
             ~/.cargo/bin
             ~/.cargo/.crates.toml
             ~/.cargo/.crates2.json
-          key: ${{ runner.os }}-cargo-bins
+          key: ${{ runner.os }}-cargo-bins-${{ steps.dora-version.outputs.version }}
 
       - name: Install dora
         run: cargo install dora-cli --locked
@@ -267,4 +273,4 @@ jobs:
             ~/.cargo/bin
             ~/.cargo/.crates.toml
             ~/.cargo/.crates2.json
-          key: ${{ runner.os }}-cargo-bins
+          key: ${{ runner.os }}-cargo-bins-${{ steps.dora-version.outputs.version }}
