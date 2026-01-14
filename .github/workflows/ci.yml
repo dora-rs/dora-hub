@@ -132,90 +132,105 @@ jobs:
 
       - name: Echo example
         run: |
+          dora build examples/echo/dataflow.yml --uv
           dora start examples/echo/dataflow.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Keyboard example
         run: |
+          dora build examples/keyboard/dataflow.yml --uv
           dora start examples/keyboard/dataflow.yml --detach --uv
           sleep 30
           dora stop
 
       - name: MCP server example
         run: |
+          dora build examples/mcp-server/dataflow.yml --uv
           dora start examples/mcp-server/dataflow.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Object detection dataflow
         run: |
+          dora build examples/object-detection/dataflow-object-detection.yml --uv
           dora start examples/object-detection/dataflow-object-detection.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Object detection yolo
         run: |
+          dora build examples/object-detection/yolo.yml --uv
           dora start examples/object-detection/yolo.yml --detach --uv
           sleep 30
           dora stop
 
       - name: OpenAI server dataflow
         run: |
+          dora build examples/openai-server/dataflow.yml --uv
           dora start examples/openai-server/dataflow.yml --detach --uv
           sleep 30
           dora stop
 
       - name: OpenAI server dataflow-rust
         run: |
+          dora build examples/openai-server/dataflow-rust.yml --uv
           dora start examples/openai-server/dataflow-rust.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Python multi-env example
         run: |
+          dora build examples/python-multi-env/dataflow.yml --uv
           dora start examples/python-multi-env/dataflow.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Rerun viewer example
         run: |
+          dora build examples/rerun-viewer/dataflow.yml --uv
           dora start examples/rerun-viewer/dataflow.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Speech to text whisper
         run: |
+          dora build examples/speech-to-text/whisper.yml --uv
           dora start examples/speech-to-text/whisper.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Translation EN to FR
         run: |
+          dora build examples/translation/dataflow_en_fr.yml --uv
           dora start examples/translation/dataflow_en_fr.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Translation EN to ZH
         run: |
+          dora build examples/translation/dataflow_en_zh.yml --uv
           dora start examples/translation/dataflow_en_zh.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Translation EN to ZH terminal
         run: |
+          dora build examples/translation/dataflow_en_zh_terminal.yml --uv
           dora start examples/translation/dataflow_en_zh_terminal.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Translation FR to EN
         run: |
+          dora build examples/translation/dataflow_fr_en.yml --uv
           dora start examples/translation/dataflow_fr_en.yml --detach --uv
           sleep 30
           dora stop
 
       - name: Translation ZH to EN
         run: |
+          dora build examples/translation/dataflow_zh_en.yml --uv
           dora start examples/translation/dataflow_zh_en.yml --detach --uv
           sleep 30
           dora stop
