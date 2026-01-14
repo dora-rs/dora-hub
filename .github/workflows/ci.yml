@@ -154,6 +154,8 @@ jobs:
           dora stop --name mcp-server
 
       - name: Object detection dataflow
+        env:
+          OPERATING_MODE: SAVE
         run: |
           dora build examples/object-detection/dataflow-object-detection.yml --uv
           dora start examples/object-detection/dataflow-object-detection.yml --name object-detection --detach --uv
@@ -161,6 +163,8 @@ jobs:
           dora stop --name object-detection
 
       - name: Object detection yolo
+        env:
+          OPERATING_MODE: SAVE
         run: |
           dora build examples/object-detection/yolo.yml --uv
           dora start examples/object-detection/yolo.yml --name yolo --detach --uv
