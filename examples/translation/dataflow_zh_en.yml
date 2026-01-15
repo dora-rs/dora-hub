@@ -25,7 +25,7 @@ nodes:
       TRANSLATE: false
 
   - id: dora-opus
-    build: pip install -e ../../node-hub/dora-opus
+    build: pip install -e ../../node-archive/dora-opus
     path: dora-opus
     inputs:
       text: dora-distil-whisper/text

@@ -98,3 +98,138 @@ jobs:
           override: true
       - name: Typos check with custom config file
         uses: crate-ci/typos@master
+
+  examples:
+    name: "Examples"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      OPERATING_MODE: SAVE
+    steps:
+      - uses: actions/checkout@v5
+      - uses: r7kamura/rust-problem-matchers@v1.1.0
+      - run: cargo --version --verbose
+
+      - name: Install system-level dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt update
+          sudo apt-get install portaudio19-dev
+          sudo apt-get install libdav1d-dev nasm libudev-dev meson ninja-build
+          mkdir -p $HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib
+          mkdir -p $HOME/.rustup/toolchains/1.89.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib
+          ln -s /lib/x86_64-linux-gnu/libdav1d.so $HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libdav1d.so
+          ln -s /lib/x86_64-linux-gnu/libdav1d.so $HOME/.rustup/toolchains/1.89.0-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/lib/libdav1d.so
+
+          # Install mingw-w64 cross-compilers
+          sudo apt install g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          activate-environment: true
+
+      - name: Get dora-cli version
+        id: dora-version
+        run: |
+          VERSION=$(curl -s -A "dora-hub-ci (github.com/dora-rs/dora-hub)" https://crates.io/api/v1/crates/dora-cli | jq -r '.crate.max_stable_version // .crate.max_version')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Dora version: $VERSION"
+
+      - name: Restore cargo binaries cache
+        id: cache-cargo-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: ${{ runner.os }}-cargo-bins-${{ steps.dora-version.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bins
+
+      - name: Install dora
+        run: cargo install dora-cli --locked
+
+      - name: Start dora daemon
+        run: dora up
+
+      - name: Echo example
+        run: |
+          dora build examples/echo/dataflow.yml --uv
+          dora start examples/echo/dataflow.yml --name echo --detach --uv
+          sleep 30
+          dora stop --name echo
+
+      - name: Keyboard example
+        # IGNORE: DISPLAY variable not set in GitHub Actions
+        if: false
+        run: |
+          dora build examples/keyboard/dataflow.yml --uv
+          dora start examples/keyboard/dataflow.yml --name keyboard --detach --uv
+          sleep 30
+          dora stop --name keyboard
+
+      - name: MCP server example
+        run: |
+          dora build examples/mcp-server/dataflow.yml --uv
+          dora start examples/mcp-server/dataflow.yml --name mcp-server --detach --uv
+          sleep 30
+          dora stop --name mcp-server
+
+      - name: Object detection dataflow
+        run: |
+          dora build examples/object-detection/dataflow-object-detection.yml --uv
+          dora start examples/object-detection/dataflow-object-detection.yml --name object-detection --detach --uv
+          sleep 30
+          dora stop --name object-detection
+
+      - name: Object detection yolo
+        run: |
+          dora build examples/object-detection/yolo.yml --uv
+          dora start examples/object-detection/yolo.yml --name yolo --detach --uv
+          sleep 30
+          dora stop --name yolo
+
+      - name: OpenAI server dataflow
+        run: |
+          dora build examples/openai-server/dataflow.yml --uv
+          dora start examples/openai-server/dataflow.yml --name openai-server --detach --uv
+          sleep 30
+          dora stop --name openai-server
+
+      - name: OpenAI server dataflow-rust
+        run: |
+          dora build examples/openai-server/dataflow-rust.yml --uv
+          dora start examples/openai-server/dataflow-rust.yml --name openai-server-rust --detach --uv
+          sleep 30
+          dora stop --name openai-server-rust
+
+      - name: Python multi-env example
+        run: |
+          dora build examples/python-multi-env/dataflow.yml --uv
+          dora start examples/python-multi-env/dataflow.yml --name python-multi-env --detach --uv
+          sleep 30
+          dora stop --name python-multi-env
+
+      - name: Rerun viewer example
+        run: |
+          dora build examples/rerun-viewer/dataflow.yml --uv
+          dora start examples/rerun-viewer/dataflow.yml --name rerun-viewer --detach --uv
+          sleep 30
+          dora stop --name rerun-viewer
+
+      - name: Stop dora daemon
+        if: always()
+        run: dora destroy
+
+      - name: Save cargo binaries cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: ${{ runner.os }}-cargo-bins-${{ steps.dora-version.outputs.version }}
