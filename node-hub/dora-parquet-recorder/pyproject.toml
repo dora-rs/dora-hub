@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dora-parquet-recorder"
+version = "0.1.0"
+description = "A generic, zero-copy data recorder for dora."
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "dora-rs",
+    "pyarrow",
+    "pandas",
+    "numpy",
+    "opencv-python"
+]
+
+[project.scripts]
+# This lets users run "dora-parquet-recorder" from command line
+dora-parquet-recorder = "dora_parquet_recorder.main:main"
