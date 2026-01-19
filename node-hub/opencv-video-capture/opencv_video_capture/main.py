@@ -49,6 +49,13 @@ def main():
         help="The height of the camera. Default is the camera height.",
         default=None,
     )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        required=False,
+        help="The JPEG quality. (0-100) Default is 95.",
+        default=95, # Same as OpenCV's one
+    )
 
     args = parser.parse_args()
 
@@ -72,6 +79,11 @@ def main():
         if isinstance(image_height, str) and image_height.isnumeric():
             image_height = int(image_height)
         video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, image_height)
+
+    jpeg_quality = os.getenv("JPEG_QUALITY", args.jpeg_quality)
+    if jpeg_quality is not None:
+        if isinstance(jpeg_quality, str) and jpeg_quality.isnumeric():
+            jpeg_quality = int(jpeg_quality)
 
     node = Node(args.name)
     start_time = time.time()
@@ -137,7 +149,10 @@ def main():
                 elif encoding == "yuv420":
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2YUV_I420)
                 elif encoding in ["jpeg", "jpg", "jpe", "bmp", "webp", "png"]:
-                    ret, frame = cv2.imencode("." + encoding, frame)
+                    encode_params = []
+                    if encoding in ["jpeg", "jpg", "jpe"]:
+                        encode_params += [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+                    ret, frame = cv2.imencode("." + encoding, frame, encode_params)
                     if not ret:
                         print("Error encoding image...")
                         continue

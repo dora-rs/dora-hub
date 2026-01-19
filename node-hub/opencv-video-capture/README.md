@@ -18,6 +18,10 @@ This node is used to capture video from a camera using OpenCV.
 
     IMAGE_WIDTH: 640 # optional, default is video capture width
     IMAGE_HEIGHT: 480 # optional, default is video capture height
+
+    # optional, default is 95.
+    # This is used only when encoding is one of "jpeg", "jpg" or "jpe".
+    JPEG_QUALITY: 95
 ```
 
 # Inputs
