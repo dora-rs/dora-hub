@@ -138,6 +138,7 @@ def main():
                     frame = cv2.resize(frame, (image_width, image_height))
 
                 metadata = event["metadata"]
+                metadata.pop("timestamp", None)
                 metadata["encoding"] = encoding
                 metadata["width"] = int(frame.shape[1])
                 metadata["height"] = int(frame.shape[0])
