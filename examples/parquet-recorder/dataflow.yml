@@ -1,0 +1,18 @@
+nodes:
+  - id: camera
+    path: camera.py
+    inputs:
+      recorder_status: recorder/status
+    outputs:
+      - image
+
+  - id: recorder
+    # This works if the user ran 'pip install -e .' first
+    path: pip install -e ../../node-hub/dora-parquet-recorder 
+    inputs:
+      cam_feed: camera/image
+    outputs:
+      - status
+    env:
+      LOG_DIR: logs
+      BATCH_SIZE: 30
