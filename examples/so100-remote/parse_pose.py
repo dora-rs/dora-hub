@@ -1,7 +1,6 @@
 """TODO: Add docstring."""
 
 import time
-import numpy as np
 import pyarrow as pa
 from dora import Node
 

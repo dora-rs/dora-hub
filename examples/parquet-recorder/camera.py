@@ -1,7 +1,6 @@
 import cv2
 import time
 import pyarrow as pa
-import numpy as np
 from dora import Node
 
 node = Node()

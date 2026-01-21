@@ -33,3 +33,9 @@ extend-select = [
   "N",    # Ruff's N rule
   "I",    # Ruff's I rule
 ]
+
+# Keep your existing select list...
+select = ["E", "W", "F", "I", "B", "UP"] 
+
+# ADD THIS LINE to ignore all Documentation (D) warnings
+ignore = ["D"]

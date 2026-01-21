@@ -1,16 +1,16 @@
-"""
-High-Performance Batched Parquet Recorder
+"""High-Performance Batched Parquet Recorder
 """
 
+import json
 import os
 import queue
 import threading
-import json
+from datetime import datetime
+from typing import Any
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 from dora import Node
-from datetime import datetime
-from typing import Any
 
 # CONFIGURATION
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "30")) 
@@ -30,8 +30,7 @@ class DoraParquetRecorder:
         print(f"[Recorder] Online. Batch Size: {BATCH_SIZE}", flush=True)
 
     def _writer_loop(self):
-        """
-        Collects small tables and writes them in big chunks.
+        """Collects small tables and writes them in big chunks.
         """
         # Buffer to hold tables for each input_id: { "cam_feed": [table1, table2...] }
         buffers = {}
@@ -102,7 +101,7 @@ class DoraParquetRecorder:
             if hasattr(value, "buffers"):
                 try:
                     data_blob = value.buffers()[1].to_pybytes()
-                except:
+                except Exception:
                     data_blob = value.to_string().encode('utf-8')
             else:
                 # Fallback for strings/other types
