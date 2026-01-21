@@ -38,4 +38,4 @@ extend-select = [
 select = ["E", "W", "F", "I", "B", "UP"] 
 
 # ADD THIS LINE to ignore all Documentation (D) warnings
-ignore = ["D"]
+ignore = ["D", "PERF203"]

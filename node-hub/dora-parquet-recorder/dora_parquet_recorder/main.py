@@ -1,5 +1,4 @@
-"""High-Performance Batched Parquet Recorder
-"""
+"""High-Performance Batched Parquet Recorder"""
 
 import json
 import os
@@ -13,7 +12,7 @@ import pyarrow.parquet as pq
 from dora import Node
 
 # CONFIGURATION
-BATCH_SIZE = int(os.getenv("BATCH_SIZE", "30")) 
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", "30"))
 LOG_DIR = os.getenv("LOG_DIR", "data_logs")
 
 class DoraParquetRecorder:
@@ -21,9 +20,9 @@ class DoraParquetRecorder:
         self.write_queue = queue.Queue()
         self.writers = {}
         self.shutdown_flag = False
-        
+
         os.makedirs(LOG_DIR, exist_ok=True)
-        
+
         # Start the background writer
         self.writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
         self.writer_thread.start()
@@ -40,12 +39,12 @@ class DoraParquetRecorder:
                 # 1. Get data (Wait up to 0.1s so we can check shutdown flag often)
                 data = self.write_queue.get(timeout=0.1)
                 input_id, table = data
-                
+
                 # 2. Add to local buffer
                 if input_id not in buffers:
                     buffers[input_id] = []
                 buffers[input_id].append(table)
-                
+
                 # 3. Check if bucket is full
                 if len(buffers[input_id]) >= BATCH_SIZE:
                     self._flush_buffer(input_id, buffers[input_id])
@@ -61,7 +60,7 @@ class DoraParquetRecorder:
         for input_id, buf in buffers.items():
             if buf:
                 self._flush_buffer(input_id, buf)
-        
+
         # Close files
         for w in self.writers.values():
             w.close()
@@ -71,20 +70,23 @@ class DoraParquetRecorder:
         try:
             if not table_list:
                 return
-                
+
             # Combine 30 small tables into 1 big table (Very fast)
             batch_table = pa.concat_tables(table_list)
-            
+
             # Create writer if it doesn't exist
             if input_id not in self.writers:
                 file_path = os.path.join(LOG_DIR, f"{input_id}.parquet")
                 # 'compression=None' is faster for CPU, 'snappy' saves disk space
-                self.writers[input_id] = pq.ParquetWriter(file_path, batch_table.schema, compression='NONE')
+                self.writers[input_id] = pq.ParquetWriter(
+                    file_path,
+                    batch_table.schema,
+                    compression='NONE')
                 print(f"[Recorder] Created log: {file_path}", flush=True)
-            
+
             # One single write for 30 frames!
             self.writers[input_id].write_table(batch_table)
-            
+
         except Exception as e:
             print(f"[Recorder] Flush failed: {e}", flush=True)
 
@@ -95,7 +97,7 @@ class DoraParquetRecorder:
         try:
             # 1. Fast Metadata Serialize
             meta_json = json.dumps(metadata)
-            
+
             # 2. Fast Binary Copy (Zero-Copyish)
             # Try to get raw C-buffer bytes if possible
             if hasattr(value, "buffers"):
@@ -111,7 +113,7 @@ class DoraParquetRecorder:
 
             # 3. Queue it up
             timestamp = datetime.now().isoformat()
-            
+
             table = pa.Table.from_pydict({
                 "timestamp": [timestamp],
                 "data": [data_blob],
@@ -134,7 +136,7 @@ def main():
 
     # --- HANDSHAKE ---
     print("[Recorder] Ready. Sending Signal...", flush=True)
-    node.send_output("status", pa.array(["READY"])) 
+    node.send_output("status", pa.array(["READY"]))
     # -----------------
 
     for event in node:
