@@ -1,6 +1,6 @@
 [project]
 name = "lebai-client"
-version = "0.4.0"
+version = "0.4.1"
 authors = [{ name = "dora-rs team" }]
 description = "Dora Node client for lebai robotic arms."
 license = { text = "MIT" }
