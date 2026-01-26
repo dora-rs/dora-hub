@@ -5,6 +5,7 @@ or unique identifier for stable camera selection across platforms.
 """
 
 import argparse
+import json
 import os
 import platform
 import subprocess
@@ -75,8 +76,6 @@ def get_windows_cameras() -> list[dict]:
             text=True,
         )
         if result.returncode == 0 and result.stdout.strip():
-            import json
-
             data = json.loads(result.stdout)
             # Handle single device (dict) or multiple devices (list)
             if isinstance(data, dict):
@@ -131,7 +130,7 @@ def find_camera_by_id(unique_id: str) -> int | None:
     return None
 
 
-RUNNER_CI = True if os.getenv("CI") == "true" else False
+RUNNER_CI = os.getenv("CI") == "true"
 
 FLIP = os.getenv("FLIP", "")
 
