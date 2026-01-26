@@ -22,6 +22,7 @@ def get_macos_cameras() -> list[dict]:
 
     Returns:
         List of dicts with 'name', 'model_id', and 'unique_id' keys
+        
     """
     cameras = []
     if platform.system() != "Darwin":
@@ -60,6 +61,7 @@ def get_windows_cameras() -> list[dict]:
 
     Returns:
         List of dicts with 'name' and 'device_id' keys
+        
     """
     cameras = []
     if platform.system() != "Windows":
@@ -80,8 +82,8 @@ def get_windows_cameras() -> list[dict]:
             # Handle single device (dict) or multiple devices (list)
             if isinstance(data, dict):
                 data = [data]
-            for item in data:
-                cameras.append(
+            for item in data: 
+                cameras.append( # noqa: PERF401
                     {
                         "name": item.get("FriendlyName", "Unknown"),
                         "device_id": item.get("InstanceId", ""),
@@ -104,6 +106,7 @@ def find_camera_by_id(unique_id: str) -> int | None:
 
     Returns:
         Camera index if found, None otherwise
+        
     """
     if platform.system() == "Darwin":
         cameras = get_macos_cameras()
