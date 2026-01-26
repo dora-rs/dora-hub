@@ -1,4 +1,8 @@
-"""TODO: Add docstring."""
+"""OpenCV Video Capture Node for Dora.
+
+This module provides a video capture node that can access cameras by index
+or unique identifier for stable camera selection across platforms.
+"""
 
 import argparse
 import os
@@ -78,10 +82,12 @@ def get_windows_cameras() -> list[dict]:
             if isinstance(data, dict):
                 data = [data]
             for item in data:
-                cameras.append({
-                    "name": item.get("FriendlyName", "Unknown"),
-                    "device_id": item.get("InstanceId", ""),
-                })
+                cameras.append(
+                    {
+                        "name": item.get("FriendlyName", "Unknown"),
+                        "device_id": item.get("InstanceId", ""),
+                    }
+                )
     except Exception:
         pass
 
@@ -131,8 +137,11 @@ FLIP = os.getenv("FLIP", "")
 
 
 def main():
-    # Handle dynamic nodes, ask for the name of the node in the dataflow, and the same values as the ENV variables.
-    """TODO: Add docstring."""
+    """Handle video capture from cameras with stable camera selection.
+
+    Supports camera selection by index or unique identifier across platforms
+    (macOS, Linux, Windows). Processes video frames and sends them via Dora.
+    """
     parser = argparse.ArgumentParser(
         description="OpenCV Video Capture: This node is used to capture video from a camera.",
     )
@@ -155,7 +164,10 @@ def main():
         "--camera-id",
         type=str,
         required=False,
-        help="Unique camera ID. macOS: 'system_profiler SPCameraDataType', Linux: /dev/v4l/by-id/, Windows: 'Get-PnpDevice -Class Camera'.",
+        help=(
+            "Unique camera ID. macOS: 'system_profiler SPCameraDataType', "
+            "Linux: /dev/v4l/by-id/, Windows: 'Get-PnpDevice -Class Camera'."
+        ),
         default=None,
     )
     parser.add_argument(
@@ -182,12 +194,20 @@ def main():
         video_capture_path = find_camera_by_id(camera_id)
         if video_capture_path is None:
             if platform.system() == "Darwin":
-                hint = "Run 'system_profiler SPCameraDataType' to list available cameras."
+                hint = (
+                    "Run 'system_profiler SPCameraDataType' to list available "
+                    "cameras."
+                )
             elif platform.system() == "Windows":
-                hint = "Run 'Get-PnpDevice -Class Camera' in PowerShell to list available cameras."
+                hint = (
+                    "Run 'Get-PnpDevice -Class Camera' in PowerShell to list "
+                    "available cameras."
+                )
             else:
                 hint = "Check /dev/v4l/by-id/ for available camera IDs."
-            raise RuntimeError(f"Could not find camera with ID '{camera_id}'. {hint}")
+            raise RuntimeError(
+                f"Could not find camera with ID '{camera_id}'. {hint}"
+            )
     else:
         video_capture_path = os.getenv("CAPTURE_PATH", args.path)
         if isinstance(video_capture_path, str) and video_capture_path.isnumeric():
@@ -206,13 +226,18 @@ def main():
         else:
             cameras = []
 
-        if isinstance(video_capture_path, int) and video_capture_path < len(cameras):
+        if isinstance(video_capture_path, int) and video_capture_path < len(
+            cameras
+        ):
             cam_info = cameras[video_capture_path]
             print(
-                f"Opened camera at index {video_capture_path}: {cam_info.get('name', 'Unknown')}"
+                f"Opened camera at index {video_capture_path}: "
+                f"{cam_info.get('name', 'Unknown')}"
             )
             # Print the appropriate ID field per platform
-            cam_id = cam_info.get("unique_id") or cam_info.get("device_id", "N/A")
+            cam_id = cam_info.get("unique_id") or cam_info.get(
+                "device_id", "N/A"
+            )
             print(f"  Unique ID: {cam_id}")
         else:
             print(f"Opened camera at index {video_capture_path}")
@@ -251,12 +276,15 @@ def main():
                 if not ret:
                     if not RUNNER_CI:
                         raise RuntimeError(
-                            f"Error: cannot read frame from camera at path {video_capture_path}. For resiliency you can use: restart_policy: on-failure in the node definition.",
+                            f"Error: cannot read frame from camera at path "
+                            f"{video_capture_path}. For resiliency you can use: "
+                            f"restart_policy: on-failure in the node definition."
                         )
                     frame = np.zeros((480, 640, 3), dtype=np.uint8)
                     cv2.putText(
                         frame,
-                        f"Error: no frame for camera at path {video_capture_path}.",
+                        f"Error: no frame for camera at path "
+                        f"{video_capture_path}.",
                         (30, 30),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.50,
@@ -277,7 +305,8 @@ def main():
                     image_width is not None
                     and image_height is not None
                     and (
-                        frame.shape[1] != image_width or frame.shape[0] != image_height
+                        frame.shape[1] != image_width
+                        or frame.shape[0] != image_height
                     )
                 ):
                     frame = cv2.resize(frame, (image_width, image_height))
