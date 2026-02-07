@@ -191,38 +191,88 @@ def main():
             words = text.lower().split()
 
             tmp_tools = event["metadata"].get("tools")
+            tool_choice = event["metadata"].get("tool_choice", "auto")
             tmp_tools = json.loads(tmp_tools) if tmp_tools is not None else tools
 
             if len(ACTIVATION_WORDS) == 0 or any(
                 word in ACTIVATION_WORDS for word in words
             ):
-                # On linux, Windows
-                if sys.platform == "darwin":
-                    response = model.create_chat_completion(
-                        messages=history,  # Prompt
-                        max_tokens=150,
-                        tools=tools,
-                    )["choices"][0]["message"]["content"]
-
-                    history += [{"role": "assistant", "content": response}]
-                elif sys.platform == "linux":
-                    response, history = generate_hf(model, tokenizer, text, history)
-                else:
-                    from mlx_lm import generate
-
-                    response = generate(
-                        model,
-                        tokenizer,
-                        prompt=text,
-                        verbose=False,
-                        max_tokens=50,
-                    )
-                print(response)
-                node.send_output(
-                    output_id="text",
-                    data=pa.array([response]),
-                    metadata={},
+                response = model.create_chat_completion(
+                    messages=history,  # Prompt
+                    max_tokens=150,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                    stream=True,
                 )
+
+                accumulated_response = ""
+                chunk_buffer = ""
+                tool_buffer = ""
+                tool_call = False
+                segment_index = 0
+                for chunk in response:
+                    delta = chunk["choices"][0]["delta"]
+                    if "content" not in delta:
+                        continue
+
+                    chunk_buffer += delta["content"]
+
+                    # Check if we should send a chunk (on punctuation or size)
+                    should_send = False
+
+                    chunk_buffer = chunk_buffer.replace("<|im_start|>Assistant .", "")
+                    if any(
+                        p in chunk_buffer
+                        for p in ["。", "！", "？", ".", "!", "?", "，", ",", "\n"]
+                    ):
+                        # Send on punctuation for more natural breaks
+                        should_send = True
+
+                    if should_send and chunk_buffer:
+                        # Clean chunk before sending
+                        clean_chunk = chunk_buffer
+
+                        # Remove dashes from output
+                        clean_chunk = clean_chunk.replace("-", "")
+
+                        # Skip if it's part of thinking tags
+                        if "<think>" in clean_chunk or "</think>" in clean_chunk:
+                            chunk_buffer = ""
+                            continue
+                        elif "<tool_call>" in chunk_buffer or tool_call:
+                            tool_buffer += chunk_buffer
+                            tool_call = True
+                            continue
+
+                        if "</tool_call>" in chunk_buffer:
+                            tool_call = False
+                            node.send_output(
+                                output_id="text",
+                                data=pa.array(
+                                    [tool_buffer.partition("</tool_call>")[0]]
+                                ),
+                            )
+                            chunk_buffer = chunk_buffer.partition("</tool_call>")[1]
+                            continue
+                        accumulated_response += clean_chunk
+                        # Send chunk to TTS with metadata (including question_id)
+                        node.send_output(
+                            output_id="text",
+                            data=pa.array([clean_chunk]),
+                        )
+
+                        segment_index += 1
+                        chunk_buffer = ""
+
+                # Send any remaining buffer
+                if chunk_buffer.strip():
+                    clean_final_chunk = chunk_buffer.strip().replace("-", "")
+                    accumulated_response += clean_final_chunk
+                    node.send_output(
+                        output_id="text",
+                        data=pa.array([clean_final_chunk]),
+                    )
+                history += [{"role": "assistant", "content": accumulated_response}]
 
 
 if __name__ == "__main__":

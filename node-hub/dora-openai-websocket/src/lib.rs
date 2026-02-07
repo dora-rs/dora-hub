@@ -358,8 +358,15 @@ async fn handle_client(
                             }
                             OpenAIRealtimeMessage::InputAudioBufferCommit => break,
                             OpenAIRealtimeMessage::ResponseCreate { response } => {
+                                let tool_choice = response.tool_choice.clone();
                                 if let Some(text) = response.instructions {
                                     let mut parameter = MetadataParameters::default();
+                                    if let Some(tool_choice) = tool_choice {
+                                        parameter.insert(
+                                            "tool_choice".to_string(),
+                                            dora_node_api::Parameter::String(tool_choice),
+                                        );
+                                    }
                                     tx.send(BroadcastMessage::Output(
                                         DataId::from("response.create".to_string()),
                                         parameter,
@@ -373,6 +380,10 @@ async fn handle_client(
                                 match item.item_type.as_str() {
                                     "function_call_output" => {
                                         let mut parameter = MetadataParameters::default();
+                                        parameter.insert(
+                                            "tool_choice".to_string(),
+                                            dora_node_api::Parameter::String("none".to_string()),
+                                        );
                                         tx.send(BroadcastMessage::Output(
                                             DataId::from("function_call_output".to_string()),
                                             parameter,
