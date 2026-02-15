@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use eyre::{Context, ContextCompat, Result};
 use k::{Chain, Translation3, UnitQuaternion, nalgebra::Quaternion};
@@ -40,17 +43,49 @@ impl<T: Clone, I: Iterator<Item = T>> Iterator for MyIntersperse<T, I> {
     }
 }
 
+fn normalize_urdf_entity_root(urdf_path: &str) -> String {
+    Path::new(urdf_path)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| urdf_path.to_string())
+}
+
 fn get_entity_path(link: &k::Node<f32>, urdf_path: &str) -> String {
+    let urdf_entity_root = normalize_urdf_entity_root(urdf_path);
+
     let mut ancestors: Vec<_> = link
         .iter_ancestors()
         .map(|node| node.link().as_ref().unwrap().name.clone())
         .collect();
-    ancestors.push(String::from(urdf_path));
+    ancestors.push(urdf_entity_root);
     ancestors
         .into_iter()
         .rev()
         .my_intersperse(String::from("/"))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_urdf_entity_root;
+
+    #[test]
+    fn strips_urdf_suffix_from_root_entity_name() {
+        let root = normalize_urdf_entity_root("robot.urdf");
+        assert_eq!(root, "robot");
+    }
+
+    #[test]
+    fn keeps_root_when_no_suffix() {
+        let root = normalize_urdf_entity_root("robot");
+        assert_eq!(root, "robot");
+    }
+
+    #[test]
+    fn keeps_non_urdf_extensions_without_crashing() {
+        let root = normalize_urdf_entity_root("robot.foo");
+        assert_eq!(root, "robot");
+    }
 }
 
 pub fn init_urdf(rec: &RecordingStream) -> Result<HashMap<String, Chain<f32>>> {
@@ -94,10 +129,15 @@ pub fn init_urdf(rec: &RecordingStream) -> Result<HashMap<String, Chain<f32>>> {
                 path
             ));
         }
-        rec.log_file_from_path(&urdf_path, None, true)
-            .context(format!(
-                "Could not log URDF file {urdf_path:#?} within rerun-urdf-loader"
-            ))?;
+        let urdf_entity_root = normalize_urdf_entity_root(&path);
+        rec.log_file_from_path(
+            &urdf_path,
+            Some(rerun::EntityPath::from(urdf_entity_root.as_str())),
+            true,
+        )
+        .context(format!(
+            "Could not log URDF file {urdf_path:#?} within rerun-urdf-loader"
+        ))?;
         println!("Logging URDF file: {urdf_path:#?}");
 
         // Get transform by replacing URDF_ with TRANSFORM_
