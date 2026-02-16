@@ -80,11 +80,11 @@ pub struct MtmdCliParams {
 
 /// State of the MTMD CLI application.
 #[allow(missing_debug_implementations)]
-pub struct MtmdCliContext {
+pub struct MtmdCliContext<'a> {
     /// The MTMD context for multimodal processing.
     pub mtmd_ctx: MtmdContext,
     /// The batch used for processing tokens.
-    pub batch: LlamaBatch,
+    pub batch: LlamaBatch<'a>,
     /// The list of loaded bitmaps (images/audio).
     pub bitmaps: Vec<MtmdBitmap>,
     /// The number of past tokens processed.
@@ -95,7 +95,7 @@ pub struct MtmdCliContext {
     pub chat: Vec<LlamaChatMessage>,
 }
 
-impl MtmdCliContext {
+impl<'a> MtmdCliContext<'a> {
     /// Creates a new MTMD CLI context
     ///
     /// # Errors
@@ -244,6 +244,21 @@ impl MtmdCliContext {
     }
 }
 
+fn run_standalone(
+    model: &LlamaModel,
+    context: &mut LlamaContext,
+    sampler: &mut LlamaSampler,
+    params: &MtmdCliParams,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut ctx = MtmdCliContext::new(params, model)?;
+
+    let msg = LlamaChatMessage::new("user".to_string(), params.prompt.clone())?;
+    ctx.eval_message(model, context, msg, true)?;
+    let text = ctx.generate_response(model, context, sampler, params.n_predict)?;
+    println!("\n--- Response ---\n{text}");
+    Ok(())
+}
+
 fn run_single_turn(
     model: &LlamaModel,
     context: &mut LlamaContext,
@@ -253,7 +268,7 @@ fn run_single_turn(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Add media marker if not present
     let (mut node, mut events) = DoraNode::init_from_env().unwrap();
-    let mut ctx = MtmdCliContext::new(&params, &model)?;
+    let mut ctx = MtmdCliContext::new(params, model)?;
     let mut never_debounced = true;
     loop {
         match events.recv() {
@@ -383,8 +398,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create sampler
     let mut sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
 
-    // Create the MTMD context
-    run_single_turn(&model, &mut context, &mut sampler, &params, &backend)?;
+    // Run standalone if not in dora, otherwise run as dora node
+    if std::env::var("DORA_NODE_CONFIG").is_ok() {
+        run_single_turn(&model, &mut context, &mut sampler, &params, &backend)?;
+    } else {
+        run_standalone(&model, &mut context, &mut sampler, &params)?;
+    }
 
     Ok(())
 }
