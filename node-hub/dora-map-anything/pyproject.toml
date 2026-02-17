@@ -1,0 +1,29 @@
+[project]
+name = "dora-map-anything"
+version = "0.0.0"
+authors = [{ name = "Your Name", email = "email@email.com" }]
+description = "dora-map-anything"
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.12"
+
+dependencies = [
+    "dora-rs >= 0.3.9",
+    "torch>=2.7.0",
+    "numpy>=2.0.0",
+    "opencv-python>=4.11.0",
+    "trimesh>=4.0.0",
+    "mapanything @ git+https://github.com/facebookresearch/map-anything",
+]
+
+[dependency-groups]
+dev = ["pytest >=8.1.1", "ruff >=0.9.1"]
+
+[project.scripts]
+dora-map-anything = "dora_map_anything.main:main"
+
+[tool.ruff.lint]
+extend-select = [
+  "D",  # pydocstyle
+  "UP",
+]
