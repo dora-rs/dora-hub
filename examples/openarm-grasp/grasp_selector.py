@@ -1,0 +1,995 @@
+"""VLM-as-critic grasp selector with SAM2 segmentation and contour-based candidates.
+
+Pipeline:
+  Pass 1 (locate): Ask VLM for the best grip point on the target object.
+  Segment: Send point to SAM2 for precise mask (fallback: depth/color).
+  Contour analysis: Sample grasp lines through the mask, score by geometric
+      contact quality, pick ~5 diverse candidates.
+  Pass 2 (rate xN): For each candidate, rotate the image so the gripper appears
+      horizontal, render it, ask VLM to rate 1-10. Pick the highest-rated.
+
+Key insight: Qwen's vision encoder uses a grid of patches, so it perceives
+horizontal/vertical patterns much better than diagonal ones. By rotating the
+image, every candidate gripper appears horizontal to the VLM.
+
+Outputs grasp result as {"p1":[x,y],"p2":[x,y]} in normalized 0-1000 coords,
+compatible with test_visualize_grasp.py.
+"""
+
+import base64
+import json
+import math
+import os
+import re
+from dataclasses import dataclass, field
+
+import cv2
+import numpy as np
+import pyarrow as pa
+from dora import Node
+
+# --- Config from env ---
+WIDTH = int(os.getenv("IMAGE_WIDTH", "640"))
+HEIGHT = int(os.getenv("IMAGE_HEIGHT", "480"))
+TARGET_OBJECT = os.getenv("TARGET_OBJECT", "the red cube")
+USE_THINK = os.getenv("USE_THINK", "true").lower() in ("1", "true", "yes")
+OUTPUT_DIR = os.getenv("OUTPUT_DIR", ".")
+DEFAULT_DEPTH_MM = float(os.getenv("DEFAULT_DEPTH_MM", "400"))
+NUM_CANDIDATES = int(os.getenv("NUM_CANDIDATES", "5"))
+DEPTH_THRESHOLD_MM = float(os.getenv("DEPTH_THRESHOLD_MM", "30"))
+USE_SAM2 = os.getenv("USE_SAM2", "true").lower() in ("1", "true", "yes")
+USE_SAM3 = os.getenv("USE_SAM3", "false").lower() in ("1", "true", "yes")
+
+# Gripper physical dimensions (SO-100 / similar small gripper)
+GRIPPER_MAX_OPENING_MM = 100.0  # full opening
+GRIPPER_MIN_OPENING_MM = 5.0    # minimum useful opening
+FINGER_THICKNESS_MM = 10.0
+FINGER_DEPTH_MM = 30.0
+
+# Color for the gripper overlay (green, in RGB)
+GRIPPER_COLOR_RGB = (0, 220, 0)
+
+# --- Prompts ---
+LOCATE_PROMPT_TEMPLATE = (
+    "You are a robot vision system. Find the geometric center of "
+    "{object_name} in this image. This center point will be used to "
+    "segment the full object, so it must be in the middle of the object. "
+    "Use normalized coordinates from 0 to 1000 where (0,0) is top-left "
+    "and (1000,1000) is bottom-right. cx and cy must each be a single integer. "
+    'Output ONLY JSON: {{"cx": 500, "cy": 500}} (replace with actual values)'
+)
+
+RATE_PROMPT_TEMPLATE = (
+    "You are a robot grasp quality evaluator. This image shows {object_name} "
+    "with a parallel-jaw gripper overlaid in green. The image has been rotated "
+    "so the gripper appears horizontal. The two green rectangles are the finger "
+    "pads that will close on the object along the dashed green line.\n"
+    "Rate this grasp from 1 to 10 considering:\n"
+    "- Are the fingers placed on graspable surfaces of the object?\n"
+    "- Is the grip across a stable axis?\n"
+    "- Will the fingers have good contact area?\n"
+    "- Will the grasp be stable when lifting?\n"
+    'Output ONLY JSON: {{"score": <1-10>, "reason": "<one sentence>"}}'
+)
+
+
+@dataclass
+class GraspCandidate:
+    angle_deg: float
+    # Grasp center in pixels
+    center_x: float
+    center_y: float
+    # Jaw center positions in pixels
+    jaw1_cx: float
+    jaw1_cy: float
+    jaw2_cx: float
+    jaw2_cy: float
+    # Pixel dimensions for rendering
+    opening_px: float  # full opening (distance between jaw centers)
+    finger_thickness_px: float
+    finger_depth_px: float
+    # Geometric score (for pre-filtering before VLM)
+    geo_score: float = 0.0
+
+
+# --- Helper functions ---
+
+
+def strip_think_tags(text):
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
+def send_vlm_request(node, image_rgb, prompt_text):
+    """Encode image + prompt in dora-qwen-omni format and send."""
+    img_bgr = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2BGR)
+    _, png_bytes = cv2.imencode(".png", img_bgr)
+    b64 = base64.b64encode(png_bytes.tobytes()).decode("utf-8")
+    image_url = f"data:image/png;base64,{b64}"
+
+    full_prompt = f"/think\n{prompt_text}" if USE_THINK else prompt_text
+    texts = [
+        f"<|user|>\n<|vision_start|>\n{image_url}",
+        f"<|user|>\n<|im_start|>\n{full_prompt}",
+    ]
+    node.send_output("vlm_request", pa.array(texts))
+
+
+def parse_locate_response(text):
+    """Extract center coordinates from VLM response -> (cx_px, cy_px) or None.
+
+    Handles various VLM output formats:
+      {"cx": 184, "cy": 740}
+      {"cx": [184, 740]}         — both coords in one field
+      {"center": [184, 740]}
+      {"x": 184, "y": 740}
+    """
+    text = strip_think_tags(text)
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start == -1 or end == 0:
+        return None
+    try:
+        data = json.loads(text[start:end])
+
+        cx_norm, cy_norm = None, None
+
+        # Try standard {"cx": N, "cy": N}
+        if "cx" in data and "cy" in data:
+            cx_raw, cy_raw = data["cx"], data["cy"]
+            cx_norm = float(cx_raw[0]) if isinstance(cx_raw, list) else float(cx_raw)
+            cy_norm = float(cy_raw[0]) if isinstance(cy_raw, list) else float(cy_raw)
+        # Try {"cx": [x, y]} — both packed in one field
+        elif "cx" in data and isinstance(data["cx"], list) and len(data["cx"]) >= 2:
+            cx_norm, cy_norm = float(data["cx"][0]), float(data["cx"][1])
+        # Try {"center": [x, y]}
+        elif "center" in data and isinstance(data["center"], list):
+            cx_norm, cy_norm = float(data["center"][0]), float(data["center"][1])
+        # Try {"x": N, "y": N}
+        elif "x" in data and "y" in data:
+            cx_norm, cy_norm = float(data["x"]), float(data["y"])
+
+        if cx_norm is None or cy_norm is None:
+            return None
+        return cx_norm * WIDTH / 1000.0, cy_norm * HEIGHT / 1000.0
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError, IndexError):
+        return None
+
+
+def parse_rate_response(text):
+    """Extract {"score": N, "reason": "..."} -> (score, reason) or None."""
+    text = strip_think_tags(text)
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start == -1 or end == 0:
+        return None
+    try:
+        data = json.loads(text[start:end])
+        score = int(data["score"])
+        reason = str(data.get("reason", ""))
+        if 1 <= score <= 10:
+            return score, reason
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+        pass
+    return None
+
+
+def compute_gripper_pixel_scale(cx_px, cy_px, depth_map, intrinsics):
+    """Compute mm-to-pixel scale at the object center. Falls back to defaults."""
+    z_mm = DEFAULT_DEPTH_MM
+    fx = None
+
+    if depth_map is not None and intrinsics is not None:
+        ix = max(0, min(int(round(cx_px)), depth_map.shape[1] - 1))
+        iy = max(0, min(int(round(cy_px)), depth_map.shape[0] - 1))
+        d = float(depth_map[iy, ix])
+        if d > 0:
+            z_mm = d
+        fx = intrinsics[0]
+
+    if fx is None:
+        fx = 600.0
+
+    return fx / z_mm
+
+
+# --- Segmentation ---
+
+
+def segment_object_depth(depth_map, cx_px, cy_px, threshold_mm=DEPTH_THRESHOLD_MM):
+    """Segment the object using depth thresholding around the located point.
+
+    Returns a binary mask (uint8, 0 or 255).
+    """
+    ix = max(0, min(int(round(cx_px)), depth_map.shape[1] - 1))
+    iy = max(0, min(int(round(cy_px)), depth_map.shape[0] - 1))
+
+    # Sample a small patch around the center to get robust depth estimate
+    patch_r = 5
+    y0 = max(0, iy - patch_r)
+    y1 = min(depth_map.shape[0], iy + patch_r + 1)
+    x0 = max(0, ix - patch_r)
+    x1 = min(depth_map.shape[1], ix + patch_r + 1)
+    patch = depth_map[y0:y1, x0:x1].astype(np.float32)
+    valid = patch[patch > 0]
+    if len(valid) == 0:
+        return None
+    center_depth = float(np.median(valid))
+
+    # Threshold: pixels within threshold_mm of center depth
+    depth_f = depth_map.astype(np.float32)
+    mask = ((depth_f > 0) &
+            (np.abs(depth_f - center_depth) < threshold_mm)).astype(np.uint8) * 255
+
+    # Keep only the connected component containing the center point
+    num_labels, labels = cv2.connectedComponents(mask)
+    center_label = labels[iy, ix]
+    if center_label == 0:
+        # Center fell on background; find nearest foreground label
+        ys, xs = np.where(mask > 0)
+        if len(ys) == 0:
+            return None
+        dists = (ys - iy) ** 2 + (xs - ix) ** 2
+        nearest = np.argmin(dists)
+        center_label = labels[ys[nearest], xs[nearest]]
+
+    component_mask = (labels == center_label).astype(np.uint8) * 255
+
+    # Clean up with morphological ops
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    component_mask = cv2.morphologyEx(component_mask, cv2.MORPH_CLOSE, kernel)
+    component_mask = cv2.morphologyEx(component_mask, cv2.MORPH_OPEN, kernel)
+
+    return component_mask
+
+
+def segment_object_color(image_rgb, cx_px, cy_px):
+    """Fallback segmentation using color similarity when no depth available.
+
+    Uses flood-fill from the center point with adaptive tolerance.
+    Returns a binary mask (uint8, 0 or 255).
+    """
+    img_lab = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2Lab)
+    ix = max(0, min(int(round(cx_px)), WIDTH - 1))
+    iy = max(0, min(int(round(cy_px)), HEIGHT - 1))
+
+    # Flood fill with tolerance in Lab space
+    h, w = img_lab.shape[:2]
+    flood_mask = np.zeros((h + 2, w + 2), dtype=np.uint8)
+    tolerance = (25, 25, 25)
+    cv2.floodFill(img_lab, flood_mask, (ix, iy), 0,
+                  loDiff=tolerance, upDiff=tolerance,
+                  flags=cv2.FLOODFILL_MASK_ONLY | (255 << 8))
+
+    mask = flood_mask[1:-1, 1:-1]  # remove the 1-pixel border
+
+    # Clean up
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+    return mask
+
+
+# --- Contour-based grasp candidate generation ---
+
+
+def compute_contour_normal(contour, idx, window=3):
+    """Compute the inward-pointing normal at contour point idx."""
+    n = len(contour)
+    # Tangent from finite differences
+    i_prev = (idx - window) % n
+    i_next = (idx + window) % n
+    p_prev = contour[i_prev][0].astype(float)
+    p_next = contour[i_next][0].astype(float)
+    tangent = p_next - p_prev
+    length = np.linalg.norm(tangent)
+    if length < 1e-6:
+        return None
+    tangent /= length
+    # Normal: rotate tangent 90° clockwise (points inward for CCW contours)
+    normal = np.array([tangent[1], -tangent[0]])
+    return normal
+
+
+def sample_grasp_candidates_from_contour(mask, mm_to_px, n_samples=40):
+    """Sample grasp candidates by casting rays through the object mask.
+
+    For each sample point on the contour:
+    - Compute the inward normal
+    - Cast a ray along the normal through the mask
+    - Find entry and exit points (the two jaw contact points)
+    - Score by: antipodal quality (surface parallelism) + balance
+      (proximity to mask centroid for stable lifting)
+
+    Returns a list of (center_x, center_y, angle_deg, width_px, geo_score).
+    """
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return []
+
+    # Use the largest contour
+    contour = max(contours, key=cv2.contourArea)
+    n_pts = len(contour)
+    if n_pts < 20:
+        return []
+
+    # Compute mask centroid for balance scoring
+    ys, xs = np.where(mask > 0)
+    if len(ys) == 0:
+        return []
+    centroid_x = float(np.mean(xs))
+    centroid_y = float(np.mean(ys))
+
+    # Characteristic size: half-diagonal of bounding box
+    bbox_diag = math.sqrt((xs.max() - xs.min()) ** 2 + (ys.max() - ys.min()) ** 2)
+    if bbox_diag < 1:
+        bbox_diag = 1.0
+
+    max_opening_px = GRIPPER_MAX_OPENING_MM * mm_to_px
+    min_opening_px = GRIPPER_MIN_OPENING_MM * mm_to_px
+
+    raw_candidates = []
+    step = max(1, n_pts // n_samples)
+
+    for i in range(0, n_pts, step):
+        pt = contour[i][0].astype(float)
+        normal = compute_contour_normal(contour, i)
+        if normal is None:
+            continue
+
+        # Cast ray inward along normal to find the opposite contour crossing
+        # Walk pixel by pixel along the normal direction
+        max_dist = int(max_opening_px * 1.5)
+        entered = False
+        exit_pt = None
+        entry_pt = pt.copy()
+
+        for d in range(1, max_dist):
+            px = int(round(pt[0] + normal[0] * d))
+            py = int(round(pt[1] + normal[1] * d))
+            if px < 0 or px >= WIDTH or py < 0 or py >= HEIGHT:
+                break
+            if mask[py, px] > 0:
+                entered = True
+            elif entered:
+                # We've exited the mask — this is the opposite contact point
+                exit_pt = np.array([px, py], dtype=float)
+                break
+
+        if exit_pt is None:
+            continue
+
+        # Compute width (distance between contact points)
+        width_px = np.linalg.norm(exit_pt - entry_pt)
+        if width_px < min_opening_px or width_px > max_opening_px:
+            continue
+
+        # Grasp center and angle
+        center = (entry_pt + exit_pt) / 2.0
+        direction = exit_pt - entry_pt
+        angle_rad = math.atan2(direction[1], direction[0])
+        angle_deg = math.degrees(angle_rad)
+
+        # --- Antipodal score ---
+        # How parallel are the surfaces at the two contact points?
+        dists = np.linalg.norm(contour[:, 0, :].astype(float) - exit_pt, axis=1)
+        exit_idx = np.argmin(dists)
+        exit_normal = compute_contour_normal(contour, exit_idx)
+
+        if exit_normal is not None:
+            antipodal = float(np.dot(normal, -exit_normal))
+            antipodal = max(0.0, antipodal)
+        else:
+            antipodal = 0.5
+
+        # --- Balance score ---
+        # How close is the grasp center to the mask centroid?
+        # Normalized by object size so it's scale-invariant.
+        # 1.0 = at centroid, decays with distance
+        dist_to_centroid = math.sqrt(
+            (center[0] - centroid_x) ** 2 + (center[1] - centroid_y) ** 2
+        )
+        balance = max(0.0, 1.0 - dist_to_centroid / (bbox_diag * 0.5))
+
+        # Combined geo_score: 60% antipodal + 40% balance
+        geo_score = 0.6 * antipodal + 0.4 * balance
+
+        raw_candidates.append((
+            float(center[0]), float(center[1]),
+            angle_deg, width_px, geo_score
+        ))
+
+    print(f"  Centroid: ({centroid_x:.0f}, {centroid_y:.0f}), bbox_diag: {bbox_diag:.0f}px")
+    return raw_candidates
+
+
+def select_diverse_candidates(raw_candidates, mm_to_px, n_select=NUM_CANDIDATES):
+    """Select the top N most diverse candidates from the raw list.
+
+    Strategy: sort by geo_score, then greedily pick candidates that are
+    sufficiently different in position and angle from already selected ones.
+    """
+    if not raw_candidates:
+        return []
+
+    # Sort by geo_score descending
+    sorted_cands = sorted(raw_candidates, key=lambda c: -c[4])
+
+    selected = []
+
+    for cx, cy, angle_deg, width_px, geo_score in sorted_cands:
+        # Normalize angle to [0, 180) — parallel-jaw gripper is symmetric
+        norm_angle = angle_deg % 180
+
+        # Check diversity: use a combined distance so candidates can be
+        # close in position if they differ in angle, and vice versa
+        too_close = False
+        for sel in selected:
+            pos_dist = math.sqrt((cx - sel.center_x) ** 2 + (cy - sel.center_y) ** 2)
+            sel_norm = sel.angle_deg % 180
+            a_diff = abs(norm_angle - sel_norm)
+            if a_diff > 90:
+                a_diff = 180 - a_diff
+
+            # Weighted combination: must be far enough in the combined space
+            # pos_dist normalized by 20px, angle by 20deg
+            combined = (pos_dist / 20.0) + (a_diff / 20.0)
+            if combined < 1.5:
+                too_close = True
+                break
+
+        if too_close:
+            continue
+
+        half_opening = width_px / 2.0
+        angle_rad = math.radians(angle_deg)
+        dx = math.cos(angle_rad) * half_opening
+        dy = math.sin(angle_rad) * half_opening
+
+        # Scale finger dimensions proportionally to the grasp opening
+        # so the rendering stays sensible regardless of mm_to_px accuracy
+        finger_thickness_px = max(width_px * 0.25, 3.0)
+        finger_depth_px = max(width_px * 0.6, 8.0)
+
+        selected.append(GraspCandidate(
+            angle_deg=angle_deg,
+            center_x=cx, center_y=cy,
+            jaw1_cx=cx + dx, jaw1_cy=cy + dy,
+            jaw2_cx=cx - dx, jaw2_cy=cy - dy,
+            opening_px=width_px,
+            finger_thickness_px=finger_thickness_px,
+            finger_depth_px=finger_depth_px,
+            geo_score=geo_score,
+        ))
+
+        if len(selected) >= n_select:
+            break
+
+    return selected
+
+
+def debug_draw_candidates_on_mask(mask, image_rgb, raw_candidates, candidates, output_path):
+    """Draw contour, raw grasp rays, and selected candidates on the image for debugging."""
+    debug = image_rgb.copy()
+
+    # Draw mask contour in cyan
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if contours:
+        cv2.drawContours(debug, contours, -1, (0, 255, 255), 2)
+
+    # Draw raw candidate rays as thin gray lines
+    for cx, cy, angle_deg, width_px, geo in raw_candidates[:20]:
+        angle_rad = math.radians(angle_deg)
+        hw = width_px / 2.0
+        dx, dy = math.cos(angle_rad) * hw, math.sin(angle_rad) * hw
+        p1 = (int(cx - dx), int(cy - dy))
+        p2 = (int(cx + dx), int(cy + dy))
+        cv2.line(debug, p1, p2, (128, 128, 128), 1)
+
+    # Draw selected candidates with colored thick lines + jaw positions
+    colors = [(255, 0, 0), (0, 200, 0), (0, 100, 255), (220, 220, 0), (200, 0, 200)]
+    for i, c in enumerate(candidates):
+        color = colors[i % len(colors)]
+        j1 = (int(c.jaw1_cx), int(c.jaw1_cy))
+        j2 = (int(c.jaw2_cx), int(c.jaw2_cy))
+        cv2.line(debug, j1, j2, color, 3)
+        cv2.circle(debug, j1, 5, color, -1)
+        cv2.circle(debug, j2, 5, color, -1)
+        cv2.circle(debug, (int(c.center_x), int(c.center_y)), 3, (255, 255, 255), -1)
+        cv2.putText(debug, f"#{i+1} {c.angle_deg:.0f}d g={c.geo_score:.2f}",
+                    (j1[0] + 8, j1[1] - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
+    cv2.imwrite(output_path, cv2.cvtColor(debug, cv2.COLOR_RGB2BGR))
+    print(f"  Saved debug candidates: {output_path}")
+
+
+def generate_candidates_from_mask(mask, mm_to_px, image_rgb=None, output_dir=None, fc=0):
+    """Full pipeline: contour analysis → diverse candidate selection."""
+    raw = sample_grasp_candidates_from_contour(mask, mm_to_px)
+    print(f"  Raw contour candidates: {len(raw)}")
+    candidates = select_diverse_candidates(raw, mm_to_px)
+    print(f"  Selected diverse candidates: {len(candidates)}")
+    for i, c in enumerate(candidates):
+        print(f"    #{i+1}: center=({c.center_x:.0f},{c.center_y:.0f}) "
+              f"angle={c.angle_deg:.0f}° opening={c.opening_px:.0f}px "
+              f"geo={c.geo_score:.2f}")
+
+    # Debug visualization
+    if image_rgb is not None and output_dir is not None:
+        dbg_path = os.path.join(output_dir, f"critic_debug_{fc:03d}.png")
+        debug_draw_candidates_on_mask(mask, image_rgb, raw, candidates, dbg_path)
+
+    return candidates
+
+
+def generate_candidates_fallback(cx_px, cy_px, mm_to_px):
+    """Fallback: fixed angles at the VLM-located center (original approach)."""
+    print("  Using fallback fixed-angle candidates")
+    half_opening_px = (GRIPPER_MAX_OPENING_MM / 2.0) * mm_to_px
+    opening_px = half_opening_px * 2
+    finger_thickness_px = max(opening_px * 0.25, 3.0)
+    finger_depth_px = max(opening_px * 0.6, 8.0)
+
+    candidates = []
+    for angle_deg in [0, 45, 90, 135]:
+        angle_rad = math.radians(angle_deg)
+        dx = math.cos(angle_rad) * half_opening_px
+        dy = math.sin(angle_rad) * half_opening_px
+        candidates.append(GraspCandidate(
+            angle_deg=angle_deg,
+            center_x=cx_px, center_y=cy_px,
+            jaw1_cx=cx_px + dx, jaw1_cy=cy_px + dy,
+            jaw2_cx=cx_px - dx, jaw2_cy=cy_px - dy,
+            opening_px=opening_px,
+            finger_thickness_px=finger_thickness_px,
+            finger_depth_px=finger_depth_px,
+            geo_score=0.5,
+        ))
+    return candidates
+
+
+# --- Rendering ---
+
+
+def _rotated_rect_pts(cx, cy, w, h, angle_rad):
+    """Return 4 corners of a rotated rectangle centered at (cx, cy)."""
+    cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+    hw, hh = w / 2.0, h / 2.0
+    pts = []
+    for dx, dy in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]:
+        pts.append([int(round(cx + dx * cos_a - dy * sin_a)),
+                     int(round(cy + dx * sin_a + dy * cos_a))])
+    return np.array(pts, dtype=np.int32)
+
+
+def _draw_dashed_line(img, pt1, pt2, color, thickness=2, dash_len=8):
+    """Draw a dashed line from pt1 to pt2."""
+    dx, dy = pt2[0] - pt1[0], pt2[1] - pt1[1]
+    dist = math.sqrt(dx * dx + dy * dy)
+    if dist < 1:
+        return
+    dx, dy = dx / dist, dy / dist
+    d, drawing = 0, True
+    while d < dist:
+        end_d = min(d + dash_len, dist)
+        if drawing:
+            p1 = (int(round(pt1[0] + dx * d)), int(round(pt1[1] + dy * d)))
+            p2 = (int(round(pt1[0] + dx * end_d)), int(round(pt1[1] + dy * end_d)))
+            cv2.line(img, p1, p2, color, thickness)
+        d = end_d
+        drawing = not drawing
+
+
+def render_single_candidate(image_rgb, candidate, color=GRIPPER_COLOR_RGB):
+    """Draw a single candidate on a copy of the image. Returns annotated RGB."""
+    overlay = image_rgb.copy()
+    perp_rad = math.radians(candidate.angle_deg) + math.pi / 2.0
+
+    for jcx, jcy in [(candidate.jaw1_cx, candidate.jaw1_cy),
+                     (candidate.jaw2_cx, candidate.jaw2_cy)]:
+        pts = _rotated_rect_pts(
+            jcx, jcy,
+            candidate.finger_depth_px, candidate.finger_thickness_px,
+            perp_rad,
+        )
+        sub = overlay.copy()
+        cv2.fillPoly(sub, [pts], color)
+        cv2.addWeighted(sub, 0.5, overlay, 0.5, 0, overlay)
+        cv2.polylines(overlay, [pts], True, color, 2)
+
+    _draw_dashed_line(
+        overlay,
+        (int(round(candidate.jaw1_cx)), int(round(candidate.jaw1_cy))),
+        (int(round(candidate.jaw2_cx)), int(round(candidate.jaw2_cy))),
+        color,
+    )
+    return overlay
+
+
+def rotate_image_around_center(image, angle_deg, center_px):
+    """Rotate image by angle_deg around center_px."""
+    h, w = image.shape[:2]
+    M = cv2.getRotationMatrix2D((float(center_px[0]), float(center_px[1])),
+                                 angle_deg, 1.0)
+    return cv2.warpAffine(image, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+
+
+def render_rotated_candidate_image(image_rgb, candidate, crop_padding=3.0):
+    """Render candidate on image, rotate so gripper is horizontal, then crop+zoom.
+
+    crop_padding: how many times the opening to include as context around the grasp.
+    """
+    annotated = render_single_candidate(image_rgb, candidate)
+    center = (candidate.center_x, candidate.center_y)
+
+    # Rotate so grasp axis is horizontal
+    if abs(candidate.angle_deg % 180) >= 1.0:
+        annotated = rotate_image_around_center(
+            annotated, candidate.angle_deg, center,
+        )
+
+    # Crop around the grasp center with padding proportional to opening
+    h, w = annotated.shape[:2]
+    crop_half = max(candidate.opening_px * crop_padding, 60)
+    cx, cy = int(round(center[0])), int(round(center[1]))
+
+    # After rotation, center stays at the same pixel (rotation was around it)
+    x0 = max(0, int(cx - crop_half))
+    y0 = max(0, int(cy - crop_half))
+    x1 = min(w, int(cx + crop_half))
+    y1 = min(h, int(cy + crop_half))
+
+    cropped = annotated[y0:y1, x0:x1]
+
+    # Upscale to at least 400px on the short side for VLM visibility
+    ch, cw = cropped.shape[:2]
+    min_dim = min(ch, cw)
+    if min_dim < 400 and min_dim > 0:
+        scale = 400.0 / min_dim
+        cropped = cv2.resize(
+            cropped, (int(cw * scale), int(ch * scale)),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+    return cropped
+
+
+def render_all_candidates_overview(image_rgb, candidates, scores, reasons):
+    """Draw all candidates on one image with scores for the final summary."""
+    colors = [
+        (255, 0, 0), (0, 200, 0), (0, 100, 255),
+        (220, 220, 0), (200, 0, 200), (0, 200, 200),
+        (255, 128, 0), (128, 0, 255),
+    ]
+    overlay = image_rgb.copy()
+    for i, cand in enumerate(candidates):
+        color = colors[i % len(colors)]
+        perp_rad = math.radians(cand.angle_deg) + math.pi / 2.0
+
+        for jcx, jcy in [(cand.jaw1_cx, cand.jaw1_cy),
+                         (cand.jaw2_cx, cand.jaw2_cy)]:
+            pts = _rotated_rect_pts(
+                jcx, jcy, cand.finger_depth_px, cand.finger_thickness_px,
+                perp_rad,
+            )
+            sub = overlay.copy()
+            cv2.fillPoly(sub, [pts], color)
+            cv2.addWeighted(sub, 0.4, overlay, 0.6, 0, overlay)
+            cv2.polylines(overlay, [pts], True, color, 2)
+
+        _draw_dashed_line(
+            overlay,
+            (int(round(cand.jaw1_cx)), int(round(cand.jaw1_cy))),
+            (int(round(cand.jaw2_cx)), int(round(cand.jaw2_cy))),
+            color,
+        )
+
+        label = f"{i+1}:{scores[i]}/10"
+        lx = int(round(cand.jaw1_cx)) + 12
+        ly = int(round(cand.jaw1_cy)) - 12
+        cv2.putText(overlay, label, (lx, ly),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    best_idx = max(range(len(scores)), key=lambda i: scores[i])
+    best = candidates[best_idx]
+    text = (f"Best: #{best_idx+1} ({best.angle_deg:.0f}deg, "
+            f"{scores[best_idx]}/10) - {reasons[best_idx]}")
+    cv2.putText(overlay, text, (10, HEIGHT - 10),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1)
+    return overlay
+
+
+def format_grasp_result(candidate):
+    """Convert candidate to {"p1":[x,y],"p2":[x,y]} in 0-1000 normalized coords."""
+    return {
+        "p1": [int(round(candidate.jaw1_cx * 1000.0 / WIDTH)),
+               int(round(candidate.jaw1_cy * 1000.0 / HEIGHT))],
+        "p2": [int(round(candidate.jaw2_cx * 1000.0 / WIDTH)),
+               int(round(candidate.jaw2_cy * 1000.0 / HEIGHT))],
+    }
+
+
+# --- State machine ---
+STATE_IDLE = "IDLE"
+STATE_LOCATE_PENDING = "LOCATE_PENDING"
+STATE_MASK_PENDING = "MASK_PENDING"       # waiting for SAM2 mask (after VLM locate)
+STATE_SAM3_MASK_PENDING = "SAM3_MASK_PENDING"  # waiting for SAM3 mask (text-prompted)
+STATE_RATING_PENDING = "RATING_PENDING"
+
+state = STATE_IDLE
+latest_image = None
+latest_depth = None
+latest_intrinsics = None
+candidates = []
+locate_center = None
+rating_idx = 0
+scores = []
+reasons = []
+
+node = Node()
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+# Clean up old result images to avoid stale files from previous runs
+import glob as _glob
+for _old in _glob.glob(os.path.join(OUTPUT_DIR, "critic_*.png")):
+    os.remove(_old)
+frame_count = 0
+
+
+def _start_rating(node, img, cands, fc):
+    """Begin the VLM rating loop for the first candidate."""
+    global state, candidates, scores, reasons, rating_idx
+    candidates = cands
+    scores = []
+    reasons = []
+    rating_idx = 0
+
+    cand = candidates[0]
+    rotated = render_rotated_candidate_image(img, cand)
+    rot_path = os.path.join(OUTPUT_DIR, f"critic_cand{rating_idx}_{fc:03d}.png")
+    cv2.imwrite(rot_path, cv2.cvtColor(rotated, cv2.COLOR_RGB2BGR))
+    n_cands = len(candidates)
+    print(f"[Pass 2] Rating candidate {rating_idx+1}/{n_cands} "
+          f"({cand.angle_deg:.0f}deg, geo={cand.geo_score:.2f})...")
+
+    prompt = RATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
+    send_vlm_request(node, rotated, prompt)
+    state = STATE_RATING_PENDING
+
+for event in node:
+    if event["type"] == "INPUT":
+        event_id = event["id"]
+
+        if event_id == "image":
+            latest_image = event["value"].to_numpy().tobytes()
+            metadata = event["metadata"]
+            if "focal_length" in metadata:
+                fl = metadata["focal_length"]
+                if isinstance(fl, str):
+                    try:
+                        fl = json.loads(fl)
+                    except (json.JSONDecodeError, ValueError):
+                        fl = None
+                if isinstance(fl, list) and len(fl) >= 2:
+                    latest_intrinsics = (float(fl[0]), float(fl[1]))
+
+        elif event_id == "depth":
+            raw = event["value"].to_numpy()
+            latest_depth = raw.astype(np.uint16).reshape((HEIGHT, WIDTH))
+
+        elif event_id == "trigger":
+            if state != STATE_IDLE:
+                print(f"Busy (state={state}), ignoring trigger")
+                continue
+            if latest_image is None:
+                print("No image yet, skipping")
+                continue
+
+            if USE_SAM3:
+                # SAM3 mode: skip VLM locate, send text prompt to SAM3 directly
+                print(f"[SAM3] Sending text prompt: '{TARGET_OBJECT}'")
+                node.send_output(
+                    "sam3_text",
+                    pa.array([TARGET_OBJECT]),
+                    {"image_id": "image"},
+                )
+                state = STATE_SAM3_MASK_PENDING
+            else:
+                img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
+                    (HEIGHT, WIDTH, 3)
+                )
+                print(f"[Pass 1] Asking VLM to locate {TARGET_OBJECT}...")
+                prompt = LOCATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
+                send_vlm_request(node, img, prompt)
+                state = STATE_LOCATE_PENDING
+
+        elif event_id == "mask":
+            if state not in (STATE_MASK_PENDING, STATE_SAM3_MASK_PENDING):
+                print(f"Mask arrived in unexpected state {state}, ignoring")
+                continue
+
+            is_sam3 = (state == STATE_SAM3_MASK_PENDING)
+            source_name = "SAM3" if is_sam3 else "SAM2"
+
+            # Receive mask
+            mask_meta = event["metadata"]
+            mask_w = int(mask_meta.get("width", WIDTH))
+            mask_h = int(mask_meta.get("height", HEIGHT))
+            mask_raw = event["value"].to_numpy(zero_copy_only=False)
+            mask = (mask_raw.reshape((mask_h, mask_w)) > 0).astype(np.uint8) * 255
+            n_mask = np.count_nonzero(mask)
+            total_px = mask_w * mask_h
+            mask_ratio = n_mask / total_px
+            print(f"  {source_name} mask received: {n_mask} pixels ({mask_ratio:.1%} of image)")
+
+            if is_sam3:
+                # SAM3 text-prompted: compute center from mask centroid
+                if n_mask > 0:
+                    ys, xs = np.where(mask > 0)
+                    cx_px = float(np.mean(xs))
+                    cy_px = float(np.mean(ys))
+                else:
+                    cx_px, cy_px = WIDTH / 2.0, HEIGHT / 2.0
+                locate_center = (cx_px, cy_px)
+                print(f"  {source_name} mask centroid: ({cx_px:.0f}, {cy_px:.0f})")
+            else:
+                # SAM2: use VLM-located center
+                # If mask covers >30% of image, SAM2 likely segmented the background
+                if mask_ratio > 0.3:
+                    print(f"  WARNING: mask too large ({mask_ratio:.1%}), inverting")
+                    mask = 255 - mask
+
+                    cx_px, cy_px = locate_center
+                    num_labels, labels = cv2.connectedComponents(mask)
+                    ix = max(0, min(int(round(cx_px)), mask_w - 1))
+                    iy = max(0, min(int(round(cy_px)), mask_h - 1))
+                    center_label = labels[iy, ix]
+                    if center_label == 0:
+                        ys, xs = np.where(mask > 0)
+                        if len(ys) > 0:
+                            dists = (ys - iy) ** 2 + (xs - ix) ** 2
+                            nearest = np.argmin(dists)
+                            center_label = labels[ys[nearest], xs[nearest]]
+                    if center_label > 0:
+                        mask = (labels == center_label).astype(np.uint8) * 255
+                    n_mask = np.count_nonzero(mask)
+                    print(f"  After inversion + component filter: {n_mask} pixels")
+
+            cx_px, cy_px = locate_center
+            img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
+                (HEIGHT, WIDTH, 3)
+            )
+            mm_to_px = compute_gripper_pixel_scale(
+                cx_px, cy_px, latest_depth, latest_intrinsics
+            )
+
+            if n_mask > 100:
+                mask_path = os.path.join(OUTPUT_DIR, f"critic_mask_{frame_count:03d}.png")
+                cv2.imwrite(mask_path, mask)
+                print(f"  Saved mask: {mask_path}")
+                candidates = generate_candidates_from_mask(
+                    mask, mm_to_px, image_rgb=img,
+                    output_dir=OUTPUT_DIR, fc=frame_count,
+                )
+
+            if not candidates:
+                print(f"  {source_name} mask contour analysis failed, using fallback")
+                candidates = generate_candidates_fallback(cx_px, cy_px, mm_to_px)
+
+            _start_rating(node, img, candidates, frame_count)
+
+        elif event_id == "vlm_response":
+            text = event["value"][0].as_py()
+
+            if state == STATE_LOCATE_PENDING:
+                result = parse_locate_response(text)
+                if result is None:
+                    print(f"[Pass 1] Failed to parse locate response: {text}")
+                    state = STATE_IDLE
+                    continue
+
+                cx_px, cy_px = result
+                locate_center = (cx_px, cy_px)
+                print(f"[Pass 1] Located {TARGET_OBJECT} at pixel ({cx_px:.0f}, {cy_px:.0f})")
+
+                if USE_SAM2:
+                    # Send point to SAM2 for segmentation
+                    print("  Sending point to SAM2 for segmentation...")
+                    point_data = pa.array([float(cx_px), float(cy_px)])
+                    node.send_output("sam_point", point_data, {"image_id": "image"})
+                    state = STATE_MASK_PENDING
+                else:
+                    # Inline segmentation fallback (no SAM2)
+                    img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
+                        (HEIGHT, WIDTH, 3)
+                    )
+                    mm_to_px = compute_gripper_pixel_scale(
+                        cx_px, cy_px, latest_depth, latest_intrinsics
+                    )
+                    print(f"  mm_to_px={mm_to_px:.3f}")
+
+                    mask = None
+                    if latest_depth is not None:
+                        print("  Segmenting with depth...")
+                        mask = segment_object_depth(latest_depth, cx_px, cy_px)
+                    if mask is None:
+                        print("  Segmenting with color (fallback)...")
+                        mask = segment_object_color(img, cx_px, cy_px)
+
+                    if mask is not None and np.count_nonzero(mask) > 100:
+                        mask_path = os.path.join(OUTPUT_DIR, f"critic_mask_{frame_count:03d}.png")
+                        cv2.imwrite(mask_path, mask)
+                        print(f"  Saved mask: {mask_path} ({np.count_nonzero(mask)} pixels)")
+                        candidates = generate_candidates_from_mask(
+                            mask, mm_to_px, image_rgb=img,
+                            output_dir=OUTPUT_DIR, fc=frame_count,
+                        )
+
+                    if not candidates:
+                        print("  Contour analysis failed, using fallback")
+                        candidates = generate_candidates_fallback(cx_px, cy_px, mm_to_px)
+
+                    _start_rating(node, img, candidates, frame_count)
+
+            elif state == STATE_RATING_PENDING:
+                result = parse_rate_response(text)
+                cand = candidates[rating_idx]
+                n_cands = len(candidates)
+
+                if result is None:
+                    print(f"  Failed to parse rating for candidate {rating_idx+1}: {text}")
+                    scores.append(0)
+                    reasons.append("parse_error")
+                else:
+                    score, reason = result
+                    scores.append(score)
+                    reasons.append(reason)
+                    print(f"  Candidate {rating_idx+1} ({cand.angle_deg:.0f}deg): "
+                          f"{score}/10 - {reason}")
+
+                rating_idx += 1
+
+                if rating_idx < n_cands:
+                    img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
+                        (HEIGHT, WIDTH, 3)
+                    )
+                    cand = candidates[rating_idx]
+                    rotated = render_rotated_candidate_image(img, cand)
+                    rot_path = os.path.join(OUTPUT_DIR, f"critic_cand{rating_idx}_{frame_count:03d}.png")
+                    cv2.imwrite(rot_path, cv2.cvtColor(rotated, cv2.COLOR_RGB2BGR))
+                    print(f"[Pass 2] Rating candidate {rating_idx+1}/{n_cands} "
+                          f"({cand.angle_deg:.0f}deg, geo={cand.geo_score:.2f})...")
+
+                    prompt = RATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
+                    send_vlm_request(node, rotated, prompt)
+                else:
+                    # All rated — pick the best
+                    best_idx = max(range(len(scores)), key=lambda i: scores[i])
+                    winner = candidates[best_idx]
+                    score_strs = [f'#{i+1}:{s}/10' for i, s in enumerate(scores)]
+                    print(f"\n[Result] Scores: {score_strs}")
+                    print(f"[Result] Best: #{best_idx+1} ({winner.angle_deg:.0f}deg, "
+                          f"{scores[best_idx]}/10)")
+
+                    grasp = format_grasp_result(winner)
+                    grasp_json = json.dumps(grasp)
+                    print(f"  Grasp result: {grasp_json}")
+                    node.send_output("grasp_result", pa.array([grasp_json]))
+
+                    img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
+                        (HEIGHT, WIDTH, 3)
+                    )
+                    overview = render_all_candidates_overview(
+                        img, candidates, scores, reasons
+                    )
+                    ov_path = os.path.join(OUTPUT_DIR, f"critic_overview_{frame_count:03d}.png")
+                    cv2.imwrite(ov_path, cv2.cvtColor(overview, cv2.COLOR_RGB2BGR))
+                    print(f"  Saved overview: {ov_path}")
+
+                    frame_count += 1
+                    state = STATE_IDLE
+
+            else:
+                print(f"VLM response in unexpected state {state}, ignoring")
+
+    elif event["type"] == "STOP":
+        break
