@@ -81,7 +81,7 @@ def parse_damiao_state(data: bytes):
     """
     if len(data) < 8:
         return None
-    motor_id = data[0]
+    # data[0] is motor_id (unused — already known from CAN arbitration ID)
     q_raw = (data[1] << 8) | data[2]
     dq_raw = (data[3] << 4) | (data[4] >> 4)
     tau_raw = ((data[4] & 0x0F) << 8) | data[5]
