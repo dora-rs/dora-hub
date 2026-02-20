@@ -281,6 +281,93 @@ class TestValidateTrajectoryWithRealData:
             f"Optimizer made collisions worse: {opt_count} vs {linear_count}"
         )
 
+    def test_grasp_toward_table_surface(self, arm_setup, point_cloud, real_data):
+        """Plan a grasp trajectory toward the table surface (into point cloud).
+
+        This is the real-world scenario: arm reaches down to grab something
+        on the table. The trajectory SHOULD collide if collision avoidance
+        isn't working, because the EE needs to go to the table surface.
+        """
+        ik_chain = arm_setup["ik_chain"]
+        capsule_model = arm_setup["capsule_model"]
+        optimizer = arm_setup["optimizer"]
+        num_joints = arm_setup["num_joints"]
+        device = arm_setup["device"]
+        joint_limits = arm_setup["joint_limits"]
+
+        # Target: center of the point cloud (on the table surface)
+        pc_np = point_cloud.numpy()
+        target_pos = pc_np.mean(axis=0)  # center of table surface
+        # Top-down orientation: look straight down
+        target_xyzrpy = np.array([
+            target_pos[0], target_pos[1], target_pos[2],
+            np.pi, 0.0, 0.0,  # top-down (180° roll = Z pointing down)
+        ], dtype=np.float32)
+
+        print(f"\n  Target (table center): [{target_pos[0]:.3f}, {target_pos[1]:.3f}, {target_pos[2]:.3f}]")
+
+        q_goal = solve_ik(
+            ik_chain, target_xyzrpy, torch.zeros(num_joints, device=device),
+            joint_limits, device, num_seeds=16, max_iters=1000,
+        )
+        if q_goal is None:
+            # Try position above table (approach height)
+            target_xyzrpy[2] += 0.05
+            print(f"  IK failed at table, trying z={target_xyzrpy[2]:.3f}")
+            q_goal = solve_ik(
+                ik_chain, target_xyzrpy, torch.zeros(num_joints, device=device),
+                joint_limits, device, num_seeds=16, max_iters=1000,
+            )
+        if q_goal is None:
+            pytest.skip("IK failed to reach table surface")
+
+        # Verify EE position
+        with torch.no_grad():
+            fk = ik_chain.forward_kinematics(q_goal.unsqueeze(0))
+            ee_pos = fk.get_matrix()[0, :3, 3].cpu().numpy()
+        print(f"  IK solution EE: [{ee_pos[0]:.3f}, {ee_pos[1]:.3f}, {ee_pos[2]:.3f}]")
+
+        q_start = torch.zeros(num_joints, dtype=torch.float32, device=device)
+
+        # 1. Straight-line (no optimization)
+        t = torch.linspace(0, 1, NUM_WAYPOINTS).unsqueeze(1)
+        traj_linear = q_start.cpu() + t * (q_goal.cpu() - q_start.cpu())
+        collisions_linear = validate_trajectory(
+            ik_chain, capsule_model, traj_linear, point_cloud, SAFETY_MARGIN
+        )
+        linear_wps = len(set(c[0] for c in collisions_linear))
+
+        # 2. Optimized trajectory
+        best_traj, best_cost = optimizer.optimize(
+            q_start=q_start, q_goal=q_goal, point_cloud=point_cloud,
+            T=NUM_WAYPOINTS, num_seeds=NUM_SEEDS, max_iters=MAX_ITERS,
+        )
+        collisions_opt = validate_trajectory(
+            ik_chain, capsule_model, best_traj, point_cloud, SAFETY_MARGIN
+        )
+        opt_wps = len(set(c[0] for c in collisions_opt))
+
+        print(f"  Straight-line: {linear_wps}/{NUM_WAYPOINTS} waypoints in collision")
+        print(f"  Optimized:     {opt_wps}/{NUM_WAYPOINTS} waypoints in collision (cost={best_cost:.4f})")
+
+        if collisions_linear:
+            worst = min(collisions_linear, key=lambda c: c[2])
+            links = sorted(set(c[1] for c in collisions_linear))
+            print(f"  Linear worst: t={worst[0]} link={worst[1]} penetration={-worst[2]*1000:.1f}mm")
+            print(f"  Linear colliding links: {links}")
+
+        if collisions_opt:
+            worst = min(collisions_opt, key=lambda c: c[2])
+            links = sorted(set(c[1] for c in collisions_opt))
+            print(f"  Optimized worst: t={worst[0]} link={worst[1]} penetration={-worst[2]*1000:.1f}mm")
+            print(f"  Optimized colliding links: {links}")
+
+        # The goal itself is at/below table, so some collisions near the end
+        # are expected. The key diagnostic: does the optimizer reduce them?
+        if linear_wps > 0:
+            print(f"  Collision reduction: {linear_wps} -> {opt_wps} "
+                  f"({100*(1 - opt_wps/linear_wps):.0f}% fewer)")
+
     def test_validate_with_no_pointcloud(self, arm_setup):
         """validate_trajectory should return empty list when no point cloud."""
         ik_chain = arm_setup["ik_chain"]
