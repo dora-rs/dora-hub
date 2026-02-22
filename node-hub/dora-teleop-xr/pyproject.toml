@@ -1,0 +1,42 @@
+[project]
+name = "dora-teleop-xr"
+version = "0.1.0"
+description = "dora-teleop-xr node"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+
+dependencies = [
+    "dora-rs >= 0.3.6",
+    "teleop-xr[ik] @ git+https://github.com/qrafty-ai/teleop_xr@v1.2.2",
+    "pyarrow >= 14.0.1",
+    "numpy",
+    "jax >= 0.6.2",
+    "robot-descriptions >= 1.17.0",
+]
+
+[project.scripts]
+dora-teleop-xr = "dora_teleop_xr.main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "dora-rs-cli>=0.4.1",
+    "pytest >= 8.1.1",
+    "ruff >= 0.9.1",
+]
+
+[tool.ruff.lint]
+extend-select = [
+  "D",    # pydocstyle
+  "UP",   # Ruff's UP rule
+  "PERF", # Ruff's PERF rule
+  "RET",  # Ruff's RET rule
+  "RSE",  # Ruff's RSE rule
+  "NPY",  # Ruff's NPY rule
+  "N",    # Ruff's N rule
+  "I",    # Ruff's I rule
+]

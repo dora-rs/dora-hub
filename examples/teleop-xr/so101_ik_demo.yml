@@ -1,0 +1,29 @@
+nodes:
+  - id: teleop_xr
+    build: pip install -e ../../node-hub/dora-teleop-xr
+    path: python
+    args: -m dora_teleop_xr
+    inputs:
+      tick: dora/timer/millis/10
+    outputs:
+      - head_pose
+      - left_hand_pose
+      - right_hand_pose
+      - joint_state
+    env:
+      TELEOP_HOST: "0.0.0.0"
+      TELEOP_PORT: "4443"
+      INPUT_MODE: "controller"
+      ROBOT_CLASS: "teleop_xr.ik.robots.so101:SO101Robot"
+
+  - id: plot
+    build: pip install -e ../../node-hub/dora-rerun
+    path: dora-rerun
+    inputs:
+      # head_pose: teleop_xr/head_pose
+      # left_hand_pose: teleop_xr/left_hand_pose
+      # right_hand_pose: teleop_xr/right_hand_pose
+      jointstate_so101_new_calib: teleop_xr/joint_state
+    env:
+      so101_new_calib_urdf: "so_arm101_description"
+      so101_new_calib_transform: "0. 0. 0. 1. 0. 0. 0."
