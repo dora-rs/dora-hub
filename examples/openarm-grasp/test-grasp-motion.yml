@@ -85,7 +85,7 @@ nodes:
     env:
       URDF_PATH: "../openarm/openarm_v10.urdf"
       END_EFFECTOR_LINK: "openarm_left_hand_tcp"
-      CAMERA_TRANSFORM: "-0.23 0.71 0.3 90 -45 0"
+      CAMERA_TRANSFORM: "-0.26 0.71 0.3 90 -45 0"
       IMAGE_WIDTH: "1280"
       IMAGE_HEIGHT: "720"
       DOWNSAMPLE_STRIDE: "8"

@@ -160,3 +160,103 @@ class TestTrajectoryOptimizer:
         traj_np = traj.numpy()
         assert np.all(traj_np >= lower - 0.01), "Trajectory violates lower joint limits"
         assert np.all(traj_np <= upper + 0.01), "Trajectory violates upper joint limits"
+
+    def test_bounded_velocity(self, optimizer):
+        """Max per-step joint displacement should be bounded by max_step."""
+        q_start = torch.zeros(7)
+        q_goal = torch.tensor([0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
+
+        traj, _ = optimizer.optimize(
+            q_start,
+            q_goal,
+            point_cloud=None,
+            T=30,
+            num_seeds=2,
+            max_iters=100,
+            lr=0.01,
+        )
+
+        vel = (traj[1:] - traj[:-1]).numpy()
+        max_step = optimizer.max_step_default
+        # Allow some margin for bridge correction + soft clamp effects
+        assert np.all(np.abs(vel) < max_step * 3.0), (
+            f"Per-step displacement exceeds 3x max_step={max_step}: "
+            f"max |vel|={np.abs(vel).max():.4f}"
+        )
+
+    def test_goal_reaching(self, optimizer):
+        """Trajectory endpoint should match goal configuration."""
+        q_start = torch.zeros(7)
+        q_goal = torch.tensor([0.2, 0.15, 0.1, 0.2, 0.1, 0.05, 0.0])
+
+        traj, _ = optimizer.optimize(
+            q_start,
+            q_goal,
+            point_cloud=None,
+            T=30,
+            num_seeds=4,
+            max_iters=100,
+            lr=0.01,
+        )
+
+        np.testing.assert_allclose(
+            traj[-1].numpy(), q_goal.numpy(), atol=0.02,
+            err_msg="Trajectory endpoint does not match goal"
+        )
+
+    def test_large_motion_feasibility(self, optimizer, chain):
+        """Auto-enlargement should handle motions requiring > default max_step."""
+        limits = chain.get_joint_limits()
+        lower = torch.tensor(limits[0])
+        upper = torch.tensor(limits[1])
+
+        q_start = torch.zeros(7)
+        # Large motion within joint limits — pick 60% of range for each joint
+        q_goal = (lower + 0.6 * (upper - lower)).clamp(min=0.5)
+        # Ensure at least some joints need > 0.05 rad/step with T=20
+        # (need |delta| > 0.05 * 19 = 0.95 rad total)
+        q_goal = q_goal.clamp(max=upper)
+
+        traj, cost = optimizer.optimize(
+            q_start,
+            q_goal,
+            point_cloud=None,
+            T=20,
+            num_seeds=2,
+            max_iters=100,
+            lr=0.01,
+        )
+
+        assert traj.shape == (20, 7)
+        # Should still reach the goal despite the large motion
+        np.testing.assert_allclose(
+            traj[-1].numpy(), q_goal.numpy(), atol=0.05,
+            err_msg="Large motion: trajectory endpoint does not reach goal"
+        )
+        assert cost < float("inf"), "Large motion: cost is infinite"
+
+    def test_smoothness(self, optimizer):
+        """Optimised trajectory should have low jerk (3rd derivative)."""
+        q_start = torch.zeros(7)
+        q_goal = torch.tensor([0.3, 0.2, 0.1, 0.3, 0.1, 0.0, 0.0])
+
+        traj, _ = optimizer.optimize(
+            q_start,
+            q_goal,
+            point_cloud=None,
+            T=40,
+            num_seeds=4,
+            max_iters=150,
+            lr=0.01,
+        )
+
+        vel = traj[1:] - traj[:-1]
+        acc = vel[1:] - vel[:-1]
+        jerk = acc[1:] - acc[:-1]
+        mean_jerk = (jerk ** 2).mean().item()
+
+        # Compare to a linear trajectory (zero jerk)
+        # Optimised trajectory should have reasonably low jerk
+        assert mean_jerk < 0.01, (
+            f"Trajectory has high jerk: mean_jerk²={mean_jerk:.6f}"
+        )

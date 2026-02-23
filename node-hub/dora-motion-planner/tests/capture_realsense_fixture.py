@@ -135,7 +135,7 @@ def main():
         color=color,
         intrinsics=np.array([fx, fy, cx, cy], dtype=np.float32),
         image_size=np.array([w, h], dtype=np.int32),
-        camera_transform_str="-0.23 0.71 0.3 90 -45 0",
+        camera_transform_str="-0.26 0.71 0.3 90 -45 0",
     )
     print(f"[capture] Saved to {out} ({out.stat().st_size / 1024:.0f} KB)")
 

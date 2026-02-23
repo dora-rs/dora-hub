@@ -7,7 +7,7 @@ Uses the real URDF, camera transform, and realistic depth data to verify
 the entire pipeline produces valid, collision-checked trajectories.
 
 Matches the config from examples/openarm-grasp/openarm-grasp-motion.yml:
-  CAMERA_TRANSFORM: "-0.23 0.71 0.3 90 -45 0"
+  CAMERA_TRANSFORM: "-0.26 0.71 0.3 90 -45 0"
   IMAGE_WIDTH: 1280, IMAGE_HEIGHT: 720
   END_EFFECTOR_LINK: "openarm_left_hand_tcp"
 """
@@ -38,7 +38,7 @@ URDF_PATH = (
     / "openarm"
     / "openarm_v10.urdf"
 )
-CAMERA_TRANSFORM_STR = "-0.23 0.71 0.3 90 -45 0"
+CAMERA_TRANSFORM_STR = "-0.26 0.71 0.3 90 -45 0"
 IMAGE_WIDTH = 1280
 IMAGE_HEIGHT = 720
 END_EFFECTOR_LINK = "openarm_left_hand_tcp"
@@ -106,7 +106,7 @@ def optimizer(chain):
         capsule_model=capsule_model,
         joint_limits=limits,
         device=DEVICE,
-        safety_margin=SAFETY_MARGIN,
+        collision_alpha=50.0,
     )
 
 

@@ -96,7 +96,7 @@ def arm_setup():
         capsule_model=capsule_model,
         joint_limits=joint_limits,
         device=device,
-        safety_margin=SAFETY_MARGIN,
+        collision_alpha=50.0,
     )
     return {
         "chain": chain,

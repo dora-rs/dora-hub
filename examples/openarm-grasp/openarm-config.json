@@ -1,0 +1,101 @@
+{
+  "version": 3,
+  "general": {
+    "relay": "https://cdn.1ms.ai",
+    "certHash": "",
+    "queryRate": 200,
+    "pointSize": 2
+  },
+  "armPairs": [
+    {
+      "id": "pair2",
+      "enabled": true,
+      "label": "Baguette Arm",
+      "tags": [],
+      "leftPath": "anon/7e58263812ba/xoq-can-can0",
+      "rightPath": "anon/7e58263812ba/xoq-can-can1",
+      "position": {
+        "x": 1,
+        "y": 0,
+        "z": 1
+      },
+      "rotation": {
+        "roll": 0,
+        "pitch": 0,
+        "yaw": 0
+      },
+      "queryRate": 1,
+      "autoQuery": true
+    },
+    {
+      "id": "pair3",
+      "enabled": true,
+      "label": "champagne-arm",
+      "tags": [],
+      "leftPath": "anon/a13af1d39199/xoq-can-can0",
+      "rightPath": "anon/a13af1d39199/xoq-can-can1",
+      "position": {
+        "x": 0,
+        "y": 0,
+        "z": 0
+      },
+      "rotation": {
+        "roll": 0,
+        "pitch": 0,
+        "yaw": 0
+      },
+      "queryRate": 1,
+      "autoQuery": true
+    }
+  ],
+  "cameras": [],
+  "audio": {
+    "path": "anon/openarm-audio",
+    "enabled": false
+  },
+  "chat": {
+    "path": "anon/openarm-chat",
+    "username": "anon",
+    "enabled": false
+  },
+  "realsense": [
+    {
+      "id": "rs3",
+      "enabled": true,
+      "label": "baguette-realsense",
+      "tags": [],
+      "path": "anon/7e58263812ba/realsense-243222073892",
+      "position": {
+        "x": 0.79,
+        "y": 0.81,
+        "z": 1.23
+      },
+      "rotation": {
+        "roll": 90,
+        "pitch": -45,
+        "yaw": 0
+      },
+      "showColor": true,
+      "pointSize": 2
+    },
+    {
+      "id": "rs2",
+      "enabled": true,
+      "label": "champagne-realsense",
+      "tags": [],
+      "path": "anon/a13af1d39199/realsense-233522074606",
+      "position": {
+        "x": -0.26,
+        "y": 0.71,
+        "z": 0.3
+      },
+      "rotation": {
+        "roll": 90,
+        "pitch": -45,
+        "yaw": 0
+      },
+      "showColor": true,
+      "pointSize": 2
+    }
+  ]
+}

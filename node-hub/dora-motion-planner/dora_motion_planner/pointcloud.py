@@ -132,3 +132,86 @@ def transform_points(
 def pointcloud_to_tensor(points: np.ndarray, device: torch.device) -> torch.Tensor:
     """Convert numpy point cloud to GPU tensor."""
     return torch.tensor(points, dtype=torch.float32, device=device)
+
+
+def compute_table_plane(
+    cam_t: np.ndarray,
+    cam_rot: Rotation,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    w: int,
+    h: int,
+    pc_robot: np.ndarray,
+    device: torch.device | str = "cpu",
+    z_percentile: float = 33.0,
+) -> tuple[tuple[float, tuple[float, float, float, float]], torch.Tensor | None]:
+    """Compute a table collision plane from camera frustum and point cloud.
+
+    Projects the four image corners as rays from the camera origin and
+    intersects them with a horizontal plane at the *z_percentile*-th
+    height of the point cloud.  Returns an AABB-bounded plane suitable
+    for :func:`TrajectoryOptimizer.table_plane` and an optional tight
+    polygon for :func:`capsule_halfplane_distance`.
+
+    Args:
+        cam_t: (3,) camera translation in robot frame.
+        cam_rot: Camera rotation (scipy Rotation, camera→robot).
+        fx, fy, cx, cy: Camera intrinsics.
+        w, h: Image width/height in pixels.
+        pc_robot: (N, 3) point cloud already in robot frame.
+        device: Torch device for the returned polygon tensor.
+        z_percentile: Percentile of Z values to use as the table height.
+
+    Returns:
+        ``(table_plane, table_polygon)`` where *table_plane* is
+        ``(plane_z, (x_min, x_max, y_min, y_max))`` and *table_polygon*
+        is a ``(4, 2)`` tensor of the frustum footprint (or ``None`` if
+        fewer than 4 corners could be projected).
+    """
+    table_top_z = float(np.percentile(pc_robot[:, 2], z_percentile))
+
+    rot_matrix = cam_rot.as_matrix() if hasattr(cam_rot, "as_matrix") else np.array(cam_rot)
+    corners_uv = [(0, 0), (w, 0), (w, h), (0, h)]
+    table_corners = []
+    for u, v in corners_uv:
+        ray_cam = np.array([(u - cx) / fx, (v - cy) / fy, 1.0])
+        ray_robot = rot_matrix @ ray_cam
+        if abs(ray_robot[2]) < 1e-6:
+            continue
+        t_param = (table_top_z - cam_t[2]) / ray_robot[2]
+        if t_param < 0:
+            continue
+        table_corners.append(cam_t + t_param * ray_robot)
+
+    if len(table_corners) >= 4:
+        table_corners = np.array(table_corners)
+        # Pad the polygon outward from its centroid so the table region
+        # covers the full arm workspace, not just the camera FOV.
+        centroid = table_corners[:, :2].mean(axis=0)
+        pad = 0.20  # metres — enough to cover arm workspace near table edge
+        dirs = table_corners[:, :2] - centroid
+        norms = np.linalg.norm(dirs, axis=1, keepdims=True).clip(1e-6, None)
+        table_corners[:, :2] += dirs / norms * pad
+
+        table_polygon = torch.tensor(
+            table_corners[:, :2], dtype=torch.float32, device=device
+        )
+        bounds = (
+            float(table_corners[:, 0].min()),
+            float(table_corners[:, 0].max()),
+            float(table_corners[:, 1].min()),
+            float(table_corners[:, 1].max()),
+        )
+    else:
+        table_polygon = None
+        bounds = (
+            float(pc_robot[:, 0].min()) - 0.05,
+            float(pc_robot[:, 0].max()) + 0.05,
+            float(pc_robot[:, 1].min()) - 0.05,
+            float(pc_robot[:, 1].max()) + 0.05,
+        )
+
+    table_plane = (table_top_z, bounds)
+    return table_plane, table_polygon
