@@ -61,9 +61,12 @@ T_MAX = 18.0       # Nm
 KP_MAX = 500.0
 KD_MAX = 5.0
 
-# Default motor IDs for left/right arms
+# Default motor IDs for left/right arms (7 joints + gripper on 0x08)
 MOTOR_IDS_LEFT = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]
 MOTOR_IDS_RIGHT = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]
+GRIPPER_MOTOR_ID = 0x08
+GRIPPER_OPEN_RAD = -1.0472   # -60° = fully open (44mm finger travel)
+GRIPPER_CLOSED_RAD = 0.0     # fully closed
 
 
 def _float_to_uint(x: float, x_min: float, x_max: float, bits: int) -> int:
@@ -119,6 +122,7 @@ def save(
     kp: float = 30.0,
     kd: float = 1.0,
     motor_ids: list[int] | None = None,
+    gripper: np.ndarray | None = None,
     extra_metadata: dict | None = None,
 ) -> dict:
     """Write a (T, J) radian trajectory as CAN-frame JSON.
@@ -134,6 +138,8 @@ def save(
         kp: Position gain for the MIT command.
         kd: Damping gain for the MIT command.
         motor_ids: CAN arbitration IDs per joint. Defaults to 0x01..0x07.
+        gripper: Optional (T,) array of gripper values, 0.0=open 1.0=closed.
+            Encoded as motor 0x08 MIT CAN frame (-1.0472 rad open, 0.0 rad closed).
         extra_metadata: Optional extra fields.
 
     Returns:
@@ -151,6 +157,13 @@ def save(
             f"motor_ids length ({len(motor_ids)}) != num_joints ({num_joints})"
         )
 
+    if gripper is not None:
+        gripper = np.asarray(gripper, dtype=np.float32)
+        if gripper.shape[0] != num_waypoints:
+            raise ValueError(
+                f"gripper length ({gripper.shape[0]}) != num_waypoints ({num_waypoints})"
+            )
+
     commands = []
     for i in range(num_waypoints):
         frames = []
@@ -160,6 +173,15 @@ def save(
             )
             frames.append({
                 "id": f"0x{motor_ids[j]:02x}",
+                "data": base64.b64encode(raw).decode("ascii"),
+            })
+        if gripper is not None:
+            # Map 0.0 (open) → GRIPPER_OPEN_RAD, 1.0 (closed) → GRIPPER_CLOSED_RAD
+            g = float(gripper[i])
+            grip_rad = GRIPPER_OPEN_RAD + g * (GRIPPER_CLOSED_RAD - GRIPPER_OPEN_RAD)
+            raw = _encode_mit_command(p_des=grip_rad, kp=kp, kd=kd)
+            frames.append({
+                "id": f"0x{GRIPPER_MOTOR_ID:02x}",
                 "data": base64.b64encode(raw).decode("ascii"),
             })
         commands.append({"t": round(i * dt, 6), "frames": frames})
@@ -206,13 +228,27 @@ def load(path: str | Path) -> tuple[np.ndarray, dict]:
     if version >= 2:
         # Decode MIT CAN frames back to radians
         rows = []
+        grip_rows = []
+        gripper_id = f"0x{GRIPPER_MOTOR_ID:02x}"
         for cmd in commands:
             angles = []
+            grip_val = None
             for frame in cmd["frames"]:
                 raw = base64.b64decode(frame["data"])
-                angles.append(_decode_mit_position(raw))
+                pos = _decode_mit_position(raw)
+                if frame["id"] == gripper_id:
+                    # Convert motor radians back to 0-1 scale
+                    grip_val = (pos - GRIPPER_OPEN_RAD) / (GRIPPER_CLOSED_RAD - GRIPPER_OPEN_RAD)
+                else:
+                    angles.append(pos)
             rows.append(angles)
+            grip_rows.append(grip_val)
         traj = np.array(rows, dtype=np.float32)
+        has_gripper = any(g is not None for g in grip_rows)
+        if has_gripper:
+            meta["gripper"] = np.array(
+                [g if g is not None else 0.0 for g in grip_rows], dtype=np.float32
+            )
     else:
         # v1: raw base64 float32
         traj = np.stack([

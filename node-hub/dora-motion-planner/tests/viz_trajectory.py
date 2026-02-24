@@ -285,18 +285,6 @@ def main():
     from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
     fig = plt.figure(figsize=(20, 16))
-    views = [
-        (1, "Top",    90,  -90),
-        (2, "Front",   0,  -45),
-        (3, "Side",   25,  -60),
-        (4, "Right",   0,   45),
-    ]
-    axes = []
-    for idx, title, elev, azim in views:
-        ax = fig.add_subplot(2, 2, idx, projection="3d")
-        ax.view_init(elev=elev, azim=azim)
-        ax._view_title = title
-        axes.append(ax)
 
     # Point cloud (static)
     stride_viz = max(1, len(pc_robot) // 5000)
@@ -307,14 +295,59 @@ def main():
     center = all_pts.mean(axis=0)
     max_range = (all_pts.max(axis=0) - all_pts.min(axis=0)).max() / 2 * 1.1
 
+    # Compute azimuth from desired camera XY positions (robot frame)
+    def _azim_from_xy(cam_xy, center_xy):
+        dx = cam_xy[0] - center_xy[0]
+        dy = cam_xy[1] - center_xy[1]
+        return np.degrees(np.arctan2(-dx, dy))
+
+    front_azim = _azim_from_xy(np.array([-0.6, -0.7]), center[:2])
+    right_azim = _azim_from_xy(np.array([0.1, -0.7]), center[:2])
+
+    views = [
+        (1, "Top",    90,  -90),
+        (2, "Front",  20,  front_azim),
+        (3, "Side",   25,  -60),
+        (4, "Right",  20,  right_azim),
+    ]
+    axes = []
+    for idx, title, elev, azim in views:
+        ax = fig.add_subplot(2, 2, idx, projection="3d")
+        ax.view_init(elev=elev, azim=azim)
+        ax._view_title = title
+        axes.append(ax)
+
     cmap = plt.cm.coolwarm
+
+    def _point_in_table_xy(xy):
+        """Ray-casting point-in-polygon check against table_polygon."""
+        if table_polygon is None:
+            return (bounds[0] <= xy[0] <= bounds[1]
+                    and bounds[2] <= xy[1] <= bounds[3])
+        poly = table_polygon.cpu().numpy()
+        n = len(poly)
+        inside = False
+        px, py = xy[0], xy[1]
+        for i in range(n):
+            j = (i + 1) % n
+            xi, yi = poly[i]
+            xj, yj = poly[j]
+            if ((yi > py) != (yj > py)) and (px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi):
+                inside = not inside
+        return inside
 
     def draw_frame(frame_idx):
         capsules, boxes, skeleton, ee_pos, is_colliding = frames[frame_idx]
-        t_frac = frame_idx / max(1, total_waypoints - 1)
-        color = cmap(t_frac)
-        arm_color = "red" if is_colliding else color
-        status = "COLLISION" if is_colliding else "clear"
+        ee_below_table = ee_pos[2] < plane_z and _point_in_table_xy(ee_pos[:2])
+        if is_colliding:
+            arm_color = "red"
+            status = "COLLISION"
+        elif ee_below_table:
+            arm_color = "orange"
+            status = "BELOW TABLE"
+        else:
+            arm_color = "steelblue"
+            status = "clear"
 
         for ax in axes:
             elev, azim = ax.elev, ax.azim

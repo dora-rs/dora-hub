@@ -3,10 +3,11 @@
 All seeds are batched into a single (S*T, J) tensor for FK, so the GPU
 processes all seeds in parallel rather than sequentially.
 
-Collision costs use an exponential barrier  exp(-α·sd)  where sd is signed
-distance and α controls the influence radius (~5/α metres).  This gives a
-non-zero repulsive gradient everywhere, unlike a relu hinge which is blind
-outside its margin.
+Collision costs use a one-sided exponential barrier: zero when safe
+(sd > margin), steep exponential when near or inside obstacles.  When a
+table plane is set, the trajectory is initialized as a parabolic arch
+(ramped deltas) that keeps early waypoints near the start configuration,
+preventing the optimizer from cutting through the table.
 """
 
 import time
@@ -49,16 +50,20 @@ class TrajectoryOptimizer:
         self.table_plane: tuple[float, tuple[float, float, float, float]] | None = None
         self.table_polygon: torch.Tensor | None = None
 
-        # Cost weights — delta parameterization makes Cartesian anti-loop
-        # terms unnecessary; bounded deltas prevent loops by construction.
-        self.w_smooth = 1.0
-        self.w_path = 1.0     # low — bounded deltas prevent loops, no need to penalize path length
-        self.w_jerk = 0.5
-        self.w_env = 200.0    # strong obstacle avoidance (delta parameterization needs more push)
-        self.w_self = 5.0
-        self.w_table = 500.0
+        # Cost weights.  Cartesian EE path length is the main objective so
+        # more iterations always → shorter end-effector path.  Joint-space
+        # smoothness prevents jerky motion.  Collision barriers use the same
+        # margin as the post-hoc safety check (SAFETY_MARGIN) to avoid
+        # routing close to obstacles that later fail validation.
+        self.w_cart_path = 5000.0  # dominant — Cartesian EE path length
+        self.w_smooth = 1.0        # joint-space acceleration penalty
+        self.w_env = 20.0          # obstacle avoidance
+        self.w_self = 5.0          # self-collision
+        self.w_table = 100.0       # table backup (lift phase is primary)
         self.w_goal_residual = 10.0
-        self.w_limit = 0.5
+
+        # Store the EE link name for Cartesian path cost
+        self._ee_link = chain.get_link_names()[-1]
 
     def set_table(
         self,
@@ -111,6 +116,25 @@ class TrajectoryOptimizer:
         q = lower + torch.nn.functional.softplus(q - lower, beta=beta)
         q = upper - torch.nn.functional.softplus(upper - q, beta=beta)
         return q
+
+    @staticmethod
+    def _one_sided_barrier(
+        sd: torch.Tensor, alpha: float, margin: float = 0.02, max_exp: float = 5.0,
+    ) -> torch.Tensor:
+        """Zero when safe (sd > margin), steep exponential when near/inside collision.
+
+        Beyond the exponential zone (penetration > max_exp/alpha), the cost
+        extends linearly so the gradient never vanishes for deep penetrations.
+        """
+        penetration = torch.relu(margin - sd)
+        exp_limit = max_exp / alpha
+        exp_zone = penetration.clamp(max=exp_limit)
+        overshoot = penetration - exp_zone  # > 0 for deep penetrations
+        # exp(alpha * exp_limit) = exp(max_exp), derivative at boundary = alpha * exp(max_exp)
+        exp_cost = torch.exp(alpha * exp_zone) - 1.0
+        # Linear extension with same slope as the exponential at the boundary
+        linear_cost = overshoot * alpha * exp_cost.clamp(min=1.0).detach()
+        return exp_cost + linear_cost
 
     def _compute_max_step(
         self, q_start: torch.Tensor, q_goal: torch.Tensor, T: int
@@ -340,21 +364,21 @@ class TrajectoryOptimizer:
         """
         J = q_traj.shape[-1]
 
-        # Joint-space kinematics
-        vel = q_traj[:, 1:] - q_traj[:, :-1]         # (S, T-1, J)
-        acc = vel[:, 1:] - vel[:, :-1]                 # (S, T-2, J)
-        smooth_cost = (acc ** 2).sum(dim=(-1, -2))      # (S,)
-        path_cost = (vel ** 2).sum(dim=(-1, -2))        # (S,)
+        # Joint-space smoothness (acceleration)
+        vel = q_traj[:, 1:] - q_traj[:, :-1]             # (S, T-1, J)
+        acc = vel[:, 1:] - vel[:, :-1]                     # (S, T-2, J)
+        smooth_cost = (acc ** 2).sum(dim=(-1, -2))          # (S,)
 
-        # Jerk (3rd derivative)
-        jerk_cost = torch.zeros(S, device=self.device)
-        if T >= 4:
-            jerk = acc[:, 1:] - acc[:, :-1]             # (S, T-3, J)
-            jerk_cost = (jerk ** 2).sum(dim=(-1, -2))    # (S,)
-
-        # FK on flattened (S*T, J)
+        # FK on flattened (S*T, J) — used for both collision and path cost
         q_flat = q_traj.reshape(S * T, J)
         transforms = self.chain.forward_kinematics(q_flat, end_only=False)
+
+        # Cartesian EE path length (directly optimises what we measure)
+        ee_tf = transforms[self._ee_link]
+        ee_pos = ee_tf.get_matrix()[:, :3, 3]              # (S*T, 3)
+        ee_pos = ee_pos.reshape(S, T, 3)
+        ee_vel = ee_pos[:, 1:] - ee_pos[:, :-1]            # (S, T-1, 3)
+        cart_path_cost = (ee_vel ** 2).sum(dim=(-1, -2))    # (S,)
 
         env_cost = torch.zeros(S, device=self.device)
         if sdf is not None:
@@ -366,26 +390,18 @@ class TrajectoryOptimizer:
         if self.table_plane is not None:
             table_cost = self._table_cost_batched(transforms, S, T)
 
-        # Goal residual penalty — encourages raw cumsum to reach goal
+        # Goal residual — encourages raw cumsum to reach goal
         residual_cost = torch.zeros(S, device=self.device)
         if goal_residual is not None:
             residual_cost = (goal_residual ** 2).sum(dim=-1)  # (S,)
 
-        # Joint limit barrier — exponential penalty near limits
-        limit_cost = (
-            torch.exp(-20.0 * (q_traj - self.lower))
-            + torch.exp(-20.0 * (self.upper - q_traj))
-        ).sum(dim=(-1, -2))  # (S,)
-
         return (
-            self.w_smooth * smooth_cost
-            + self.w_path * path_cost
-            + self.w_jerk * jerk_cost
+            self.w_cart_path * cart_path_cost
+            + self.w_smooth * smooth_cost
             + self.w_env * env_cost
             + self.w_self * self_cost
             + self.w_table * table_cost
             + self.w_goal_residual * residual_cost
-            + self.w_limit * limit_cost
         )
 
     def _env_cost_batched(
@@ -397,7 +413,6 @@ class TrajectoryOptimizer:
     ) -> torch.Tensor:
         """SDF-based env collision cost, returns (S,)."""
         alpha = self.collision_alpha
-        sd_floor = -5.0 / alpha
         n_samples = 8
         ts = torch.linspace(0, 1, n_samples, device=self.device)
         total = torch.zeros(S, device=self.device)
@@ -410,7 +425,7 @@ class TrajectoryOptimizer:
             # p0_w: (S*T, 3), pts: (S*T, n_samples, 3)
             pts = p0_w.unsqueeze(1) + ts.view(1, -1, 1) * (p1_w - p0_w).unsqueeze(1)
             sd = sdf.query(pts) - radius  # (S*T, n_samples)
-            barrier = torch.exp(-alpha * sd.clamp(min=sd_floor))  # (S*T, n_samples)
+            barrier = self._one_sided_barrier(sd, alpha)  # (S*T, n_samples)
             # Sum over samples and timesteps per seed
             total = total + barrier.sum(dim=-1).reshape(S, T).sum(dim=-1)
 
@@ -427,7 +442,7 @@ class TrajectoryOptimizer:
             center_w = torch.einsum("bij,j->bi", R, center) + t  # (S*T, 3)
             box_radius = half_ext.norm().item()
             sd = sdf.query(center_w) - box_radius  # (S*T,)
-            barrier = torch.exp(-alpha * sd.clamp(min=sd_floor))
+            barrier = self._one_sided_barrier(sd, alpha)
             total = total + barrier.reshape(S, T).sum(dim=-1)
 
         return total
@@ -437,7 +452,6 @@ class TrajectoryOptimizer:
     ) -> torch.Tensor:
         """Self-collision cost, returns (S,)."""
         alpha = self.collision_alpha
-        sd_floor = -5.0 / alpha
         cost = torch.zeros(S, device=self.device)
         link_names = self.capsules.link_names
 
@@ -453,7 +467,7 @@ class TrajectoryOptimizer:
             r_j = self.capsules.radii[name_j]
 
             sd = capsule_capsule_distance(p0_i, p1_i, r_i, p0_j, p1_j, r_j)  # (S*T,)
-            barrier = torch.exp(-alpha * sd.clamp(min=sd_floor))
+            barrier = self._one_sided_barrier(sd, alpha)
             cost = cost + barrier.reshape(S, T).sum(dim=-1)
 
         return cost
@@ -464,13 +478,14 @@ class TrajectoryOptimizer:
         """Table half-plane collision cost, returns (S,).
 
         Checks both capsule links AND gripper boxes against the table.
-        No sd_floor clamp — the table is a solid body.  Going below
-        the table surface costs exponentially more the deeper you go,
-        making shortcuts under the table prohibitively expensive.
+        Uses a one-sided barrier: zero cost when above the table surface
+        (plus margin), steep exponential penalty when near or below it.
         """
-        alpha = self.collision_alpha
+        table_alpha = max(self.collision_alpha * 4, 200.0)
         plane_z, bounds = self.table_plane
         total = torch.zeros(S, device=self.device)
+
+        table_margin = 0.02  # 20mm — matches SAFETY_MARGIN
 
         for link_name in self.capsules.link_names:
             if link_name not in transforms:
@@ -481,7 +496,7 @@ class TrajectoryOptimizer:
                 p0_w, p1_w, radius, plane_z, bounds,
                 plane_polygon=self.table_polygon,
             )  # (S*T,)
-            barrier = torch.exp(-alpha * sd)
+            barrier = self._one_sided_barrier(sd, table_alpha, margin=table_margin)
             total = total + barrier.reshape(S, T).sum(dim=-1)
 
         # Gripper boxes — approximate as sphere (center + bounding radius)
@@ -502,7 +517,7 @@ class TrajectoryOptimizer:
                 center_w, center_w, box_radius, plane_z, bounds,
                 plane_polygon=self.table_polygon,
             )  # (S*T,)
-            barrier = torch.exp(-alpha * sd)
+            barrier = self._one_sided_barrier(sd, table_alpha, margin=table_margin)
             total = total + barrier.reshape(S, T).sum(dim=-1)
 
         return total

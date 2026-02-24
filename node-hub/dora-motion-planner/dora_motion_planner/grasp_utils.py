@@ -85,7 +85,9 @@ def grasp_pose_from_jaw_pixels(
         approach_margin: Extra height above grasp for the pre-grasp waypoint.
 
     Returns:
-        (grasp_xyzrpy, pregrasp_xyzrpy) — both (6,) arrays, or None.
+        (grasp_xyzrpy, pregrasp_xyzrpy, object_top_z, object_width) or None.
+        object_top_z is the highest Z along the jaw line (robot frame).
+        object_width is the jaw-to-jaw distance in metres (robot frame).
     """
     # Deproject both jaw pixels to 3D camera frame
     p1_cam = pixel_to_3d(u1, v1, depth_map, fx, fy, cx, cy, width, height)
@@ -105,13 +107,37 @@ def grasp_pose_from_jaw_pixels(
     p2_rob = R_cam @ p2_cam + cam_translation
     print(f"[grasp] robot-frame: p1={np.round(p1_rob, 4)} p2={np.round(p2_rob, 4)}")
 
-    # Grasp center = midpoint
-    center = (p1_rob + p2_rob) / 2.0
+    # Scan all pixels along the jaw line to find the object's highest point.
+    # This is more robust than just using the two jaw endpoints, which may
+    # land on the table surface or a noisy depth pixel.
+    n_samples = max(20, int(np.hypot(u2 - u1, v2 - v1)))
+    us = np.linspace(u1, u2, n_samples)
+    vs = np.linspace(v1, v2, n_samples)
+    depth_2d = depth_map.reshape(height, width)
+    best_z_robot = -np.inf
+    for u_s, v_s in zip(us, vs):
+        ui, vi = int(round(u_s)), int(round(v_s))
+        if 0 <= vi < height and 0 <= ui < width:
+            d_mm = float(depth_2d[vi, ui])
+            if 10 < d_mm < 5000:
+                z_m = d_mm * 0.001
+                pt_cam = np.array([
+                    (u_s - cx) * z_m / fx,
+                    (v_s - cy) * z_m / fy,
+                    z_m,
+                ], dtype=np.float32)
+                pt_rob = R_cam @ pt_cam + cam_translation
+                if pt_rob[2] > best_z_robot:
+                    best_z_robot = pt_rob[2]
 
-    # Height adjustment: use the higher point (smaller depth in camera = higher
-    # in world when camera looks down, but after transform we use Z directly)
-    object_z = max(p1_rob[2], p2_rob[2])
-    grasp_z = object_z + grasp_depth_offset
+    # object_top_z = highest point along jaw line in robot frame
+    object_top_z = best_z_robot if best_z_robot > -np.inf else max(p1_rob[2], p2_rob[2])
+    print(f"[grasp] object top z={object_top_z:.4f}m (scanned {n_samples} pixels between jaws)")
+
+    # Grasp center = midpoint of the two jaw points (XY),
+    # Z will be adjusted later using table plane if available.
+    center = (p1_rob + p2_rob) / 2.0
+    grasp_z = object_top_z + grasp_depth_offset
     grasp_z = max(grasp_z, floor_height)
     center[2] = grasp_z
 
@@ -119,6 +145,8 @@ def grasp_pose_from_jaw_pixels(
     jaw_axis = p2_rob - p1_rob
     jaw_axis[2] = 0  # project to horizontal plane for stable grasp
     jaw_len = np.linalg.norm(jaw_axis)
+    object_width = float(jaw_len)  # distance between jaw contact points (metres)
+    print(f"[grasp] object width={object_width*1000:.1f}mm (jaw distance in robot frame)")
     if jaw_len < 1e-6:
         jaw_axis = np.array([0.0, 1.0, 0.0])
     else:
@@ -151,4 +179,4 @@ def grasp_pose_from_jaw_pixels(
     pregrasp_center[2] = grasp_z + approach_margin
     pregrasp_xyzrpy = np.concatenate([pregrasp_center, rpy]).astype(np.float32)
 
-    return grasp_xyzrpy, pregrasp_xyzrpy
+    return grasp_xyzrpy, pregrasp_xyzrpy, float(object_top_z), object_width
