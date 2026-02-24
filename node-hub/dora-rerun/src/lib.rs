@@ -493,7 +493,7 @@ pub fn lib_main() -> Result<()> {
                         println!("Could not find chain for {urdf_id}. You may not have set its");
                     }
                 }
-               "pose" => {
+                "pose" => {
                     let values: Vec<f32> =
                         into_vec(&data).context("Could not parse pose as Vec<f32>")?;
 
@@ -504,12 +504,8 @@ pub fn lib_main() -> Result<()> {
 
                     let translation = rerun::Vec3D::new(values[0], values[1], values[2]);
 
-                    let rotation = rerun::Quaternion::from_xyzw([
-                        values[3],
-                        values[4],
-                        values[5],
-                        values[6],
-                    ]);
+                    let rotation =
+                        rerun::Quaternion::from_xyzw([values[3], values[4], values[5], values[6]]);
 
                     let transform =
                         rerun::Transform3D::from_translation_rotation(translation, rotation);
