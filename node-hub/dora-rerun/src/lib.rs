@@ -498,7 +498,11 @@ pub fn lib_main() -> Result<()> {
                         into_vec(&data).context("Could not parse pose as Vec<f32>")?;
 
                     if values.len() != 7 {
-                        warn!("Pose must have 7 values [x, y, z, qx, qy, qz, qw]");
+                        warn!(
+                            "Unsupported pose format (len = {}). Expected xyz + quaternion \
+                             [x, y, z, qx, qy, qz, qw]; skipping.",
+                            values.len()
+                        );
                         continue;
                     }
 
