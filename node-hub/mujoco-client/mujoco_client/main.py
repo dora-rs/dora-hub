@@ -5,145 +5,208 @@ import json
 import os
 import time
 
+import cv2
 import mujoco
 import mujoco.viewer
+import numpy as np
 import pyarrow as pa
 from dora import Node
 
+#Image constants (must match the downstream pipeline expectations)
+_IMG_W: int = 960
+_IMG_H: int = 600
+_JPEG_QUALITY: int = 90
+
+_IMG_META: dict[str, object] = {
+    "encoding": "jpeg",
+    "width":    _IMG_W,
+    "height":   _IMG_H,
+}
+
+
+def _cam_topic(cam_name: str) -> str:
+    """Derive a Dora-safe output topic name from a camera's XML name.
+
+    Hyphens are replaced with underscores so the name is valid as a YAML
+    key without quoting.  No other transformation is applied, keeping the
+    mapping transparent: "camera-wrist-right" → "camera_wrist_right".
+    """
+    return cam_name.replace("-", "_")
+
 
 class Client:
-    """TODO: Add docstring."""
+    """Generic MuJoCo simulation node."""
 
-    def __init__(self, config: dict[str, any]):
-        """TODO: Add docstring."""
-        self.config = config
-
+    def __init__(self, config: dict[str, str]) -> None:
+        
         self.m = mujoco.MjModel.from_xml_path(filename=config["scene"])
         self.data = mujoco.MjData(self.m)
 
+        print(
+            f"Model loaded: nq={self.m.nq}  nv={self.m.nv}  "
+            f"nu={self.m.nu}  ncam={self.m.ncam}",
+            flush=True,
+        )
+
+        self._gl_ctx = mujoco.GLContext(_IMG_W, _IMG_H)
+        self._gl_ctx.make_current()
+
+        self._scene    = mujoco.MjvScene(self.m, maxgeom=10_000)
+        self._cam      = mujoco.MjvCamera()
+        self._opt      = mujoco.MjvOption()
+        self._pert     = mujoco.MjvPerturb()
+        self._viewport = mujoco.MjrRect(0, 0, _IMG_W, _IMG_H)
+        self._mjr_ctx  = mujoco.MjrContext(self.m, mujoco.mjtFontScale.mjFONTSCALE_150)
+
+        # mjCAMERA_FIXED → a named <camera> element from the XML.
+        # fixedcamid is set per-render; type is set once here.
+        self._cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+
+        # Pre-allocated pixel buffer — reused every render, no per-frame alloc.
+        self._rgb_buf = np.zeros((_IMG_H, _IMG_W, 3), dtype=np.uint8)
+
+        # Read every camera declared in the XML at startup.
+        # Camera index i == the id returned by mj_name2id, so no runtime lookup.
+        self._cameras: list[tuple[int, str]] = []   # (cam_id, dora_topic)
+        for i in range(self.m.ncam):
+            name  = self.m.camera(i).name
+            topic = _cam_topic(name)
+            self._cameras.append((i, topic))
+            print(f"  camera[{i}] '{name}' → topic '{topic}'", flush=True)
+
+        if not self._cameras:
+            print("WARNING: no cameras found in model — no image output", flush=True)
+
+        # Warn once at startup if the model has no actuators.
+        if self.m.nu == 0:
+            print("WARNING: model has no actuators (m.nu=0) — action input ignored", flush=True)
+
         self.node = Node(config["name"])
 
-    def run(self):
-        """TODO: Add docstring."""
+    def run(self) -> None:
+        """Drive the physics + rendering event loop."""
         with mujoco.viewer.launch_passive(self.m, self.data) as viewer:
+            viewer.sync()
+
             for event in self.node:
-                event_type = event["type"]
+                if event["type"] != "INPUT":
+                    continue
 
-                if event_type == "INPUT":
-                    event_id = event["id"]
+                eid = event["id"]
 
-                    if event_id == "tick":
-                        self.node.send_output("tick", pa.array([]), event["metadata"])
+                if eid == "tick":
+                    # Echo the tick first so the downstream dataflow does not
+                    # stall while we spend time in mj_step.
+                    self.node.send_output("tick", pa.array([]), event["metadata"])
 
-                        if not viewer.is_running():
-                            break
-
-                        step_start = time.time()
-
-                        # Step the simulation forward
-                        mujoco.mj_step(self.m, self.data)
-                        viewer.sync()
-
-                        # Rudimentary time keeping, will drift relative to wall clock.
-                        time_until_next_step = self.m.opt.timestep - (
-                            time.time() - step_start
-                        )
-                        if time_until_next_step > 0:
-                            time.sleep(time_until_next_step)
-
-                    elif event_id == "pull_position":
-                        self.pull_position(self.node, event["metadata"])
-                    elif event_id == "pull_velocity":
-                        self.pull_velocity(self.node, event["metadata"])
-                    elif event_id == "pull_current":
-                        self.pull_current(self.node, event["metadata"])
-                    elif event_id == "write_goal_position":
-                        self.write_goal_position(event["value"])
-                    elif event_id == "end":
+                    if not viewer.is_running():
                         break
 
-                elif event_type == "ERROR":
-                    raise ValueError(
-                        "An error occurred in the dataflow: " + event["error"],
-                    )
+                    mujoco.mj_step(self.m, self.data)
+                    viewer.sync()
+                    self._publish_state()
 
-            self.node.send_output("end", pa.array([]))
+                elif eid == "render":
+                    # Decoupled from the physics tick: encoding four 960×600
+                    # JPEGs at 250 Hz would block the control loop entirely.
+                    self._render_and_publish()
 
-    def pull_position(self, node, metadata):
-        """TODO: Add docstring."""
+                elif eid == "action":
+                    self._handle_action(event["value"])
 
-    def pull_velocity(self, node, metadata):
-        """TODO: Add docstring."""
+    # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def pull_current(self, node, metadata):
-        """TODO: Add docstring."""
+    def _handle_action(self, value: pa.Array | pa.ChunkedArray) -> None:
+        """Write the incoming flat action array into data.ctrl.
 
-    def write_goal_position(self, goal_position_with_joints):
-        """TODO: Add docstring."""
-        joints = goal_position_with_joints.field("joints")
-        goal_position = goal_position_with_joints.field("values")
+        The caller is responsible for ordering the values to match the
+        actuator order declared in the XML (data.ctrl index order == the
+        order of <actuator> elements in the scene file).
+        """
+        if self.m.nu == 0:
+            return
 
-        for i, joint in enumerate(joints):
-            self.data.joint(joint.as_py()).qpos[0] = goal_position[i].as_py()
+        if not isinstance(value, (pa.Array, pa.ChunkedArray)):
+            print(
+                f"WARNING: action expected pa.Array, got {type(value).__name__} — ignored",
+                flush=True,
+            )
+            return
+
+        vals = np.asarray(value, dtype=np.float64)
+
+        if len(vals) != self.m.nu:
+            print(
+                f"WARNING: action length {len(vals)} != m.nu {self.m.nu} "
+                f"— writing first {min(len(vals), self.m.nu)} values",
+                flush=True,
+            )
+
+        n = min(len(vals), self.m.nu)
+        self.data.ctrl[:n] = vals[:n]
+
+    def _publish_state(self) -> None:
+        """Publish full generalised coordinates and ready status."""
+        self.node.send_output(
+            "joint_state",
+            pa.array(self.data.qpos.astype(np.float32)),
+        )
+        self.node.send_output("status", pa.array(["ready"]))
+
+    def _render_and_publish(self) -> None:
+        """Render every model camera off-screen and publish as JPEG.
+
+        Per-camera pipeline:
+          mjv_updateScene → mjr_render → mjr_readPixels
+          → cv2.flip (OpenGL bottom-up → top-down)
+          → cv2.cvtColor RGB→BGR
+          → cv2.imencode JPEG q90
+          → node.send_output
+        """
+        # Re-assert our EGL context as current.  The passive viewer runs in a
+        # background thread with its own GLFW context; this call is a ~1 µs
+        # guard against any threading edge-cases.
+        self._gl_ctx.make_current()
+
+        for cam_id, topic in self._cameras:
+            self._cam.fixedcamid = cam_id
+
+            mujoco.mjv_updateScene(
+                self.m, self.data,
+                self._opt, self._pert,
+                self._cam, mujoco.mjtCatBit.mjCAT_ALL,
+                self._scene,
+            )
+            mujoco.mjr_render(self._viewport, self._scene, self._mjr_ctx)
+
+            mujoco.mjr_readPixels(self._rgb_buf, None, self._viewport, self._mjr_ctx)
+
+            bgr = cv2.cvtColor(cv2.flip(self._rgb_buf, 0), cv2.COLOR_RGB2BGR)
+
+            ret, jpeg = cv2.imencode(
+                ".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY]
+            )
+            if ret:
+                self.node.send_output(topic, pa.array(jpeg.ravel()), _IMG_META)
 
 
-def main():
-    """Handle dynamic nodes, ask for the name of the node in the dataflow."""
-    parser = argparse.ArgumentParser(
-        description="MujoCo Client: This node is used to represent a MuJoCo simulation. It can be used instead of a "
-        "follower arm to test the dataflow.",
-    )
+# ── Entry point ───────────────────────────────────────────────────────────────
 
-    parser.add_argument(
-        "--name",
-        type=str,
-        required=False,
-        help="The name of the node in the dataflow.",
-        default="mujoco_client",
-    )
-    parser.add_argument(
-        "--scene",
-        type=str,
-        required=False,
-        help="The scene file of the MuJoCo simulation.",
-    )
-
-    parser.add_argument(
-        "--config", type=str, help="The configuration of the joints.", default=None,
-    )
-
+def main() -> None:
+    """Parse CLI arguments and start the simulation node."""
+    parser = argparse.ArgumentParser(description="Generic MuJoCo simulation node")
+    parser.add_argument("--name",  type=str, default="mujoco")
+    parser.add_argument("--scene", type=str, help="Path to the MuJoCo XML scene file")
     args = parser.parse_args()
 
-    if not os.getenv("SCENE") and args.scene is None:
-        raise ValueError(
-            "Please set the SCENE environment variable or pass the --scene argument.",
-        )
-
     scene = os.getenv("SCENE", args.scene)
+    if not scene:
+        raise ValueError("Provide --scene <path> or set the SCENE environment variable")
 
-    # Check if config is set
-    if not os.environ.get("CONFIG") and args.config is None:
-        raise ValueError(
-            "The configuration is not set. Please set the configuration of the simulated motors in the environment "
-            "variables or as an argument.",
-        )
+    config = {"name": args.name, "scene": scene}
+    print("MuJoCo Client Configuration:", config, flush=True)
 
-    with open(os.environ.get("CONFIG") if args.config is None else args.config) as file:
-        config = json.load(file)
-
-    joints = config.keys()
-
-    # Create configuration
-    bus = {
-        "name": args.name,
-        "scene": scene,
-        "joints": pa.array(joints, pa.string()),
-    }
-
-    print("Mujoco Client Configuration: ", bus, flush=True)
-
-    client = Client(bus)
-    client.run()
+    Client(config).run()
 
 
 if __name__ == "__main__":
