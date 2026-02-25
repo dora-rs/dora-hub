@@ -114,8 +114,6 @@ class Client:
                 elif eid == "action":
                     self._handle_action(event["value"])
 
-    # ── Helpers ───────────────────────────────────────────────────────────────
-
     def _handle_action(self, value: pa.Array | pa.ChunkedArray) -> None:
         """Write the incoming flat action array into data.ctrl.
 
@@ -189,8 +187,6 @@ class Client:
             if ret:
                 self.node.send_output(topic, pa.array(jpeg.ravel()), _IMG_META)
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
 
 def main() -> None:
     """Parse CLI arguments and start the simulation node."""
