@@ -144,6 +144,7 @@ def main():
     from dora import Node
 
     # Configuration from env
+    mock_mode = os.getenv("MOCK", "false").lower() in ("1", "true", "yes")
     can_interface = os.getenv("CAN_INTERFACE", "can2")
     motor_ids_str = os.getenv("MOTOR_IDS", "0x01,0x02,0x03,0x04,0x05,0x06,0x07,0x08")
     motor_ids = [int(x.strip(), 16) for x in motor_ids_str.split(",")]
@@ -165,10 +166,12 @@ def main():
     auto_enable = os.getenv("AUTO_ENABLE", "false").lower() in ("1", "true", "yes")
 
     print(f"OpenArm CAN driver: interface={can_interface}, motors={[hex(m) for m in motor_ids]}")
-    print(f"  arm_side={arm_side}, kp={kp}, kd={kd}, read_only={read_only}")
+    print(f"  arm_side={arm_side}, kp={kp}, kd={kd}, read_only={read_only}, mock={mock_mode}")
 
-    # Open CAN bus
-    bus = can.interface.Bus(channel=can_interface, interface="socketcan", fd=False)
+    # Open CAN bus (skip in mock mode)
+    bus = None
+    if not mock_mode:
+        bus = can.interface.Bus(channel=can_interface, interface="socketcan", fd=False)
 
     node = Node()
 
@@ -185,7 +188,7 @@ def main():
     _last_cmd_vel = [None]   # last commanded velocity  (np array or None)
     _last_cmd_time = [0.0]
 
-    if auto_enable and not read_only:
+    if auto_enable and not read_only and bus is not None:
         print("Auto-enabling motors...")
         for mid in motor_ids:
             msg = can.Message(arbitration_id=mid, data=ENABLE_CMD, is_fd=False)
@@ -341,7 +344,8 @@ def main():
                     if _last_tick[0] > 0:
                         _tick_times.append((now - _last_tick[0]) * 1000)
                     _last_tick[0] = now
-                    query_all_motors()
+                    if not mock_mode:
+                        query_all_motors()
                     # Publish joint_state: float32 array of positions (radians)
                     metadata = event["metadata"]
                     metadata["encoding"] = "jointstate"

@@ -1,0 +1,142 @@
+nodes:
+  # --- Camera (xoq-realsense relay) ---
+  - id: camera
+    build: pip install --break-system-packages -e ../../node-hub/dora-pyrealsense xoq-realsense
+    path: dora-pyrealsense
+    inputs:
+      tick: dora/timer/millis/200  # 5Hz
+    outputs:
+      - image
+      - depth
+    env:
+      RELAY_PATH: "anon/7e58263812ba/realsense-243222073892"
+      IMAGE_WIDTH: "1280"
+      IMAGE_HEIGHT: "720"
+      ENCODING: "rgb8"
+
+  # --- SAM3 text-prompted segmentation ---
+  - id: sam3
+    build: pip install --break-system-packages -e ../../node-hub/dora-sam3
+    path: dora-sam3
+    inputs:
+      image:
+        source: camera/image
+        queue_size: 1
+      text: selector/sam3_text
+      points: selector/sam3_points
+    outputs:
+      - masks
+    env:
+      SAM3_CONFIDENCE: "0.3"
+      SAM3_FP16: "true"
+
+  # --- Grasp selector (SAM3 + VLM, with place detection) ---
+  - id: selector
+    build: pip install --break-system-packages numpy opencv-python-headless dora-rs pyarrow
+    path: grasp_selector.py
+    inputs:
+      image:
+        source: camera/image
+        queue_size: 1
+      depth:
+        source: camera/depth
+        queue_size: 1
+      trigger: camera/image
+      vlm_response: vlm/text
+      mask: sam3/masks
+    outputs:
+      - vlm_request
+      - grasp_result
+      - sam3_text
+      - sam3_points
+    env:
+      IMAGE_WIDTH: "1280"
+      IMAGE_HEIGHT: "720"
+      TARGET_OBJECT: "the yellow block"
+      PLACE_CONTAINER: "the green box"
+      USE_THINK: "true"
+      OUTPUT_DIR: "."
+      USE_SAM2: "false"
+      USE_SAM3: "true"
+
+  # --- VLM (thinking model for rating) ---
+  - id: vlm
+    path: ../../target/release/dora-qwen-omni
+    args: >-
+      --model /home/baguette/models/qwen3-vl-a3b-thinking/Qwen3VL-30B-A3B-Thinking-Q4_K_M.gguf
+      --mmproj /home/baguette/models/qwen3-vl-a3b-thinking/mmproj-Qwen3VL-30B-A3B-Thinking-F16.gguf
+      --prompt Output:
+      -t 24
+      --n-predict 8192
+    inputs:
+      text: selector/vlm_request
+    outputs:
+      - text
+
+  # --- Motion Planner (built-in playback with gripper support) ---
+  - id: motion_planner
+    build: pip install --break-system-packages -e ../../node-hub/dora-motion-planner
+    path: dora-motion-planner
+    inputs:
+      depth:
+        source: camera/depth
+        queue_size: 1
+      joint_state: arm/joint_state
+      grasp_result: selector/grasp_result
+      tick: dora/timer/millis/33  # 30Hz playback
+    outputs:
+      - joint_trajectory
+      - joint_command
+      - gripper_command
+    env:
+      URDF_PATH: "../openarm/openarm_v10.urdf"
+      END_EFFECTOR_LINK: "openarm_left_hand_tcp"
+      CAMERA_TRANSFORM: "-0.23 0.81 0.25 95 -45 0"
+      IMAGE_WIDTH: "1280"
+      IMAGE_HEIGHT: "720"
+      DOWNSAMPLE_STRIDE: "8"
+      SAFETY_MARGIN: "0.02"
+      NUM_WAYPOINTS: "300"
+      NUM_SEEDS: "8"
+      MAX_ITERS: "500"
+      DEVICE: "cuda"
+      GRASP_DEPTH_OFFSET: "-0.01"
+      FLOOR_HEIGHT: "0.005"
+      APPROACH_MARGIN: "0.03"
+      PLAYBACK: "true"
+      DWELL_STEPS: "15"
+      EXPORT_PATH: "trajectory.json"
+
+  # --- Arm Driver (fake-can-server via xoq-can — no real arm) ---
+  - id: arm
+    build: pip install --break-system-packages -e ../../node-hub/dora-openarm
+    path: dora-openarm
+    inputs:
+      tick: dora/timer/millis/100
+      joint_command:
+        source: motion_planner/joint_command
+        queue_size: 1
+      gripper_command:
+        source: motion_planner/gripper_command
+        queue_size: 1
+    outputs:
+      - joint_state
+    env:
+      MOCK: "true"
+      ARM_SIDE: "left"
+      KP: "0"
+      KD: "0"
+
+  # --- Visualizer (draws grasp points) ---
+  - id: viz
+    build: pip install --break-system-packages numpy opencv-python-headless dora-rs pyarrow
+    path: test_visualize_grasp.py
+    inputs:
+      image:
+        source: camera/image
+        queue_size: 1
+      vlm_response: selector/grasp_result
+    env:
+      IMAGE_WIDTH: "1280"
+      IMAGE_HEIGHT: "720"
+      OUTPUT_DIR: "."

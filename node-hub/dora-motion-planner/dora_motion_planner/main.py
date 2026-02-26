@@ -64,15 +64,17 @@ from .collision_model import (
     capsule_halfplane_distance,
     box_points_distance,
 )
-from .grasp_utils import grasp_pose_from_jaw_pixels
+from .grasp_utils import grasp_pose_from_jaw_pixels, place_pose_from_pixel
 from .pointcloud import (
     compute_table_plane,
     depth_to_pointcloud,
+    filter_below_table,
     parse_camera_transform,
     transform_points,
     pointcloud_to_tensor,
 )
 from .trajectory_json import save as save_trajectory_json, load as load_trajectory_json
+from .compiled_fk import CompiledFK, CompiledFKAdapter, LINK_NAMES as _LEFT_FK_LINKS
 from .trajectory_optimizer import TrajectoryOptimizer
 
 # Configuration from env vars
@@ -99,6 +101,37 @@ IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "480"))
 MAX_JOINT_STEP = float(os.getenv("MAX_JOINT_STEP", "0.1"))
 EXPORT_PATH = os.getenv("EXPORT_PATH", "")
 PLAYBACK = os.getenv("PLAYBACK", "true").lower() in ("1", "true", "yes")
+
+# Pick-and-place: optional place target (xyz or xyzrpy in robot frame).
+# When set, grasp planning extends to: pick → close → transport → place → open → home.
+PLACE_TARGET_STR = os.getenv("PLACE_TARGET", "")
+DWELL_STEPS = int(os.getenv("DWELL_STEPS", "15"))  # hold waypoints for gripper action
+
+# Gripper motor angle constants (from trajectory_json)
+GRIPPER_OPEN_RAD = -1.0472    # fully open (-60°)
+GRIPPER_CLOSED_RAD = 0.0      # fully closed
+GRIPPER_TRAVEL_MM = 44.0      # jaw travel range in mm
+
+
+def compute_gripper_close_rad(object_width_m):
+    """Compute gripper close angle based on object width.
+
+    Instead of fully closing, close just enough to grip the object
+    with a 5mm squeeze margin.
+    """
+    target_gap_mm = max(0, object_width_m * 1000 - 5)  # 5mm squeeze margin
+    return GRIPPER_OPEN_RAD * min(1.0, target_gap_mm / GRIPPER_TRAVEL_MM)
+
+# Parse place target at module level
+_place_target = None
+if PLACE_TARGET_STR.strip():
+    _vals = [float(v) for v in PLACE_TARGET_STR.split()]
+    if len(_vals) == 3:
+        _place_target = np.array(_vals, dtype=np.float32)  # xyz only
+    elif len(_vals) == 6:
+        _place_target = np.array(_vals, dtype=np.float32)  # xyzrpy
+    else:
+        print(f"[motion-planner] WARNING: PLACE_TARGET must be 3 (xyz) or 6 (xyzrpy) values, got {len(_vals)}")
 
 
 def build_chain(urdf_path: str, end_effector_link: str) -> pk.Chain:
@@ -132,16 +165,24 @@ def _init_arm(name, urdf_path, ee_link, capsules, device, boxes=None):
     joint_limits = chain.get_joint_limits()
     num_joints = len(chain.get_joint_parameter_names(exclude_fixed=True))
 
+    # Use compiled FK for the left arm — pre-baked offsets with pure
+    # tensor ops, ~8% faster on CPU and much faster on CUDA.
+    if ee_link == "openarm_left_hand_tcp":
+        opt_chain = CompiledFKAdapter(CompiledFK(device))
+    else:
+        opt_chain = chain
+
     capsule_model = CapsuleCollisionModel(capsules, device, boxes=boxes)
     optimizer = TrajectoryOptimizer(
-        chain=chain,
+        chain=opt_chain,
         capsule_model=capsule_model,
         joint_limits=joint_limits,
         device=device,
         collision_alpha=50.0,
         max_joint_step=MAX_JOINT_STEP,
     )
-    ik_chain = chain.to(dtype=torch.float32, device=str(device))
+    ik_chain = (opt_chain if ee_link == "openarm_left_hand_tcp"
+                else chain.to(dtype=torch.float32, device=str(device)))
     current_joints = torch.zeros(num_joints, dtype=torch.float32, device=device)
 
     with torch.no_grad():
@@ -216,7 +257,7 @@ def _estimate_target_y(u1, v1, u2, v2, depth, intrinsics, image_size, cam_t, cam
     z = z_mm * 0.001
     x_cam = (mid_u - cx) * z / fx
     y_cam = (mid_v - cy) * z / fy
-    pt_robot = cam_rot @ np.array([x_cam, y_cam, z]) + cam_t
+    pt_robot = cam_rot.as_matrix() @ np.array([x_cam, y_cam, z]) + cam_t
     return float(pt_robot[1])
 
 
@@ -546,8 +587,14 @@ def plan_grasp_from_pixels(
     arm="left",
     table_plane=None,
     table_polygon=None,
+    place_uv=None,
 ):
-    """Plan a 2-phase grasp trajectory from two jaw pixel positions.
+    """Plan a grasp (or pick-and-place) trajectory from two jaw pixel positions.
+
+    When ``place_uv`` is None, plans a 2-phase approach+grasp trajectory.
+    When ``place_uv=(u, v)`` is given, plans a full pick-and-place:
+    start → pre-grasp → grasp → dwell(close) → pre-place → place →
+    dwell(open) → pre-place → home.
 
     Returns ``(traj_np, metadata)`` on success, or ``None`` on failure.
     """
@@ -580,10 +627,11 @@ def plan_grasp_from_pixels(
         print("[motion-planner] grasp: invalid depth at jaw points, skipping")
         return None
 
-    grasp_xyzrpy, pregrasp_xyzrpy = result
+    grasp_xyzrpy, pregrasp_xyzrpy, object_top_z, object_width = result
     print(
         f"[motion-planner] grasp: center={np.round(grasp_xyzrpy[:3], 4)}, "
-        f"pregrasp_z={pregrasp_xyzrpy[2]:.4f}"
+        f"pregrasp_z={pregrasp_xyzrpy[2]:.4f}, "
+        f"object_width={object_width*1000:.1f}mm"
     )
 
     q_pregrasp = solve_ik(
@@ -598,9 +646,55 @@ def plan_grasp_from_pixels(
         print("[motion-planner] grasp: IK failed for grasp, skipping")
         return None
 
+    # --- Pick-and-place: solve IK for place/preplace poses ---
+    q_place = None
+    q_preplace = None
+    place_xyzrpy = None
+    do_pick_place = False
+
+    if place_uv is not None:
+        place_u, place_v = place_uv
+        place_result = place_pose_from_pixel(
+            place_u, place_v,
+            latest_depth, fx, fy, cx, cy,
+            cam_t, cam_rot,
+            grasp_rpy=grasp_xyzrpy[3:6],
+            width=w, height=h,
+            place_depth_offset=0.02,
+            floor_height=FLOOR_HEIGHT,
+            approach_margin=APPROACH_MARGIN,
+        )
+        if place_result is not None:
+            place_xyzrpy, preplace_xyzrpy = place_result
+            q_preplace = solve_ik(
+                ik_chain, preplace_xyzrpy, q_grasp, joint_limits, device
+            )
+            if q_preplace is not None:
+                q_place = solve_ik(
+                    ik_chain, place_xyzrpy, q_preplace, joint_limits, device
+                )
+            if q_place is not None:
+                do_pick_place = True
+                print("[motion-planner] Place IK solved, building pick-and-place trajectory")
+            else:
+                print("[motion-planner] WARNING: Place IK failed, falling back to grasp-only")
+        else:
+            print("[motion-planner] WARNING: Place depth invalid, falling back to grasp-only")
+
     q_start = current_joints.clone()
+    t_plan_start = time.perf_counter()
+
+    if do_pick_place:
+        return _build_pick_place_trajectory(
+            node, optimizer, ik_chain, capsule_model,
+            q_start, q_pregrasp, q_grasp, q_preplace, q_place,
+            pc_tensor, num_joints, arm, object_width,
+            grasp_xyzrpy, place_xyzrpy,
+            table_plane=table_plane, table_polygon=table_polygon,
+        )
+
+    # --- Grasp-only (2-phase, backward compatible) ---
     half_waypoints = NUM_WAYPOINTS // 2
-    t_grasp_start = time.perf_counter()
 
     print("[motion-planner] Phase 1: start -> pre-grasp")
     traj1, cost1 = optimizer.optimize(
@@ -621,13 +715,13 @@ def plan_grasp_from_pixels(
         num_seeds=NUM_SEEDS,
         max_iters=MAX_ITERS,
     )
-    t_grasp = time.perf_counter() - t_grasp_start
+    t_plan = time.perf_counter() - t_plan_start
 
     full_traj = torch.cat([traj1, traj2[1:]], dim=0)
     total_waypoints = full_traj.shape[0]
     print(
         f"[motion-planner] Combined: {total_waypoints} waypoints, "
-        f"cost={cost1 + cost2:.4f} (2-phase planning: {t_grasp:.2f}s)"
+        f"cost={cost1 + cost2:.4f} (2-phase planning: {t_plan:.2f}s)"
     )
 
     # Post-optimization collision validation
@@ -650,6 +744,138 @@ def plan_grasp_from_pixels(
         "arm": arm,
         "grasp_pose": grasp_xyzrpy.tolist(),
         "pregrasp_waypoint": half_waypoints - 1,
+    }
+    node.send_output(
+        "joint_trajectory",
+        pa.array(traj_np.ravel(), type=pa.float32()),
+        metadata=out_metadata,
+    )
+    return traj_np, out_metadata
+
+
+def _build_pick_place_trajectory(
+    node, optimizer, ik_chain, capsule_model,
+    q_start, q_pregrasp, q_grasp, q_preplace, q_place,
+    pc_tensor, num_joints, arm, object_width,
+    grasp_xyzrpy, place_xyzrpy,
+    table_plane=None, table_polygon=None,
+):
+    """Build a full pick-and-place trajectory with dwell waypoints and gripper actions.
+
+    Phases:
+      1. start → pre-grasp          (long, collision-aware)
+      2. pre-grasp → grasp           (short, approach)
+      dwell: hold at grasp           (gripper closes)
+      3. grasp → pre-place           (long, collision-aware)
+      4. pre-place → place           (short, descent)
+      dwell: hold at place           (gripper opens)
+      5. place → pre-place           (short, retreat)
+      6. pre-place → home            (long, collision-aware)
+
+    Returns ``(traj_np, metadata)`` on success, or ``None`` on failure.
+    """
+    t0 = time.perf_counter()
+    q_home = q_start.clone()
+
+    # Waypoint budget per phase
+    T_long = max(NUM_WAYPOINTS // 3, 10)
+    T_short = max(NUM_WAYPOINTS // 6, 5)
+
+    segments = []
+    total_cost = 0.0
+
+    def _optimize_segment(label, q_s, q_g, T):
+        nonlocal total_cost
+        print(f"[motion-planner] {label} ({T} waypoints)")
+        traj, cost = optimizer.optimize(
+            q_start=q_s, q_goal=q_g, point_cloud=pc_tensor,
+            T=T, num_seeds=NUM_SEEDS, max_iters=MAX_ITERS,
+        )
+        total_cost += cost
+        return traj
+
+    # Phase 1: start → pre-grasp
+    seg1 = _optimize_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, T_long)
+    segments.append(seg1)
+
+    # Phase 2: pre-grasp → grasp
+    seg2 = _optimize_segment("Phase 2: pre-grasp -> grasp", q_pregrasp, q_grasp, T_short)
+    segments.append(seg2[1:])  # skip duplicate start
+
+    # Dwell at grasp (hold for gripper close)
+    grasp_dwell = q_grasp.unsqueeze(0).expand(DWELL_STEPS, -1).to(seg2.device)
+    segments.append(grasp_dwell)
+
+    # Phase 3: grasp → pre-place
+    seg3 = _optimize_segment("Phase 3: grasp -> pre-place", q_grasp, q_preplace, T_long)
+    segments.append(seg3[1:])
+
+    # Phase 4: pre-place → place
+    seg4 = _optimize_segment("Phase 4: pre-place -> place", q_preplace, q_place, T_short)
+    segments.append(seg4[1:])
+
+    # Dwell at place (hold for gripper open)
+    place_dwell = q_place.unsqueeze(0).expand(DWELL_STEPS, -1).to(seg4.device)
+    segments.append(place_dwell)
+
+    # Phase 5: place → pre-place (retreat)
+    seg5 = _optimize_segment("Phase 5: place -> pre-place", q_place, q_preplace, T_short)
+    segments.append(seg5[1:])
+
+    # Phase 6: pre-place → home
+    seg6 = _optimize_segment("Phase 6: pre-place -> home", q_preplace, q_home, T_long)
+    segments.append(seg6[1:])
+
+    full_traj = torch.cat(segments, dim=0)
+    total_waypoints = full_traj.shape[0]
+    t_plan = time.perf_counter() - t0
+
+    print(
+        f"[motion-planner] Pick-and-place: {total_waypoints} waypoints, "
+        f"cost={total_cost:.4f} ({t_plan:.2f}s)"
+    )
+
+    # Post-optimization collision validation
+    if capsule_model is not None:
+        _log_collision_check(
+            validate_trajectory(
+                ik_chain, capsule_model, full_traj, pc_tensor, SAFETY_MARGIN,
+                table_plane=table_plane, table_polygon=table_polygon,
+            ),
+            total_waypoints,
+        )
+
+    # Compute gripper action waypoints
+    # grasp dwell starts after seg1 + seg2
+    grasp_dwell_start = seg1.shape[0] + (seg2.shape[0] - 1)
+    # place dwell starts after seg1 + seg2 + dwell + seg3 + seg4
+    place_dwell_start = (
+        grasp_dwell_start + DWELL_STEPS
+        + (seg3.shape[0] - 1) + (seg4.shape[0] - 1)
+    )
+
+    close_rad = compute_gripper_close_rad(object_width)
+    gripper_actions = [
+        {"waypoint": grasp_dwell_start, "rad": float(close_rad)},
+        {"waypoint": place_dwell_start, "rad": float(GRIPPER_OPEN_RAD)},
+    ]
+    print(
+        f"[motion-planner] Gripper actions: close@{grasp_dwell_start} "
+        f"(rad={close_rad:.3f}, width={object_width*1000:.1f}mm), "
+        f"open@{place_dwell_start}"
+    )
+
+    traj_np = full_traj.numpy().astype(np.float32)
+    dt = 1.0 / 30.0
+    out_metadata = {
+        "num_waypoints": total_waypoints,
+        "num_joints": num_joints,
+        "dt": dt,
+        "encoding": "trajectory",
+        "arm": arm,
+        "grasp_pose": grasp_xyzrpy.tolist(),
+        "place_pose": place_xyzrpy.tolist(),
+        "gripper_actions": json.dumps(gripper_actions),
     }
     node.send_output(
         "joint_trajectory",
@@ -693,12 +919,14 @@ def build_pointcloud(
 
 def _setup_table_plane(optimizer, pc_robot, cam_t, cam_rot, latest_intrinsics,
                        latest_image_size, device):
-    """Compute table plane from camera frustum and set on optimizer.
+    """Compute table plane from camera frustum, filter below-table points, and set on optimizer.
 
-    Returns ``(table_plane, table_polygon)`` for passing to validation.
+    Returns ``(table_plane, table_polygon, pc_filtered, pc_tensor_filtered)``
+    where the last two are the point cloud and GPU tensor with below-table
+    points removed.
     """
     if pc_robot is None or latest_intrinsics is None:
-        return None, None
+        return None, None, pc_robot, None
     fx, fy, cx, cy = latest_intrinsics
     w, h = latest_image_size
     table_plane, table_polygon = compute_table_plane(
@@ -710,7 +938,15 @@ def _setup_table_plane(optimizer, pc_robot, cam_t, cam_rot, latest_intrinsics,
         f"[motion-planner] Table plane: z={plane_z:.3f}, "
         f"bounds=({bounds[0]:.2f}, {bounds[1]:.2f}, {bounds[2]:.2f}, {bounds[3]:.2f})"
     )
-    return table_plane, table_polygon
+
+    # Filter below-table points (floor, arm reflections, table surface)
+    pc_filtered, _mask = filter_below_table(pc_robot, plane_z)
+    pc_tensor_filtered = pointcloud_to_tensor(pc_filtered, device) if len(pc_filtered) > 0 else None
+    print(
+        f"[motion-planner] Point cloud after table filter: "
+        f"{len(pc_filtered)} pts (removed {len(pc_robot) - len(pc_filtered)} below z={plane_z + 0.02:.3f})"
+    )
+    return table_plane, table_polygon, pc_filtered, pc_tensor_filtered
 
 
 def _set_playback(state, traj_np, traj_meta):
@@ -722,9 +958,20 @@ def _set_playback(state, traj_np, traj_meta):
     state["play_start"] = None                           # set on first tick
     state["play_dt"] = float(traj_meta.get("dt", 0.1))
 
+    # Parse gripper actions for playback
+    ga_str = traj_meta.get("gripper_actions", "")
+    if ga_str:
+        try:
+            state["gripper_actions"] = json.loads(ga_str) if isinstance(ga_str, str) else ga_str
+        except (json.JSONDecodeError, TypeError):
+            state["gripper_actions"] = []
+    else:
+        state["gripper_actions"] = []
+    state["gripper_fired"] = set()
+
     if EXPORT_PATH:
         extra = {}
-        for k in ("grasp_pose", "pregrasp_waypoint", "encoding"):
+        for k in ("grasp_pose", "pregrasp_waypoint", "place_pose", "gripper_actions", "encoding"):
             if k in traj_meta:
                 extra[k] = traj_meta[k]
         save_trajectory_json(
@@ -738,7 +985,17 @@ def _set_playback(state, traj_np, traj_meta):
 
 
 def main():
-    device = torch.device(DEVICE if torch.cuda.is_available() else "cpu")
+    if DEVICE == "cuda" and torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif DEVICE not in ("cuda", "mps"):
+        device = torch.device(DEVICE)
+    else:
+        # MPS (Apple Metal) is slower than CPU for trajectory optimization
+        # due to kernel launch overhead on hundreds of small sequential ops.
+        # CUDA gives real speedups; MPS does not.  Default to CPU.
+        if DEVICE == "mps":
+            print("[motion-planner] MPS requested but CPU is faster for this workload, using CPU")
+        device = torch.device("cpu")
     print(f"[motion-planner] Device: {device}")
 
     urdf_path = URDF_PATH
@@ -786,6 +1043,8 @@ def main():
         "play_arm": "left",
         "play_start": None,   # monotonic timestamp of first tick
         "play_dt": 1.0 / 30.0,
+        "gripper_actions": [],  # list of {"waypoint": N, "rad": float}
+        "gripper_fired": set(),
     }
 
     node = Node()
@@ -828,6 +1087,22 @@ def main():
                     pa.array(waypoint, type=pa.float32()),
                     metadata=out_metadata,
                 )
+
+                # Fire gripper commands at the right waypoints
+                for action in playback["gripper_actions"]:
+                    wp = action["waypoint"]
+                    if step >= wp and wp not in playback["gripper_fired"]:
+                        playback["gripper_fired"].add(wp)
+                        rad = float(action["rad"])
+                        print(
+                            f"[motion-planner] Gripper command: rad={rad:.3f} "
+                            f"at step {step} (trigger wp={wp})"
+                        )
+                        node.send_output(
+                            "gripper_command",
+                            pa.array([rad], type=pa.float32()),
+                            metadata={"arm": playback["play_arm"]},
+                        )
 
                 if step >= T - 1 and playback["playing"]:
                     playback["playing"] = False
@@ -917,8 +1192,8 @@ def main():
                     device,
                 )
 
-                # Compute table plane from camera frustum
-                table_plane, table_polygon = _setup_table_plane(
+                # Compute table plane from camera frustum and filter
+                table_plane, table_polygon, pc_robot, pc_tensor = _setup_table_plane(
                     arm.optimizer, pc_robot, cam_t, cam_rot,
                     latest_intrinsics, latest_image_size, device,
                 )
@@ -1060,6 +1335,17 @@ def main():
                     f"jaw2=({u2:.0f},{v2:.0f})"
                 )
 
+                # Parse optional place target
+                place_uv = None
+                place_data = data.get("place")
+                if place_data and len(place_data) >= 2:
+                    place_u = float(place_data[0]) * w / 1000.0
+                    place_v = float(place_data[1]) * h / 1000.0
+                    place_uv = (place_u, place_v)
+                    print(
+                        f"[motion-planner] grasp_result: place=({place_u:.0f},{place_v:.0f})"
+                    )
+
                 # Arm selection from metadata or deprojected Y
                 target_y = _estimate_target_y(
                     u1,
@@ -1090,8 +1376,8 @@ def main():
                     device,
                 )
 
-                # Compute table plane from camera frustum
-                table_plane, table_polygon = _setup_table_plane(
+                # Compute table plane from camera frustum and filter
+                table_plane, table_polygon, pc_robot, pc_tensor = _setup_table_plane(
                     arm.optimizer, pc_robot, cam_t, cam_rot,
                     latest_intrinsics, latest_image_size, device,
                 )
@@ -1118,6 +1404,7 @@ def main():
                     arm=arm_name,
                     table_plane=table_plane,
                     table_polygon=table_polygon,
+                    place_uv=place_uv,
                 )
                 if result is not None:
                     _set_playback(playback, result[0], result[1])
