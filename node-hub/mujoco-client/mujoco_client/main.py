@@ -1,9 +1,7 @@
 """Mujoco Client: This node is used to represent simulated robot, it can be used to read virtual positions, or can be controlled."""
 
 import argparse
-import json
 import os
-import time
 
 import cv2
 import mujoco
@@ -12,70 +10,55 @@ import numpy as np
 import pyarrow as pa
 from dora import Node
 
-#Image constants (must match the downstream pipeline expectations)
-_IMG_W: int = 960
-_IMG_H: int = 600
-_JPEG_QUALITY: int = 90
-
-_IMG_META: dict[str, object] = {
-    "encoding": "jpeg",
-    "width":    _IMG_W,
-    "height":   _IMG_H,
-}
-
-
-def _cam_topic(cam_name: str) -> str:
-    """Derive a Dora-safe output topic name from a camera's XML name.
-
-    Hyphens are replaced with underscores so the name is valid as a YAML
-    key without quoting.  No other transformation is applied, keeping the
-    mapping transparent: "camera-wrist-right" → "camera_wrist_right".
-    """
-    return cam_name.replace("-", "_")
-
 
 class Client:
     """Generic MuJoCo simulation node."""
 
-    def __init__(self, config: dict[str, str]) -> None:
-        
+    def __init__(self, config: dict[str, object]) -> None:
+        """Initialise model, optional off-screen renderer, and Dora node."""
         self.m = mujoco.MjModel.from_xml_path(filename=config["scene"])
         self.data = mujoco.MjData(self.m)
 
-        print(
-            f"Model loaded: nq={self.m.nq}  nv={self.m.nv}  "
-            f"nu={self.m.nu}  ncam={self.m.ncam}",
-            flush=True,
-        )
+        self._render_cameras: bool = bool(config.get("render_cameras", False))
+        self._cameras: list[tuple[int, str]] = []
 
-        self._gl_ctx = mujoco.GLContext(_IMG_W, _IMG_H)
-        self._gl_ctx.make_current()
+        if self._render_cameras:
+            img_w: int = int(config["img_width"])
+            img_h: int = int(config["img_height"])
+            jpeg_quality: int = int(config["jpeg_quality"])
 
-        self._scene    = mujoco.MjvScene(self.m, maxgeom=10_000)
-        self._cam      = mujoco.MjvCamera()
-        self._opt      = mujoco.MjvOption()
-        self._pert     = mujoco.MjvPerturb()
-        self._viewport = mujoco.MjrRect(0, 0, _IMG_W, _IMG_H)
-        self._mjr_ctx  = mujoco.MjrContext(self.m, mujoco.mjtFontScale.mjFONTSCALE_150)
+            self._img_meta: dict[str, object] = {
+                "encoding": "jpeg",
+                "width": img_w,
+                "height": img_h,
+            }
+            self._jpeg_quality = jpeg_quality
 
-        # mjCAMERA_FIXED → a named <camera> element from the XML.
-        # fixedcamid is set per-render; type is set once here.
-        self._cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
+            self._gl_ctx = mujoco.GLContext(img_w, img_h)
+            self._gl_ctx.make_current()
 
-        # Pre-allocated pixel buffer — reused every render, no per-frame alloc.
-        self._rgb_buf = np.zeros((_IMG_H, _IMG_W, 3), dtype=np.uint8)
+            self._scene    = mujoco.MjvScene(self.m, maxgeom=10_000)
+            self._cam      = mujoco.MjvCamera()
+            self._opt      = mujoco.MjvOption()
+            self._pert     = mujoco.MjvPerturb()
+            self._viewport = mujoco.MjrRect(0, 0, img_w, img_h)
+            self._mjr_ctx  = mujoco.MjrContext(self.m, mujoco.mjtFontScale.mjFONTSCALE_150)
 
-        # Read every camera declared in the XML at startup.
-        # Camera index i == the id returned by mj_name2id, so no runtime lookup.
-        self._cameras: list[tuple[int, str]] = []   # (cam_id, dora_topic)
-        for i in range(self.m.ncam):
-            name  = self.m.camera(i).name
-            topic = _cam_topic(name)
-            self._cameras.append((i, topic))
-            print(f"  camera[{i}] '{name}' → topic '{topic}'", flush=True)
+            # mjCAMERA_FIXED → a named <camera> element from the XML.
+            # fixedcamid is set per-render; type is set once here.
+            self._cam.type = mujoco.mjtCamera.mjCAMERA_FIXED
 
-        if not self._cameras:
-            print("WARNING: no cameras found in model — no image output", flush=True)
+            # Pre-allocated pixel buffer — reused every render, no per-frame alloc.
+            self._rgb_buf = np.zeros((img_h, img_w, 3), dtype=np.uint8)
+
+            # Read every camera declared in the XML at startup.
+            # Camera index i == the id returned by mj_name2id, so no runtime lookup.
+            for i in range(self.m.ncam):
+                name = self.m.camera(i).name
+                self._cameras.append((i, name))
+
+            if not self._cameras:
+                print("WARNING: no cameras found in model — no image output", flush=True)
 
         # Warn once at startup if the model has no actuators.
         if self.m.nu == 0:
@@ -92,9 +75,9 @@ class Client:
                 if event["type"] != "INPUT":
                     continue
 
-                eid = event["id"]
+                event_id = event["id"]
 
-                if eid == "tick":
+                if event_id == "tick":
                     # Echo the tick first so the downstream dataflow does not
                     # stall while we spend time in mj_step.
                     self.node.send_output("tick", pa.array([]), event["metadata"])
@@ -106,15 +89,15 @@ class Client:
                     viewer.sync()
                     self._publish_state()
 
-                elif eid == "render":
+                elif event_id == "render" and self._render_cameras:
                     # Decoupled from the physics tick: encoding four 960×600
                     # JPEGs at 250 Hz would block the control loop entirely.
                     self._render_and_publish()
 
-                elif eid == "action":
+                elif event_id == "action":
                     self._handle_action(event["value"])
 
-    def _handle_action(self, value: pa.Array | pa.ChunkedArray) -> None:
+    def _handle_action(self, value: pa.Array) -> None:
         """Write the incoming flat action array into data.ctrl.
 
         The caller is responsible for ordering the values to match the
@@ -122,13 +105,6 @@ class Client:
         order of <actuator> elements in the scene file).
         """
         if self.m.nu == 0:
-            return
-
-        if not isinstance(value, (pa.Array, pa.ChunkedArray)):
-            print(
-                f"WARNING: action expected pa.Array, got {type(value).__name__} — ignored",
-                flush=True,
-            )
             return
 
         vals = np.asarray(value, dtype=np.float64)
@@ -158,9 +134,12 @@ class Client:
           mjv_updateScene → mjr_render → mjr_readPixels
           → cv2.flip (OpenGL bottom-up → top-down)
           → cv2.cvtColor RGB→BGR
-          → cv2.imencode JPEG q90
+          → cv2.imencode JPEG
           → node.send_output
         """
+        if not self._cameras:
+            return
+
         # Re-assert our EGL context as current.  The passive viewer runs in a
         # background thread with its own GLFW context; this call is a ~1 µs
         # guard against any threading edge-cases.
@@ -182,24 +161,74 @@ class Client:
             bgr = cv2.cvtColor(cv2.flip(self._rgb_buf, 0), cv2.COLOR_RGB2BGR)
 
             ret, jpeg = cv2.imencode(
-                ".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, _JPEG_QUALITY]
+                ".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, self._jpeg_quality]
             )
             if ret:
-                self.node.send_output(topic, pa.array(jpeg.ravel()), _IMG_META)
+                self.node.send_output(topic, pa.array(jpeg.ravel()), self._img_meta)
 
 
 def main() -> None:
-    """Parse CLI arguments and start the simulation node."""
-    parser = argparse.ArgumentParser(description="Generic MuJoCo simulation node")
-    parser.add_argument("--name",  type=str, default="mujoco")
-    parser.add_argument("--scene", type=str, help="Path to the MuJoCo XML scene file")
+    """Handle dynamic nodes, ask for the name of the node in the dataflow."""
+    parser = argparse.ArgumentParser(
+        description="MuJoCo Client: This node is used to represent a MuJoCo simulation. "
+        "It can be used instead of a follower arm to test the dataflow.",
+    )
+
+    parser.add_argument(
+        "--name",
+        type=str,
+        required=False,
+        help="The name of the node in the dataflow.",
+        default="mujoco_client",
+    )
+    parser.add_argument(
+        "--scene",
+        type=str,
+        required=False,
+        help="The scene file of the MuJoCo simulation.",
+    )
+    parser.add_argument(
+        "--cameras",
+        action="store_true",
+        help="Enable off-screen camera rendering and publish JPEG frames per 'render' tick.",
+    )
+    parser.add_argument(
+        "--img-width",
+        type=int,
+        default=None,
+        help="Width of rendered camera images in pixels (default: IMG_WIDTH env var or 960).",
+    )
+    parser.add_argument(
+        "--img-height",
+        type=int,
+        default=None,
+        help="Height of rendered camera images in pixels (default: IMG_HEIGHT env var or 600).",
+    )
+    parser.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=None,
+        help="JPEG encoding quality 0-100 (default: JPEG_QUALITY env var or 90).",
+    )
+
     args = parser.parse_args()
 
-    scene = os.getenv("SCENE", args.scene)
-    if not scene:
-        raise ValueError("Provide --scene <path> or set the SCENE environment variable")
+    if not os.getenv("SCENE") and args.scene is None:
+        raise ValueError(
+            "Please set the SCENE environment variable or pass the --scene argument.",
+        )
 
-    config = {"name": args.name, "scene": scene}
+    scene = os.getenv("SCENE", args.scene)
+
+    config = {
+        "name": args.name,
+        "scene": scene,
+        "render_cameras": args.cameras,
+        "img_width":    args.img_width    or int(os.getenv("IMG_WIDTH",    960)),
+        "img_height":   args.img_height   or int(os.getenv("IMG_HEIGHT",   600)),
+        "jpeg_quality": args.jpeg_quality or int(os.getenv("JPEG_QUALITY",  90)),
+    }
+
     print("MuJoCo Client Configuration:", config, flush=True)
 
     Client(config).run()
