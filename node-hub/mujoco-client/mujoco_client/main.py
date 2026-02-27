@@ -23,8 +23,8 @@ class Client:
         self._cameras: list[tuple[int, str]] = []
 
         if self._render_cameras:
-            img_w: int = int(config["img_width"])
-            img_h: int = int(config["img_height"])
+            img_w: int = int(config["image_width"])
+            img_h: int = int(config["image_height"])
             jpeg_quality: int = int(config["jpeg_quality"])
 
             self._img_meta: dict[str, object] = {
@@ -58,11 +58,10 @@ class Client:
                 self._cameras.append((i, name))
 
             if not self._cameras:
-                print("WARNING: no cameras found in model — no image output", flush=True)
+                raise RuntimeError("--cameras was passed but no cameras were found in the MuJoCo model")
 
-        # Warn once at startup if the model has no actuators.
         if self.m.nu == 0:
-            print("WARNING: model has no actuators (m.nu=0) — action input ignored", flush=True)
+            raise RuntimeError("model has no actuators (m.nu=0) — cannot process action input")
 
         self.node = Node(config["name"])
 
@@ -110,22 +109,18 @@ class Client:
         vals = np.asarray(value, dtype=np.float64)
 
         if len(vals) != self.m.nu:
-            print(
-                f"WARNING: action length {len(vals)} != m.nu {self.m.nu} "
-                f"— writing first {min(len(vals), self.m.nu)} values",
-                flush=True,
+            raise ValueError(
+                f"action length {len(vals)} != m.nu {self.m.nu}"
             )
 
-        n = min(len(vals), self.m.nu)
-        self.data.ctrl[:n] = vals[:n]
+        self.data.ctrl[:] = vals
 
     def _publish_state(self) -> None:
-        """Publish full generalised coordinates and ready status."""
+        """Publish full generalised coordinates."""
         self.node.send_output(
             "joint_state",
             pa.array(self.data.qpos.astype(np.float32)),
         )
-        self.node.send_output("status", pa.array(["ready"]))
 
     def _render_and_publish(self) -> None:
         """Render every model camera off-screen and publish as JPEG.
@@ -193,16 +188,16 @@ def main() -> None:
         help="Enable off-screen camera rendering and publish JPEG frames per 'render' tick.",
     )
     parser.add_argument(
-        "--img-width",
+        "--image-width",
         type=int,
         default=None,
-        help="Width of rendered camera images in pixels (default: IMG_WIDTH env var or 960).",
+        help="Width of rendered camera images in pixels (default: IMAGE_WIDTH env var or 960).",
     )
     parser.add_argument(
-        "--img-height",
+        "--image-height",
         type=int,
         default=None,
-        help="Height of rendered camera images in pixels (default: IMG_HEIGHT env var or 600).",
+        help="Height of rendered camera images in pixels (default: IMAGE_HEIGHT env var or 600).",
     )
     parser.add_argument(
         "--jpeg-quality",
@@ -224,12 +219,10 @@ def main() -> None:
         "name": args.name,
         "scene": scene,
         "render_cameras": args.cameras,
-        "img_width":    args.img_width    or int(os.getenv("IMG_WIDTH",    960)),
-        "img_height":   args.img_height   or int(os.getenv("IMG_HEIGHT",   600)),
-        "jpeg_quality": args.jpeg_quality or int(os.getenv("JPEG_QUALITY",  90)),
+        "image_width":  int(os.getenv("IMAGE_WIDTH",  str(args.image_width  or 960))),
+        "image_height": int(os.getenv("IMAGE_HEIGHT", str(args.image_height or 600))),
+        "jpeg_quality": int(os.getenv("JPEG_QUALITY", str(args.jpeg_quality or 90))),
     }
-
-    print("MuJoCo Client Configuration:", config, flush=True)
 
     Client(config).run()
 
