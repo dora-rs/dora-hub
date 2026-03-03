@@ -48,6 +48,7 @@ class JointNamesProvider(Protocol):
 
 class IKStateContainer(TypedDict):
     """Shared IK state container used between threads."""
+
     q: NDArray[np.float32]
     active: bool
     xr_state: XRState | None
@@ -189,7 +190,6 @@ def reorder_joint_state_for_rerun(
 
 def main():
     """Entry point for the dora-teleop-xr node."""
-    
     jax.config.update("jax_platform_name", "cpu")
 
     robot_class_path = os.environ.get(

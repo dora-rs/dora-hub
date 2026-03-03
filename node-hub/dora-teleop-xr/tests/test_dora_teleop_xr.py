@@ -7,7 +7,6 @@ from dora_teleop_xr.main import pose_to_array, reorder_joint_state_for_rerun
 
 def test_pose_to_array():
     """Test pose_to_array function."""
-
     class MockPose:
         """Mock pose object."""
 
@@ -41,7 +40,7 @@ def test_so101_robot_init():
 
 def test_reorder_joint_state_for_rerun_so101_order():
     """Test joint state reordering for SO101 URDF traversal order."""
-    so101_order  = (
+    so101_order = (
         "shoulder_pan",
         "shoulder_lift",
         "elbow_flex",
@@ -67,7 +66,6 @@ def test_reorder_joint_state_for_rerun_so101_order():
 
 def test_reorder_joint_state_for_rerun_unknown_names_keeps_input():
     """Test unknown joint names are passed through unchanged."""
-
     class MockRobot:
         actuated_joint_names = ["joint_a", "joint_b"]
 
