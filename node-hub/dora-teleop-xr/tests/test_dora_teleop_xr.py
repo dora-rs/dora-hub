@@ -41,7 +41,7 @@ def test_so101_robot_init():
 
 def test_reorder_joint_state_for_rerun_so101_order():
     """Test joint state reordering for SO101 URDF traversal order."""
-    SO101_ORDER = (
+    so101_order  = (
         "shoulder_pan",
         "shoulder_lift",
         "elbow_flex",
@@ -59,7 +59,7 @@ def test_reorder_joint_state_for_rerun_so101_order():
         ]
 
     q_current = np.array([1, 2, 3, 4, 5], dtype=np.float32)
-    reordered = reorder_joint_state_for_rerun(MockRobot(), q_current, SO101_ORDER)
+    reordered = reorder_joint_state_for_rerun(MockRobot(), q_current, so101_order )
 
     expected = np.array([5, 4, 3, 2, 1], dtype=np.float32)
     assert np.allclose(reordered, expected)
