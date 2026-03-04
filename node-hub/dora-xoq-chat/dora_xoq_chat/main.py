@@ -37,13 +37,16 @@ VLM_PARSE_PROMPT = (
 
 def _chat_recv_thread(chat, msg_queue, stop_event):
     """Background thread: poll chat.recv() and push messages to queue."""
+    print("[chat] recv thread started")
     while not stop_event.is_set():
         try:
             msg = chat.recv(timeout=0.5)
             if msg is not None:
+                print(f"[chat] recv: {msg.name}: {msg.text}")
                 msg_queue.put(msg)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[chat] recv error: {e}")
+    print("[chat] recv thread stopped")
 
 
 def _send_vlm_text(node, text):
@@ -96,7 +99,7 @@ def main():
                         break
 
                     # Ignore our own messages
-                    sender = getattr(msg, "sender", None) or ""
+                    sender = getattr(msg, "name", "") or ""
                     if sender == CHAT_USERNAME:
                         continue
 
