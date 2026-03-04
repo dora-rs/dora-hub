@@ -12,10 +12,18 @@ import json
 import os
 import queue
 import re
+import sys
 import threading
 
 import pyarrow as pa
 from dora import Node
+
+# Force unbuffered output so dora logs captures prints immediately
+os.environ["PYTHONUNBUFFERED"] = "1"
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True)
 
 CHAT_CHANNEL = os.getenv("CHAT_CHANNEL", "anon/openarm-chat")
 CHAT_RELAY = os.getenv("CHAT_RELAY", "https://cdn.1ms.ai")
@@ -74,7 +82,7 @@ def main():
     from xoq_chat import Chat
 
     chat = Chat(CHAT_CHANNEL, relay=CHAT_RELAY, username=CHAT_USERNAME)
-    print(f"[chat] Connected to {CHAT_RELAY} channel={CHAT_CHANNEL} as {CHAT_USERNAME}")
+    print(f"[chat] Connected to {CHAT_RELAY} channel={CHAT_CHANNEL} as {CHAT_USERNAME}", flush=True)
 
     msg_queue = queue.Queue()
     stop_event = threading.Event()
