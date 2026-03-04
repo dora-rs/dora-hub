@@ -18,9 +18,10 @@ def depth_to_pointcloud(
     width: int = 640,
     height: int = 480,
     stride: int = 8,
-    min_depth_mm: int = 10,
+    min_depth_mm: int = 100,
     max_depth_mm: int = 2000,
-) -> np.ndarray:
+    color_image: np.ndarray | None = None,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Convert a mono16 depth image to a 3D point cloud in camera frame.
 
     Args:
@@ -30,9 +31,13 @@ def depth_to_pointcloud(
         width, height: Image dimensions.
         stride: Downsample factor (take every stride-th pixel in each axis).
         min_depth_mm, max_depth_mm: Valid depth range.
+        color_image: Optional (H, W, 3) uint8 RGB image.  When provided,
+            returns ``(points, colors)`` where *colors* is (N, 3) float32
+            in [0, 1] matching each 3D point.
 
     Returns:
-        (N, 3) float32 array of 3D points in camera frame (metres).
+        (N, 3) float32 points, or ``(points, colors)`` when *color_image*
+        is provided.
     """
     depth_2d = depth_map.reshape(height, width)
 
@@ -57,14 +62,23 @@ def depth_to_pointcloud(
     v = v[valid]
 
     if len(d) == 0:
-        return np.zeros((0, 3), dtype=np.float32)
+        empty = np.zeros((0, 3), dtype=np.float32)
+        return (empty, empty) if color_image is not None else empty
 
     # Deproject: camera frame (z forward, x right, y down)
     z = d * 0.001  # mm -> m
     x = (u - cx) * z / fx
     y = (v - cy) * z / fy
 
-    return np.stack([x, y, z], axis=-1).astype(np.float32)
+    points = np.stack([x, y, z], axis=-1).astype(np.float32)
+
+    if color_image is not None:
+        ui = u.astype(np.intp)
+        vi = v.astype(np.intp)
+        colors = color_image[vi, ui].astype(np.float32) / 255.0
+        return points, colors
+
+    return points
 
 
 def parse_camera_transform(transform_str: str) -> tuple[np.ndarray, Rotation]:
@@ -79,8 +93,10 @@ def parse_camera_transform(transform_str: str) -> tuple[np.ndarray, Rotation]:
             Conversion:
               - Position: (x_s, y_s, z_s) → (x_s, -z_s, y_s)  [Rx(90°)]
               - Rotation: R_urdf = Rx(90°) @ R_scene @ diag(-1,-1,1)
-                where R_scene = Rz(yaw) * Ry(pitch) * Rx(roll) in degrees,
-                and diag(-1,-1,1) accounts for the viewer's negated XY
+                where R_scene = Ry(yaw) @ Rx(roll) @ Ry(pitch).
+                The viewer's IMU path decomposes gravity as ZYX euler
+                (roll=x, pitch=y) then applies yaw separately around Y.
+                diag(-1,-1,1) accounts for the viewer's negated XY
                 deprojection (see openarm.html updatePointCloudGeneric).
 
         7 values: "tx ty tz qw qx qy qz"
@@ -97,11 +113,14 @@ def parse_camera_transform(transform_str: str) -> tuple[np.ndarray, Rotation]:
         t = np.array([x_s, -z_s, y_s], dtype=np.float32)
 
         # Rotation: scene R_scene → URDF R_correct
+        # IMU convention: gravity is decomposed as ZYX euler (roll=x, pitch=y),
+        # then yaw is applied separately around Y.
+        # R_scene = Ry(yaw) @ Rx(roll) @ Ry(pitch)
         roll_deg, pitch_deg, yaw_deg = parts[3], parts[4], parts[5]
-        R_scene = Rotation.from_euler(
-            "xyz",
-            [roll_deg, pitch_deg, yaw_deg],
-            degrees=True,
+        R_scene = (
+            Rotation.from_euler("y", yaw_deg, degrees=True)
+            * Rotation.from_euler("x", roll_deg, degrees=True)
+            * Rotation.from_euler("y", pitch_deg, degrees=True)
         ).as_matrix()
         # Rx(90°): converts Y-up scene to Z-up URDF
         Rx90 = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float64)
@@ -134,6 +153,42 @@ def pointcloud_to_tensor(points: np.ndarray, device: torch.device) -> torch.Tens
     return torch.tensor(points, dtype=torch.float32, device=device)
 
 
+def filter_below_table(
+    pc_robot: np.ndarray,
+    table_z: float,
+    margin: float = 0.02,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Remove points at or below the table surface.
+
+    Keeps only points more than *margin* above *table_z*.  This removes
+    table surface points, floor points, and arm-below-table reflections.
+
+    Returns:
+        ``(filtered_points, mask)`` — the filtered (M, 3) array and the
+        boolean mask applied to *pc_robot*.
+    """
+    mask = pc_robot[:, 2] > table_z + margin
+    return pc_robot[mask], mask
+
+
+def mask_near_point(
+    pc: np.ndarray,
+    center: np.ndarray,
+    radius: float,
+) -> np.ndarray:
+    """Boolean mask excluding points within *radius* of *center*.
+
+    Useful for removing a grasped object's points from the SDF so the
+    optimizer doesn't treat the held object as an obstacle during
+    transport/retreat phases.
+
+    Returns:
+        (N,) boolean mask — True for points to KEEP.
+    """
+    dist = np.linalg.norm(pc - center, axis=1)
+    return dist > radius
+
+
 def compute_table_plane(
     cam_t: np.ndarray,
     cam_rot: Rotation,
@@ -150,10 +205,10 @@ def compute_table_plane(
     """Compute a table collision plane from camera frustum and point cloud.
 
     Projects the four image corners as rays from the camera origin and
-    intersects them with a horizontal plane at the *z_percentile*-th
-    height of the point cloud.  Returns an AABB-bounded plane suitable
-    for :func:`TrajectoryOptimizer.table_plane` and an optional tight
-    polygon for :func:`capsule_halfplane_distance`.
+    intersects them with a horizontal plane at the detected table height.
+    Uses histogram peak detection (1 cm bins) to find the dominant
+    horizontal surface, which is robust against floor and arm points
+    that would skew a simple percentile estimate.
 
     Args:
         cam_t: (3,) camera translation in robot frame.
@@ -162,7 +217,8 @@ def compute_table_plane(
         w, h: Image width/height in pixels.
         pc_robot: (N, 3) point cloud already in robot frame.
         device: Torch device for the returned polygon tensor.
-        z_percentile: Percentile of Z values to use as the table height.
+        z_percentile: Fallback percentile (used only when histogram
+            detection cannot run).
 
     Returns:
         ``(table_plane, table_polygon)`` where *table_plane* is
@@ -170,7 +226,36 @@ def compute_table_plane(
         is a ``(4, 2)`` tensor of the frustum footprint (or ``None`` if
         fewer than 4 corners could be projected).
     """
-    table_top_z = float(np.percentile(pc_robot[:, 2], z_percentile))
+    # Histogram peak detection: bin Z values into 1 cm bins, find
+    # significant horizontal surfaces, and pick the *highest* one as the
+    # table.  This distinguishes the table from the ground/floor: both
+    # are dense horizontal surfaces, but the table is higher.
+    z_vals = pc_robot[:, 2]
+    bin_edges = np.arange(float(z_vals.min()), float(z_vals.max()) + 0.01, 0.01)
+    if len(bin_edges) >= 2:
+        counts, edges = np.histogram(z_vals, bins=bin_edges)
+        # A "significant" surface has at least 5% of total points.
+        threshold = max(len(z_vals) * 0.05, 1)
+        significant = np.where(counts >= threshold)[0]
+        if len(significant) > 0:
+            # Group significant bins into contiguous clusters.  A gap of
+            # >3 cm (3 bins) between significant bins starts a new cluster.
+            # The table is the *highest* cluster (floor is lower).
+            clusters: list[list[int]] = [[significant[0]]]
+            for i in range(1, len(significant)):
+                if significant[i] - significant[i - 1] > 3:
+                    clusters.append([])
+                clusters[-1].append(significant[i])
+            # Pick the highest cluster — its densest bin is the table.
+            best_cluster = np.array(clusters[-1])
+            peak_in_cluster = best_cluster[int(counts[best_cluster].argmax())]
+            table_top_z = float((edges[peak_in_cluster] + edges[peak_in_cluster + 1]) / 2)
+        else:
+            # No significant bin — fall back to global peak.
+            peak_idx = int(counts.argmax())
+            table_top_z = float((edges[peak_idx] + edges[peak_idx + 1]) / 2)
+    else:
+        table_top_z = float(np.percentile(z_vals, z_percentile))
 
     rot_matrix = cam_rot.as_matrix() if hasattr(cam_rot, "as_matrix") else np.array(cam_rot)
     corners_uv = [(0, 0), (w, 0), (w, h), (0, h)]

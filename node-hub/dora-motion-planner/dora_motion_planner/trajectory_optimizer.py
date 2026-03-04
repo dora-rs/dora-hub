@@ -55,12 +55,15 @@ class TrajectoryOptimizer:
         # smoothness prevents jerky motion.  Collision barriers use the same
         # margin as the post-hoc safety check (SAFETY_MARGIN) to avoid
         # routing close to obstacles that later fail validation.
-        self.w_cart_path = 5000.0  # dominant — Cartesian EE path length
+        self.w_cart_path = 5000.0  # Cartesian EE path length
+        self.w_joint_path = 10000.0  # joint-space velocity — penalises total joint travel
         self.w_smooth = 1.0        # joint-space acceleration penalty
         self.w_env = 20.0          # obstacle avoidance
-        self.w_self = 5.0          # self-collision
+        self.w_self = 200.0        # self-collision + body capsule
         self.w_table = 100.0       # table backup (lift phase is primary)
         self.w_goal_residual = 10.0
+        self.w_min_height = 500.0  # penalty for EE dipping below min_ee_z
+        self.min_ee_z: float | None = None  # set via set_min_height()
 
         # Store the EE link name for Cartesian path cost
         self._ee_link = chain.get_link_names()[-1]
@@ -83,6 +86,11 @@ class TrajectoryOptimizer:
         """
         self.table_plane = table_plane
         self.table_polygon = table_polygon
+
+    def set_min_height(self, min_z: float | None):
+        """Set a minimum EE height. The optimizer penalizes the EE for
+        dipping below this Z, keeping the arm high during optimized phases."""
+        self.min_ee_z = min_z
 
     def _q_to_phi_local(self, q: torch.Tensor) -> torch.Tensor:
         """Map joint angles to unconstrained space via inverse-sigmoid.
@@ -218,6 +226,7 @@ class TrajectoryOptimizer:
         max_iters: int = 200,
         lr: float = 0.01,
         patience: int = 50,
+        init_trajectory: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, float]:
         """Multi-start GPU-batched trajectory optimisation.
 
@@ -234,6 +243,9 @@ class TrajectoryOptimizer:
             max_iters: Adam iterations.
             lr: Learning rate.
             patience: Stop early if no seed improves by >1% for this many iters.
+            init_trajectory: Optional (T_init, J) warm-start trajectory.
+                Resampled to T waypoints and converted to delta_logits.
+                Seed 0 uses this init; other seeds add noise.
 
         Returns:
             (best_traj, best_cost) — best_traj is (T, J) tensor.
@@ -247,18 +259,44 @@ class TrajectoryOptimizer:
         if point_cloud is not None and len(point_cloud) > 0:
             sdf = VoxelSDF(point_cloud.to(self.device).detach())
 
-        # Compute per-joint max step (auto-enlarged for large motions)
+        # Compute per-joint max step
         max_step = self._compute_max_step(q_start, q_goal, T)  # (J,)
 
-        # Initialise delta_logits so that the trajectory starts as a linear
-        # interpolation: nominal_delta = (q_goal - q_start) / (T-1), then
-        # invert through tanh to get the logit.
-        nominal_delta = (q_goal - q_start) / (T - 1)  # (J,)
-        ratio = (nominal_delta / max_step).clamp(-0.99, 0.99)
-        logit_init = torch.atanh(ratio)  # (J,)
-
-        # Expand to (S, T-1, J) — all seeds start from the same linear interp
-        delta_logits = logit_init.view(1, 1, J).expand(S, T - 1, J).clone()
+        if init_trajectory is not None:
+            # Warm-start: resample init_trajectory to T waypoints, compute
+            # deltas, and convert to logits via atanh.
+            init_traj = init_trajectory.to(self.device).detach()
+            T_init = init_traj.shape[0]
+            if T_init != T:
+                # Resample to T waypoints via linear interpolation
+                t_old = torch.linspace(0, 1, T_init, device=self.device)
+                t_new = torch.linspace(0, 1, T, device=self.device)
+                init_traj = torch.stack([
+                    torch.from_numpy(
+                        __import__('numpy').interp(t_new.cpu().numpy(), t_old.cpu().numpy(),
+                                                    init_traj[:, j].cpu().numpy())
+                    ).to(self.device).float()
+                    for j in range(J)
+                ], dim=-1)  # (T, J)
+            # Force start/end to match q_start/q_goal
+            init_traj[0] = q_start
+            init_traj[-1] = q_goal
+            # Recompute max_step from actual init deltas so the trajectory
+            # can be faithfully encoded (the straight-line max_step is too small
+            # for trajectories that detour, e.g. lift then approach).
+            init_deltas = init_traj[1:] - init_traj[:-1]  # (T-1, J)
+            max_delta = init_deltas.abs().max(dim=0).values  # (J,)
+            max_step = torch.maximum(max_step, max_delta * 2.0)  # 2x headroom
+            # Convert to logits
+            init_ratio = (init_deltas / max_step.unsqueeze(0)).clamp(-0.99, 0.99)
+            logit_init_2d = torch.atanh(init_ratio)  # (T-1, J)
+            delta_logits = logit_init_2d.unsqueeze(0).expand(S, T - 1, J).clone()
+        else:
+            # Default: linear interpolation from q_start to q_goal
+            nominal_delta = (q_goal - q_start) / (T - 1)  # (J,)
+            ratio = (nominal_delta / max_step).clamp(-0.99, 0.99)
+            logit_init = torch.atanh(ratio)  # (J,)
+            delta_logits = logit_init.view(1, 1, J).expand(S, T - 1, J).clone()
 
         # Seed diversity: add noise to seeds 1..S-1
         if S > 1:
@@ -364,8 +402,9 @@ class TrajectoryOptimizer:
         """
         J = q_traj.shape[-1]
 
-        # Joint-space smoothness (acceleration)
+        # Joint-space velocity (total joint travel) and smoothness (acceleration)
         vel = q_traj[:, 1:] - q_traj[:, :-1]             # (S, T-1, J)
+        joint_path_cost = (vel ** 2).sum(dim=(-1, -2))      # (S,)
         acc = vel[:, 1:] - vel[:, :-1]                     # (S, T-2, J)
         smooth_cost = (acc ** 2).sum(dim=(-1, -2))          # (S,)
 
@@ -395,13 +434,22 @@ class TrajectoryOptimizer:
         if goal_residual is not None:
             residual_cost = (goal_residual ** 2).sum(dim=-1)  # (S,)
 
+        # Min-height penalty — penalize EE for dipping below min_ee_z
+        height_cost = torch.zeros(S, device=self.device)
+        if self.min_ee_z is not None:
+            ee_z = ee_pos[:, :, 2]  # (S, T)
+            violation = (self.min_ee_z - ee_z).clamp(min=0.0)  # positive when below
+            height_cost = (violation ** 2).sum(dim=-1)  # (S,)
+
         return (
             self.w_cart_path * cart_path_cost
+            + self.w_joint_path * joint_path_cost
             + self.w_smooth * smooth_cost
             + self.w_env * env_cost
             + self.w_self * self_cost
             + self.w_table * table_cost
             + self.w_goal_residual * residual_cost
+            + self.w_min_height * height_cost
         )
 
     def _env_cost_batched(
@@ -469,6 +517,23 @@ class TrajectoryOptimizer:
             sd = capsule_capsule_distance(p0_i, p1_i, r_i, p0_j, p1_j, r_j)  # (S*T,)
             barrier = self._one_sided_barrier(sd, alpha)
             cost = cost + barrier.reshape(S, T).sum(dim=-1)
+
+        # Body capsule: check each arm link against the static support pole.
+        # Skip the first N links (mounted on/adjacent to the body).
+        if self.capsules.body_capsule is not None:
+            B = S * T
+            body_p0 = self.capsules.body_p0.unsqueeze(0).expand(B, -1)
+            body_p1 = self.capsules.body_p1.unsqueeze(0).expand(B, -1)
+            body_r = self.capsules.body_radius
+            skip = self.capsules.body_skip_links
+            for name in link_names[skip:]:
+                if name not in transforms:
+                    continue
+                p0_w, p1_w = self.capsules.capsule_endpoints_world(name, transforms)
+                r = self.capsules.radii[name]
+                sd = capsule_capsule_distance(p0_w, p1_w, r, body_p0, body_p1, body_r)
+                barrier = self._one_sided_barrier(sd, alpha)
+                cost = cost + barrier.reshape(S, T).sum(dim=-1)
 
         return cost
 

@@ -1,16 +1,16 @@
 """Trajectory JSON save/load — no dora dependency.
 
-JSON format::
+JSON format (v3 — Linux socketcan wire frames)::
 
     {
-      "version": 2,
+      "version": 3,
       "metadata": {
         "arm": "left",
         "num_joints": 7,
         "num_waypoints": 200,
         "dt": 0.1,
-        "kp": 30.0,
-        "kd": 1.0,
+        "motor_kp": [300.0, 300.0, 150.0, 150.0, 40.0, 40.0, 30.0],
+        "motor_kd": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
         "motor_ids": ["0x01", "0x02", ...],
         "created": "2026-02-21T12:00:00+00:00",
         ...
@@ -19,8 +19,8 @@ JSON format::
         {
           "t": 0.0,
           "frames": [
-            {"id": "0x01", "data": "<base64 8-byte MIT command>"},
-            {"id": "0x02", "data": "<base64 8-byte MIT command>"},
+            {"id": "0x01", "data": "<base64 72-byte canfd_frame>"},
+            {"id": "0x02", "data": "<base64 72-byte canfd_frame>"},
             ...
           ]
         },
@@ -28,21 +28,37 @@ JSON format::
       ]
     }
 
-Each ``data`` field is ``base64(8 bytes)`` — a Damiao MIT protocol CAN frame
-ready to be sent on the bus.  Decode with::
+Each ``data`` field is ``base64(72 bytes)`` — a Linux ``struct canfd_frame``
+ready to be written to the wire::
+
+    struct canfd_frame {        // 72 bytes total, fixed size
+        u32 can_id;             // CAN ID + flags (LE)
+        u8  len;                // payload length (0-64)
+        u8  flags;              // CANFD_BRS=0x01, CANFD_ESI=0x02
+        u8  __res0;             // reserved
+        u8  __res1;             // reserved
+        u8  data[64];           // payload, zero-padded
+    };
+
+The ``id`` field is kept for human readability.  Decode with::
 
     import base64
-    raw = base64.b64decode(frame["data"])  # 8 bytes
+    wire = base64.b64decode(frame["data"])  # 72 bytes
+    can_id = int.from_bytes(wire[0:4], "little") & 0x1FFFFFFF
+    data_len = wire[4]
+    payload = wire[8:8+data_len]            # 8-byte MIT command
+
+Also reads v2 (8-byte MIT-only ``data``) for backwards compatibility.
 
 Usage::
 
     from dora_motion_planner.trajectory_json import save, load
 
-    # Save a trajectory (radians → CAN frames)
+    # Save a trajectory (radians → CAN wire frames)
     traj = np.random.randn(200, 7).astype(np.float32)
-    save("grasp.json", traj, arm="left", dt=0.1, kp=30.0, kd=1.0)
+    save("grasp.json", traj, arm="left", dt=0.1)
 
-    # Load it back (CAN frames → radians)
+    # Load it back (CAN wire frames → radians)
     traj, metadata = load("grasp.json")
 """
 
@@ -67,6 +83,10 @@ MOTOR_IDS_RIGHT = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]
 GRIPPER_MOTOR_ID = 0x08
 GRIPPER_OPEN_RAD = -1.0472   # -60° = fully open (44mm finger travel)
 GRIPPER_CLOSED_RAD = 0.0     # fully closed
+
+# Per-motor gains (motors 1-8), matching openarm_playback.rs
+MOTOR_KP = [300.0, 300.0, 150.0, 150.0, 40.0, 40.0, 30.0, 30.0]
+MOTOR_KD = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
 
 
 def _float_to_uint(x: float, x_min: float, x_max: float, bits: int) -> int:
@@ -111,6 +131,31 @@ def _decode_mit_position(data: bytes) -> float:
     return _uint_to_float(p_raw, -Q_MAX, Q_MAX, 16)
 
 
+# ---- Linux canfd_frame wire format (72 bytes) ----
+
+CANFD_FRAME_SIZE = 72
+
+
+def _encode_wire_frame(can_id: int, data: bytes) -> bytes:
+    """Encode a CAN frame as a 72-byte Linux ``struct canfd_frame``.
+
+    Layout: [4B can_id LE][1B len][1B flags][2B reserved][64B data zero-padded]
+    """
+    buf = bytearray(CANFD_FRAME_SIZE)
+    buf[0:4] = can_id.to_bytes(4, "little")
+    buf[4] = len(data)
+    buf[5] = 0  # flags (classic CAN, no BRS/ESI)
+    buf[8 : 8 + len(data)] = data
+    return bytes(buf)
+
+
+def _decode_wire_frame(wire: bytes) -> tuple[int, bytes]:
+    """Decode a 72-byte ``struct canfd_frame`` into (can_id, payload)."""
+    can_id = int.from_bytes(wire[0:4], "little") & 0x1FFFFFFF
+    data_len = min(wire[4], 64)
+    return can_id, wire[8 : 8 + data_len]
+
+
 # ---- Save / Load ----
 
 def save(
@@ -119,24 +164,20 @@ def save(
     *,
     arm: str = "left",
     dt: float = 0.1,
-    kp: float = 30.0,
-    kd: float = 1.0,
     motor_ids: list[int] | None = None,
     gripper: np.ndarray | None = None,
     extra_metadata: dict | None = None,
 ) -> dict:
     """Write a (T, J) radian trajectory as CAN-frame JSON.
 
-    Each waypoint is converted to J MIT protocol CAN frames with the
-    given kp/kd gains, ready to replay on the bus.
+    Each waypoint is converted to J MIT protocol CAN frames with per-motor
+    kp/kd gains from MOTOR_KP/MOTOR_KD, ready to replay on the bus.
 
     Args:
         path: Output file path.
         trajectory: Joint trajectory in radians, shape ``(T, J)``.
         arm: ``"left"`` or ``"right"``.
         dt: Time step between waypoints in seconds.
-        kp: Position gain for the MIT command.
-        kd: Damping gain for the MIT command.
         motor_ids: CAN arbitration IDs per joint. Defaults to 0x01..0x07.
         gripper: Optional (T,) array of gripper values, 0.0=open 1.0=closed.
             Encoded as motor 0x08 MIT CAN frame (-1.0472 rad open, 0.0 rad closed).
@@ -168,21 +209,27 @@ def save(
     for i in range(num_waypoints):
         frames = []
         for j in range(num_joints):
-            raw = _encode_mit_command(
+            mid = motor_ids[j]
+            kp = MOTOR_KP[mid - 1]
+            kd = MOTOR_KD[mid - 1]
+            mit = _encode_mit_command(
                 p_des=float(traj[i, j]), kp=kp, kd=kd,
             )
+            wire = _encode_wire_frame(mid, mit)
             frames.append({
-                "id": f"0x{motor_ids[j]:02x}",
-                "data": base64.b64encode(raw).decode("ascii"),
+                "id": f"0x{mid:02x}",
+                "data": base64.b64encode(wire).decode("ascii"),
             })
         if gripper is not None:
-            # Map 0.0 (open) → GRIPPER_OPEN_RAD, 1.0 (closed) → GRIPPER_CLOSED_RAD
             g = float(gripper[i])
             grip_rad = GRIPPER_OPEN_RAD + g * (GRIPPER_CLOSED_RAD - GRIPPER_OPEN_RAD)
-            raw = _encode_mit_command(p_des=grip_rad, kp=kp, kd=kd)
+            kp = MOTOR_KP[GRIPPER_MOTOR_ID - 1]
+            kd = MOTOR_KD[GRIPPER_MOTOR_ID - 1]
+            mit = _encode_mit_command(p_des=grip_rad, kp=kp, kd=kd)
+            wire = _encode_wire_frame(GRIPPER_MOTOR_ID, mit)
             frames.append({
                 "id": f"0x{GRIPPER_MOTOR_ID:02x}",
-                "data": base64.b64encode(raw).decode("ascii"),
+                "data": base64.b64encode(wire).decode("ascii"),
             })
         commands.append({"t": round(i * dt, 6), "frames": frames})
 
@@ -191,8 +238,8 @@ def save(
         "num_joints": int(num_joints),
         "num_waypoints": int(num_waypoints),
         "dt": dt,
-        "kp": kp,
-        "kd": kd,
+        "motor_kp": MOTOR_KP[:num_joints],
+        "motor_kd": MOTOR_KD[:num_joints],
         "motor_ids": [f"0x{m:02x}" for m in motor_ids],
         "created": datetime.now(timezone.utc).isoformat(),
     }
@@ -201,7 +248,7 @@ def save(
             if k not in meta:
                 meta[k] = v
 
-    doc = {"version": 2, "metadata": meta, "commands": commands}
+    doc = {"version": 3, "metadata": meta, "commands": commands}
 
     with open(path, "w") as f:
         json.dump(doc, f, indent=2)
@@ -212,7 +259,7 @@ def save(
 def load(path: str | Path) -> tuple[np.ndarray, dict]:
     """Read a trajectory JSON file.
 
-    Supports both v1 (raw float32) and v2 (CAN frame) formats.
+    Supports v1 (raw float32), v2 (8-byte MIT), and v3 (72-byte wire) formats.
 
     Returns:
         ``(trajectory, metadata)`` where trajectory is ``(T, J)`` float32 radians.
@@ -226,7 +273,6 @@ def load(path: str | Path) -> tuple[np.ndarray, dict]:
     commands = doc["commands"]
 
     if version >= 2:
-        # Decode MIT CAN frames back to radians
         rows = []
         grip_rows = []
         gripper_id = f"0x{GRIPPER_MOTOR_ID:02x}"
@@ -235,9 +281,14 @@ def load(path: str | Path) -> tuple[np.ndarray, dict]:
             grip_val = None
             for frame in cmd["frames"]:
                 raw = base64.b64decode(frame["data"])
-                pos = _decode_mit_position(raw)
+                # v3: 72-byte wire frame → extract MIT payload from bytes 8..16
+                # v2: 8-byte MIT payload directly
+                if len(raw) == CANFD_FRAME_SIZE:
+                    _, mit = _decode_wire_frame(raw)
+                else:
+                    mit = raw
+                pos = _decode_mit_position(mit)
                 if frame["id"] == gripper_id:
-                    # Convert motor radians back to 0-1 scale
                     grip_val = (pos - GRIPPER_OPEN_RAD) / (GRIPPER_CLOSED_RAD - GRIPPER_OPEN_RAD)
                 else:
                     angles.append(pos)

@@ -49,7 +49,7 @@ class Box:
 OPENARM_CAPSULES: dict[str, Capsule] = {
     "openarm_left_link0": Capsule([0, 0, 0], [0, 0, 0.0625], 0.04),
     "openarm_left_link1": Capsule([0, 0, 0], [-0.0301, 0, 0.06], 0.04),
-    "openarm_left_link2": Capsule([0, 0, 0], [0.0301, 0, 0.06625], 0.03),
+    "openarm_left_link2": Capsule([0, 0, 0], [0.0301, 0, 0.11625], 0.03),
     "openarm_left_link3": Capsule([0, 0, 0], [0, 0.0315, 0.15375], 0.04),
     "openarm_left_link4": Capsule([0, 0, 0], [0, -0.0315, 0.0955], 0.04),
     "openarm_left_link5": Capsule([0, 0, 0], [0.0375, 0, 0.1205], 0.03),
@@ -71,7 +71,7 @@ SELF_COLLISION_PAIRS: list[tuple[int, int]] = [
 OPENARM_RIGHT_CAPSULES: dict[str, Capsule] = {
     "openarm_right_link0": Capsule([0, 0, 0], [0, 0, 0.0625], 0.04),
     "openarm_right_link1": Capsule([0, 0, 0], [-0.0301, 0, 0.06], 0.04),
-    "openarm_right_link2": Capsule([0, 0, 0], [0.0301, 0, 0.06625], 0.03),
+    "openarm_right_link2": Capsule([0, 0, 0], [0.0301, 0, 0.11625], 0.03),
     "openarm_right_link3": Capsule([0, 0, 0], [0, 0.0315, 0.15375], 0.04),
     "openarm_right_link4": Capsule([0, 0, 0], [0, -0.0315, 0.0955], 0.04),
     "openarm_right_link5": Capsule([0, 0, 0], [0.0375, 0, 0.1205], 0.03),
@@ -118,6 +118,11 @@ OPENARM_GRIPPER_BOXES: dict[str, Box] = {
     ),
 }
 
+# Static body capsule — the vertical support pole in the world frame.
+# Extends from the base (z=0) to the arm attachment point (z≈0.7m).
+# Radius ~60mm covers the main structural beam.
+OPENARM_BODY_CAPSULE = Capsule([0, 0, 0], [0, 0, 0.70], 0.10)
+
 OPENARM_RIGHT_GRIPPER_BOXES: dict[str, Box] = {
     # Palm body
     "openarm_right_hand": Box(center=[0, -0.006, 0.007], half_extents=[0.025, 0.025, 0.015]),
@@ -142,6 +147,8 @@ class CapsuleCollisionModel:
         capsules: dict[str, Capsule],
         device: torch.device,
         boxes: dict[str, Box] | None = None,
+        body_capsule: Capsule | None = None,
+        body_skip_links: int = 3,
     ):
         self.device = device
         self.link_names = list(capsules.keys())
@@ -157,6 +164,20 @@ class CapsuleCollisionModel:
                 cap.p1, dtype=torch.float32, device=device
             )
             self.radii[name] = cap.radius
+
+        # Static body capsule (world frame) — e.g. the robot support pole.
+        # Checked against arm links during self-collision, skipping the first
+        # body_skip_links links (they're mounted on the body and always overlap).
+        self.body_capsule = body_capsule
+        self.body_skip_links = body_skip_links
+        if body_capsule is not None:
+            self.body_p0 = torch.tensor(
+                body_capsule.p0, dtype=torch.float32, device=device
+            )
+            self.body_p1 = torch.tensor(
+                body_capsule.p1, dtype=torch.float32, device=device
+            )
+            self.body_radius = body_capsule.radius
 
         # Box primitives (e.g. for gripper fingers).
         # box_parent_link maps box name -> FK link name for transform lookup.
@@ -177,6 +198,35 @@ class CapsuleCollisionModel:
                 )
                 self.box_half_extents[name] = torch.tensor(
                     box.half_extents, dtype=torch.float32, device=device
+                )
+
+    def set_gripper_opening(self, opening_m: float) -> None:
+        """Shift finger box Y-centers to match a given gripper opening.
+
+        Args:
+            opening_m: Total jaw opening in metres (0 = closed, 0.088 = fully open).
+                Each finger moves half this distance from its base position.
+        """
+        # Finger travel per side (URDF prismatic joint range: 0..0.044m)
+        travel = min(opening_m / 2.0, 0.044)
+        # Base positions (closed): left finger Y=+0.012, right finger Y=0.0
+        # URDF axis: left finger moves +Y, right finger moves -Y
+        # Box center Z stays the same, only Y shifts
+        finger_configs = {
+            "left_finger": ("openarm_left_left_finger", +0.012 + travel),
+            "right_finger": ("openarm_left_right_finger", 0.0 - travel),
+            "left_finger_r": ("openarm_right_left_finger", +0.012 + travel),
+            "right_finger_r": ("openarm_right_right_finger", 0.0 - travel),
+        }
+        for _, (box_name, new_y) in finger_configs.items():
+            if box_name in self.box_centers:
+                c = self.box_centers[box_name]
+                # Box center: [X, Y_finger_center, Z]
+                # Y_finger_center = finger_base_y + finger_length/2
+                # finger length ~ 0.065m (from Z extents), center offset from joint
+                self.box_centers[box_name] = torch.tensor(
+                    [c[0].item(), new_y, c[2].item()],
+                    dtype=torch.float32, device=self.device,
                 )
 
     def capsule_endpoints_world(
@@ -468,11 +518,12 @@ class VoxelSDF:
         dist = distance_transform_edt(~occupancy).astype(np.float32)
         dist *= resolution  # convert to metres
 
-        # Store as 5D tensor for grid_sample: (1, C=1, D, H, W).
-        # grid_sample maps grid coords (x, y, z) -> (W, H, D) of input,
-        # so we permute (Gx, Gy, Gz) -> (D=Gz, H=Gy, W=Gx).
+        # Store as raw 3D tensor (Gx, Gy, Gz) for manual trilinear lookup.
         dist_t = torch.from_numpy(dist).to(device)
-        self.grid = dist_t.permute(2, 1, 0).unsqueeze(0).unsqueeze(0)  # (1,1,Gz,Gy,Gx)
+        self.grid = dist_t  # (Gx, Gy, Gz)
+        self.grid_shape = torch.tensor(
+            grid_shape, dtype=torch.float32, device=device
+        )  # (3,)
 
         self.origin_t = torch.tensor(
             self.origin, dtype=torch.float32, device=device
@@ -491,8 +542,9 @@ class VoxelSDF:
     def query(self, points: torch.Tensor) -> torch.Tensor:
         """Look up distance-to-nearest-obstacle at arbitrary world points.
 
-        Uses differentiable trilinear interpolation via grid_sample.
-        Points outside the grid get the border value (conservative).
+        Uses differentiable trilinear interpolation (manual implementation
+        that works on CUDA, MPS, and CPU).  Points outside the grid are
+        clamped to the border value (conservative).
 
         Args:
             points: (..., 3) query points in robot frame.
@@ -503,17 +555,42 @@ class VoxelSDF:
         shape = points.shape[:-1]
         pts = points.reshape(-1, 3)
 
-        # Normalise to [-1, 1] for grid_sample.
-        # grid_sample coords: (x, y, z) map to (W=Gx, H=Gy, D=Gz).
-        norm = 2.0 * (pts - self.origin_t) / (self.extent_t - self.origin_t) - 1.0
+        # Map world coords to continuous voxel indices.
+        voxel = (pts - self.origin_t) / (self.extent_t - self.origin_t) * (
+            self.grid_shape - 1
+        )  # (M, 3)
 
-        # grid_sample expects (N, D_out, H_out, W_out, 3).
-        # We have M query points -> (1, 1, 1, M, 3).
-        grid_pts = norm.unsqueeze(0).unsqueeze(0).unsqueeze(0)
+        # Clamp to valid grid range (border behaviour).
+        max_idx = self.grid_shape - 1
+        voxel = voxel.clamp(min=torch.zeros(3, device=pts.device),
+                            max=max_idx)
 
-        out = torch.nn.functional.grid_sample(
-            self.grid, grid_pts,
-            mode="bilinear", padding_mode="border", align_corners=True,
+        # Floor / ceil indices for trilinear interpolation.
+        v0 = voxel.floor().long()  # (M, 3)
+        v1 = (v0 + 1).clamp(max=max_idx.long())
+        frac = voxel - v0.float()  # fractional part  (M, 3)
+        fx, fy, fz = frac[:, 0], frac[:, 1], frac[:, 2]
+        x0, y0, z0 = v0[:, 0], v0[:, 1], v0[:, 2]
+        x1, y1, z1 = v1[:, 0], v1[:, 1], v1[:, 2]
+
+        # 8-corner lookup + trilinear blend.
+        c000 = self.grid[x0, y0, z0]
+        c001 = self.grid[x0, y0, z1]
+        c010 = self.grid[x0, y1, z0]
+        c011 = self.grid[x0, y1, z1]
+        c100 = self.grid[x1, y0, z0]
+        c101 = self.grid[x1, y0, z1]
+        c110 = self.grid[x1, y1, z0]
+        c111 = self.grid[x1, y1, z1]
+
+        out = (
+            c000 * (1 - fx) * (1 - fy) * (1 - fz)
+            + c001 * (1 - fx) * (1 - fy) * fz
+            + c010 * (1 - fx) * fy * (1 - fz)
+            + c011 * (1 - fx) * fy * fz
+            + c100 * fx * (1 - fy) * (1 - fz)
+            + c101 * fx * (1 - fy) * fz
+            + c110 * fx * fy * (1 - fz)
+            + c111 * fx * fy * fz
         )
-        # out shape: (1, 1, 1, 1, M) -> (M,)
         return out.reshape(shape)
