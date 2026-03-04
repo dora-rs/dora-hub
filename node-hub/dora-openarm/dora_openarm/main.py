@@ -356,12 +356,19 @@ def main():
                     )
 
                 elif event_id in ("joint_command", "home_command"):
+                    # Filter by arm side if metadata specifies one
+                    cmd_arm = metadata.get("arm", "")
+                    if cmd_arm and cmd_arm != arm_side:
+                        continue
                     t0 = time.perf_counter()
                     target = event["value"].to_numpy().astype(np.float32)
                     send_joint_command(target)
                     _cmd_times.append((time.perf_counter() - t0) * 1000)
 
                 elif event_id == "gripper_command":
+                    cmd_arm = metadata.get("arm", "")
+                    if cmd_arm and cmd_arm != arm_side:
+                        continue
                     target_rad = event["value"].to_numpy().astype(np.float32)[0]
                     target_rad = max(GRIPPER_MOTOR_OPEN_RAD, min(0.0, target_rad))
                     if not enabled:
@@ -410,23 +417,27 @@ def main():
 
             elif event["type"] == "STOP":
                 print("Received STOP — disabling motors")
-                for mid in motor_ids:
-                    msg = can.Message(arbitration_id=mid, data=DISABLE_CMD, is_fd=False)
-                    try:
-                        bus.send(msg)
-                    except can.CanError:
-                        pass
+                if bus is not None:
+                    for mid in motor_ids:
+                        msg = can.Message(arbitration_id=mid, data=DISABLE_CMD, is_fd=False)
+                        try:
+                            bus.send(msg)
+                        except can.CanError:
+                            pass
                 break
     finally:
         # Always disable motors on exit
-        for mid in motor_ids:
-            try:
-                msg = can.Message(arbitration_id=mid, data=DISABLE_CMD, is_fd=False)
-                bus.send(msg)
-            except Exception:
-                pass
-        bus.shutdown()
-        print("CAN bus shutdown complete")
+        if bus is not None:
+            for mid in motor_ids:
+                try:
+                    msg = can.Message(arbitration_id=mid, data=DISABLE_CMD, is_fd=False)
+                    bus.send(msg)
+                except Exception:
+                    pass
+            bus.shutdown()
+            print("CAN bus shutdown complete")
+        else:
+            print("Mock mode shutdown complete")
 
 
 if __name__ == "__main__":

@@ -25,8 +25,10 @@ Env vars:
     RIGHT_END_EFFECTOR_LINK: Right arm end-effector link (default "openarm_right_hand_tcp").
     END_EFFECTOR_LINK:    Backward-compat alias — sets LEFT_END_EFFECTOR_LINK if the new
                           var is not set.
-    CAMERA_TRANSFORM:     6 values "x y z roll pitch yaw" in degrees (extrinsic XYZ),
-                          or 7 values "tx ty tz qw qx qy qz" (quaternion).  Default identity.
+    CAMERA_TRANSFORM:     6 values "x y z roll pitch yaw" in degrees — scene-frame
+                          convention Ry(yaw) @ Rx(roll) @ Ry(pitch), matching the
+                          openarm.html viewer's IMU-calibrated output.
+                          Or 7 values "tx ty tz qw qx qy qz" (quaternion in URDF frame).
     DOWNSAMPLE_STRIDE:    Depth image downsample factor (default 8).
     SAFETY_MARGIN:        Collision margin in metres (default 0.02).
     NUM_WAYPOINTS:        Trajectory waypoints (default 200).
@@ -38,7 +40,8 @@ Env vars:
     APPROACH_MARGIN:      Height above grasp for pre-grasp waypoint (default 0.03m).
     EXPORT_PATH:          If set, auto-save every planned trajectory to this JSON path.
     MAX_JOINT_STEP:       Max per-step joint angle change in radians (default 0.05).
-    PLAYBACK:             "true"/"false" — enable built-in playback on tick (default "true").
+    PLAYBACK:             "true"/"false"/"confirm" — enable built-in playback on tick.
+                          "confirm" plans but waits for an ``execute`` input to start.
 """
 
 import json
@@ -62,6 +65,7 @@ from .collision_model import (
     OPENARM_RIGHT_GRIPPER_BOXES,
     capsule_points_distance,
     capsule_halfplane_distance,
+    capsule_capsule_distance,
     box_points_distance,
 )
 from .grasp_utils import grasp_pose_from_jaw_pixels, place_pose_from_pixel
@@ -86,7 +90,7 @@ LEFT_END_EFFECTOR_LINK = os.getenv(
 RIGHT_END_EFFECTOR_LINK = os.getenv(
     "RIGHT_END_EFFECTOR_LINK", "openarm_right_hand_tcp"
 )
-CAMERA_TRANSFORM_STR = os.getenv("CAMERA_TRANSFORM", "0.79 0.81 1.23 90 -45 0")
+CAMERA_TRANSFORM_STR = os.getenv("CAMERA_TRANSFORM", "0.79 0.81 1.23 90 0 -45")
 DOWNSAMPLE_STRIDE = int(os.getenv("DOWNSAMPLE_STRIDE", "8"))
 SAFETY_MARGIN = float(os.getenv("SAFETY_MARGIN", "0.02"))
 NUM_WAYPOINTS = int(os.getenv("NUM_WAYPOINTS", "200"))
@@ -96,11 +100,14 @@ DEVICE = os.getenv("DEVICE", "cuda")
 GRASP_DEPTH_OFFSET = float(os.getenv("GRASP_DEPTH_OFFSET", "-0.01"))
 FLOOR_HEIGHT = float(os.getenv("FLOOR_HEIGHT", "0.005"))
 APPROACH_MARGIN = float(os.getenv("APPROACH_MARGIN", "0.03"))
+JAW_CONTACT_DEPTH = float(os.getenv("JAW_CONTACT_DEPTH", "0.02"))
+APPROACH_ANGLE_DEG = float(os.getenv("APPROACH_ANGLE_DEG", "45.0"))
 IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "640"))
 IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "480"))
 MAX_JOINT_STEP = float(os.getenv("MAX_JOINT_STEP", "0.1"))
 EXPORT_PATH = os.getenv("EXPORT_PATH", "")
-PLAYBACK = os.getenv("PLAYBACK", "true").lower() in ("1", "true", "yes")
+PLAYBACK_MODE = os.getenv("PLAYBACK", "true").lower()  # "true", "false", "confirm"
+PLAYBACK = PLAYBACK_MODE in ("1", "true", "yes", "confirm")
 
 # Pick-and-place: optional place target (xyz or xyzrpy in robot frame).
 # When set, grasp planning extends to: pick → close → transport → place → open → home.
@@ -405,7 +412,12 @@ def validate_trajectory(ik_chain, capsule_model, trajectory, point_cloud, margin
     if not has_pc and table_plane is None:
         return []
 
-    device = point_cloud.device if has_pc else trajectory.device
+    if has_pc:
+        device = point_cloud.device
+    elif table_polygon is not None:
+        device = table_polygon.device
+    else:
+        device = trajectory.device
     traj = trajectory.to(device)
 
     with torch.no_grad():
@@ -446,6 +458,23 @@ def validate_trajectory(ik_chain, capsule_model, trajectory, point_cloud, margin
                     d = float(sd_table[t_idx])
                     if d < margin:
                         collisions.append((t_idx, f"{link_name}[table]", d))
+
+        # Body capsule collisions (support pole)
+        # Skip the first N links (mounted on/adjacent to the body).
+        if capsule_model.body_capsule is not None:
+            B = traj.shape[0]
+            body_p0 = capsule_model.body_p0.unsqueeze(0).expand(B, -1)
+            body_p1 = capsule_model.body_p1.unsqueeze(0).expand(B, -1)
+            body_r = capsule_model.body_radius
+            skip = capsule_model.body_skip_links
+            for link_name in capsule_links[skip:]:
+                p0_w, p1_w = capsule_model.capsule_endpoints_world(link_name, transforms)
+                r = capsule_model.radii[link_name]
+                sd = capsule_capsule_distance(p0_w, p1_w, r, body_p0, body_p1, body_r)
+                for t_idx in range(B):
+                    d = float(sd[t_idx])
+                    if d < margin:
+                        collisions.append((t_idx, f"{link_name}[body]", d))
 
         # Box collisions (gripper) — point cloud + table
         box_links = [
@@ -622,6 +651,8 @@ def plan_grasp_from_pixels(
         grasp_depth_offset=GRASP_DEPTH_OFFSET,
         floor_height=FLOOR_HEIGHT,
         approach_margin=APPROACH_MARGIN,
+        jaw_contact_depth=JAW_CONTACT_DEPTH,
+        approach_angle_deg=APPROACH_ANGLE_DEG,
     )
     if result is None:
         print("[motion-planner] grasp: invalid depth at jaw points, skipping")
@@ -660,9 +691,10 @@ def plan_grasp_from_pixels(
             cam_t, cam_rot,
             grasp_rpy=grasp_xyzrpy[3:6],
             width=w, height=h,
-            place_depth_offset=0.02,
+            place_depth_offset=0.05,
             floor_height=FLOOR_HEIGHT,
             approach_margin=APPROACH_MARGIN,
+            jaw_contact_depth=JAW_CONTACT_DEPTH,
         )
         if place_result is not None:
             place_xyzrpy, preplace_xyzrpy = place_result
@@ -953,7 +985,7 @@ def _set_playback(state, traj_np, traj_meta):
     """Store a newly planned trajectory for playback and optionally export."""
     state["trajectory"] = traj_np                        # (T, J)
     state["step"] = 0
-    state["playing"] = True
+    state["playing"] = PLAYBACK_MODE != "confirm"        # confirm mode waits for execute
     state["play_arm"] = traj_meta.get("arm", "left")
     state["play_start"] = None                           # set on first tick
     state["play_dt"] = float(traj_meta.get("dt", 0.1))
@@ -1050,7 +1082,7 @@ def main():
     node = Node()
     print(
         f"[motion-planner] Ready ({', '.join(arms.keys())} arm(s)), "
-        f"playback={'on' if PLAYBACK else 'off'}, "
+        f"playback={PLAYBACK_MODE}, "
         f"export={'on → ' + EXPORT_PATH if EXPORT_PATH else 'off'}"
     )
 
@@ -1107,6 +1139,8 @@ def main():
                 if step >= T - 1 and playback["playing"]:
                     playback["playing"] = False
                     print("[motion-planner] Playback complete, holding final position")
+                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "done"})]))
+
 
             # --- Depth / intrinsics (shared across arms) ---
             elif event_id == "depth":
@@ -1307,6 +1341,15 @@ def main():
 
                 if result is not None:
                     _set_playback(playback, result[0], result[1])
+                    traj_meta = result[1]
+                    node.send_output("trajectory_status", pa.array([json.dumps({
+                        "status": "ready",
+                        "waypoints": result[0].shape[0],
+                        "duration": round(result[0].shape[0] * float(traj_meta.get("dt", 0.1)), 1),
+                        "arm": traj_meta.get("arm", "left"),
+                    })]))
+                elif encoding is not None:
+                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "failed"})]))
 
             # --- Grasp result ---
             elif event_id == "grasp_result":
@@ -1408,6 +1451,22 @@ def main():
                 )
                 if result is not None:
                     _set_playback(playback, result[0], result[1])
+                    traj_meta = result[1]
+                    node.send_output("trajectory_status", pa.array([json.dumps({
+                        "status": "ready",
+                        "waypoints": result[0].shape[0],
+                        "duration": round(result[0].shape[0] * float(traj_meta.get("dt", 0.1)), 1),
+                        "arm": traj_meta.get("arm", "left"),
+                    })]))
+                else:
+                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "failed"})]))
+
+            # --- Execute: start playback (confirm mode) ---
+            elif event_id == "execute":
+                if playback["trajectory"] is not None and not playback["playing"]:
+                    playback["playing"] = True
+                    playback["play_start"] = None
+                    print("[motion-planner] Execution triggered")
 
         elif event["type"] == "STOP":
             break

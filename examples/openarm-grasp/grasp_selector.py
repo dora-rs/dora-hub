@@ -36,9 +36,11 @@ USE_THINK = os.getenv("USE_THINK", "true").lower() in ("1", "true", "yes")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", ".")
 DEFAULT_DEPTH_MM = float(os.getenv("DEFAULT_DEPTH_MM", "400"))
 NUM_CANDIDATES = int(os.getenv("NUM_CANDIDATES", "5"))
+EARLY_STOP_SCORE = int(os.getenv("EARLY_STOP_SCORE", "8"))  # stop rating if a candidate scores >= this
 DEPTH_THRESHOLD_MM = float(os.getenv("DEPTH_THRESHOLD_MM", "30"))
 USE_SAM2 = os.getenv("USE_SAM2", "true").lower() in ("1", "true", "yes")
 USE_SAM3 = os.getenv("USE_SAM3", "false").lower() in ("1", "true", "yes")
+PLACE_CONTAINER = os.getenv("PLACE_CONTAINER", "")  # e.g. "the pan" — enables place detection
 
 # Gripper physical dimensions (SO-100 / similar small gripper)
 GRIPPER_MAX_OPENING_MM = 100.0  # full opening
@@ -70,6 +72,14 @@ RATE_PROMPT_TEMPLATE = (
     "- Will the fingers have good contact area?\n"
     "- Will the grasp be stable when lifting?\n"
     'Output ONLY JSON: {{"score": <1-10>, "reason": "<one sentence>"}}'
+)
+
+PLACE_LOCATE_PROMPT_TEMPLATE = (
+    "Look at this image carefully. Where is {container_name}? "
+    "Give the center coordinates as integers in normalized 0-1000 space "
+    "where (0,0) is top-left and (1000,1000) is bottom-right. "
+    'If you can see it, output ONLY JSON: {{"cx": <0-1000>, "cy": <0-1000>}}\n'
+    'If it is NOT in the image, output ONLY JSON: {{"cx": -1, "cy": -1}}'
 )
 
 
@@ -117,11 +127,13 @@ def send_vlm_request(node, image_rgb, prompt_text):
 def parse_locate_response(text):
     """Extract center coordinates from VLM response -> (cx_px, cy_px) or None.
 
+    VLM returns 0-1000 normalized coords; this converts to pixel coordinates.
     Handles various VLM output formats:
-      {"cx": 184, "cy": 740}
-      {"cx": [184, 740]}         — both coords in one field
-      {"center": [184, 740]}
-      {"x": 184, "y": 740}
+      {"cx": 500, "cy": 500}
+      {"cx": [500, 500]}         — both coords in one field
+      {"center": [500, 500]}
+      {"x": 500, "y": 500}
+    Returns pixel coordinates (converted from 0-1000 space).
     """
     text = strip_think_tags(text)
     start = text.find("{")
@@ -150,7 +162,13 @@ def parse_locate_response(text):
 
         if cx_norm is None or cy_norm is None:
             return None
-        return cx_norm * WIDTH / 1000.0, cy_norm * HEIGHT / 1000.0
+        # Preserve negative values (used as "not found" signal)
+        if cx_norm < 0 or cy_norm < 0:
+            return cx_norm, cy_norm
+        # Convert 0-1000 normalized → pixel and clamp to image bounds
+        cx_px = max(0.0, min(cx_norm * WIDTH / 1000.0, WIDTH - 1))
+        cy_px = max(0.0, min(cy_norm * HEIGHT / 1000.0, HEIGHT - 1))
+        return cx_px, cy_px
     except (json.JSONDecodeError, KeyError, TypeError, ValueError, IndexError):
         return None
 
@@ -181,14 +199,22 @@ def compute_gripper_pixel_scale(cx_px, cy_px, depth_map, intrinsics):
     if depth_map is not None and intrinsics is not None:
         ix = max(0, min(int(round(cx_px)), depth_map.shape[1] - 1))
         iy = max(0, min(int(round(cy_px)), depth_map.shape[0] - 1))
-        d = float(depth_map[iy, ix])
-        if d > 0:
-            z_mm = d
+        # Sample a patch around the center for robust depth estimate
+        patch_r = 10
+        y0 = max(0, iy - patch_r)
+        y1 = min(depth_map.shape[0], iy + patch_r + 1)
+        x0 = max(0, ix - patch_r)
+        x1 = min(depth_map.shape[1], ix + patch_r + 1)
+        patch = depth_map[y0:y1, x0:x1].astype(np.float32)
+        valid = patch[(patch > 50) & (patch < 5000)]  # ignore noise (<50mm) and far (>5m)
+        if len(valid) > 0:
+            z_mm = float(np.median(valid))
         fx = intrinsics[0]
 
     if fx is None:
         fx = 600.0
 
+    print(f"  Depth at ({cx_px:.0f},{cy_px:.0f}): z={z_mm:.0f}mm, fx={fx:.0f}, mm_to_px={fx/z_mm:.3f}")
     return fx / z_mm
 
 
@@ -699,6 +725,19 @@ def render_all_candidates_overview(image_rgb, candidates, scores, reasons):
     return overlay
 
 
+def render_place_target(image_rgb, cx, cy, radius=30):
+    """Draw green circle + crosshair at the place target center."""
+    overlay = image_rgb.copy()
+    color = (0, 220, 0)
+    icx, icy = int(round(cx)), int(round(cy))
+    cv2.circle(overlay, (icx, icy), radius, color, 3)
+    cv2.circle(overlay, (icx, icy), 4, color, -1)
+    arm_len = radius + 10
+    cv2.line(overlay, (icx - arm_len, icy), (icx + arm_len, icy), color, 2)
+    cv2.line(overlay, (icx, icy - arm_len), (icx, icy + arm_len), color, 2)
+    return overlay
+
+
 def format_grasp_result(candidate):
     """Convert candidate to {"p1":[x,y],"p2":[x,y]} in 0-1000 normalized coords."""
     return {
@@ -715,6 +754,8 @@ STATE_LOCATE_PENDING = "LOCATE_PENDING"
 STATE_MASK_PENDING = "MASK_PENDING"       # waiting for SAM2 mask (after VLM locate)
 STATE_SAM3_MASK_PENDING = "SAM3_MASK_PENDING"  # waiting for SAM3 mask (text-prompted)
 STATE_RATING_PENDING = "RATING_PENDING"
+STATE_PLACE_VLM_LOCATE = "PLACE_VLM_LOCATE"      # waiting for VLM to locate container center
+STATE_PLACE_SAM3_PENDING = "PLACE_SAM3_PENDING"  # waiting for SAM3 point-based mask of container
 
 state = STATE_IDLE
 latest_image = None
@@ -725,6 +766,9 @@ locate_center = None
 rating_idx = 0
 scores = []
 reasons = []
+# Place detection state
+best_grasp_result = None  # stored grasp result dict while place detection runs
+place_center = None       # (cx_px, cy_px) of the container centroid
 
 node = Node()
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -776,7 +820,21 @@ for event in node:
             raw = event["value"].to_numpy()
             latest_depth = raw.astype(np.uint16).reshape((HEIGHT, WIDTH))
 
-        elif event_id == "trigger":
+        elif event_id == "command":
+            # Dynamic command from chat node — override targets and trigger
+            raw = event["value"][0].as_py()
+            try:
+                cmd = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                print(f"[command] Failed to parse JSON: {raw}")
+                continue
+            TARGET_OBJECT = cmd.get("pick", TARGET_OBJECT)
+            PLACE_CONTAINER = cmd.get("place", "")
+            print(f"[command] pick='{TARGET_OBJECT}', place='{PLACE_CONTAINER}'")
+            # Fall through to trigger logic below
+            event_id = "trigger"
+
+        if event_id == "trigger":
             if state != STATE_IDLE:
                 print(f"Busy (state={state}), ignoring trigger")
                 continue
@@ -803,6 +861,70 @@ for event in node:
                 state = STATE_LOCATE_PENDING
 
         elif event_id == "mask":
+            if state == STATE_PLACE_SAM3_PENDING:
+                # --- Place container mask ---
+                mask_meta = event["metadata"]
+                mask_w = int(mask_meta.get("width", WIDTH))
+                mask_h = int(mask_meta.get("height", HEIGHT))
+                mask_raw = event["value"].to_numpy(zero_copy_only=False)
+                if mask_raw.size == 0 or mask_raw.size < mask_h * mask_w:
+                    print("  [Place] SAM3 returned empty mask, falling back to grasp-only")
+                    grasp_json = json.dumps(best_grasp_result)
+                    print(f"  Grasp result: {grasp_json}")
+                    node.send_output("grasp_result", pa.array([grasp_json]))
+                    best_grasp_result = None
+                    frame_count += 1
+                    state = STATE_IDLE
+                    continue
+                mask = (mask_raw.reshape((mask_h, mask_w)) > 0).astype(np.uint8) * 255
+                n_mask = np.count_nonzero(mask)
+                print(f"  [Place] Container mask: {n_mask} pixels")
+
+                if n_mask < 100:
+                    # Empty mask — send grasp-only result
+                    print("  [Place] Container mask too small, falling back to grasp-only")
+                    grasp_json = json.dumps(best_grasp_result)
+                    print(f"  Grasp result: {grasp_json}")
+                    node.send_output("grasp_result", pa.array([grasp_json]))
+                    best_grasp_result = None
+                    frame_count += 1
+                    state = STATE_IDLE
+                    continue
+
+                ys, xs = np.where(mask > 0)
+                place_cx = float(np.mean(xs))
+                place_cy = float(np.mean(ys))
+                place_center = (place_cx, place_cy)
+                print(f"  [Place] Container centroid from mask: ({place_cx:.0f}, {place_cy:.0f})")
+
+                # Save place mask debug image
+                mask_path = os.path.join(OUTPUT_DIR, f"critic_place_mask_{frame_count:03d}.png")
+                cv2.imwrite(mask_path, mask)
+
+                # Save place target visualization
+                img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
+                    (HEIGHT, WIDTH, 3)
+                )
+                place_img = render_place_target(img, place_cx, place_cy)
+                place_path = os.path.join(OUTPUT_DIR, f"critic_place_{frame_count:03d}.png")
+                cv2.imwrite(place_path, cv2.cvtColor(place_img, cv2.COLOR_RGB2BGR))
+                print(f"  Saved place target: {place_path}")
+
+                # Add place target to grasp result and send
+                grasp = best_grasp_result.copy() if best_grasp_result else {}
+                grasp["place"] = [
+                    int(round(place_cx * 1000.0 / WIDTH)),
+                    int(round(place_cy * 1000.0 / HEIGHT)),
+                ]
+                grasp_json = json.dumps(grasp)
+                print(f"  Grasp result: {grasp_json}")
+                node.send_output("grasp_result", pa.array([grasp_json]))
+                best_grasp_result = None
+                place_center = None
+                frame_count += 1
+                state = STATE_IDLE
+                continue
+
             if state not in (STATE_MASK_PENDING, STATE_SAM3_MASK_PENDING):
                 print(f"Mask arrived in unexpected state {state}, ignoring")
                 continue
@@ -815,6 +937,10 @@ for event in node:
             mask_w = int(mask_meta.get("width", WIDTH))
             mask_h = int(mask_meta.get("height", HEIGHT))
             mask_raw = event["value"].to_numpy(zero_copy_only=False)
+            if mask_raw.size == 0 or mask_raw.size < mask_h * mask_w:
+                print(f"  {source_name} returned empty mask, retrying...")
+                state = STATE_IDLE
+                continue
             mask = (mask_raw.reshape((mask_h, mask_w)) > 0).astype(np.uint8) * 255
             n_mask = np.count_nonzero(mask)
             total_px = mask_w * mask_h
@@ -948,7 +1074,18 @@ for event in node:
 
                 rating_idx += 1
 
-                if rating_idx < n_cands:
+                # Early stop: if this candidate scored high enough, skip the rest
+                early_stop = (
+                    EARLY_STOP_SCORE > 0
+                    and len(scores) > 0
+                    and scores[-1] >= EARLY_STOP_SCORE
+                    and rating_idx < n_cands
+                )
+                if early_stop:
+                    print(f"  Early stop: candidate scored {scores[-1]}/10 "
+                          f"(>= {EARLY_STOP_SCORE}), skipping {n_cands - rating_idx} remaining")
+
+                if rating_idx < n_cands and not early_stop:
                     img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
                         (HEIGHT, WIDTH, 3)
                     )
@@ -962,29 +1099,93 @@ for event in node:
                     prompt = RATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
                     send_vlm_request(node, rotated, prompt)
                 else:
-                    # All rated — pick the best
+                    # Pick the best among rated candidates
+                    rated = candidates[:len(scores)]
                     best_idx = max(range(len(scores)), key=lambda i: scores[i])
-                    winner = candidates[best_idx]
+                    winner = rated[best_idx]
                     score_strs = [f'#{i+1}:{s}/10' for i, s in enumerate(scores)]
-                    print(f"\n[Result] Scores: {score_strs}")
+                    print(f"\n[Result] Scores: {score_strs} "
+                          f"({len(scores)}/{n_cands} rated)")
                     print(f"[Result] Best: #{best_idx+1} ({winner.angle_deg:.0f}deg, "
                           f"{scores[best_idx]}/10)")
-
-                    grasp = format_grasp_result(winner)
-                    grasp_json = json.dumps(grasp)
-                    print(f"  Grasp result: {grasp_json}")
-                    node.send_output("grasp_result", pa.array([grasp_json]))
 
                     img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
                         (HEIGHT, WIDTH, 3)
                     )
                     overview = render_all_candidates_overview(
-                        img, candidates, scores, reasons
+                        img, rated, scores, reasons
                     )
                     ov_path = os.path.join(OUTPUT_DIR, f"critic_overview_{frame_count:03d}.png")
                     cv2.imwrite(ov_path, cv2.cvtColor(overview, cv2.COLOR_RGB2BGR))
                     print(f"  Saved overview: {ov_path}")
 
+                    grasp = format_grasp_result(winner)
+
+                    if PLACE_CONTAINER:
+                        # Place detection: store grasp result, ask VLM to locate container
+                        best_grasp_result = grasp
+                        print(f"\n[Place] Asking VLM to locate '{PLACE_CONTAINER}'...")
+                        img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
+                            (HEIGHT, WIDTH, 3)
+                        )
+                        prompt = PLACE_LOCATE_PROMPT_TEMPLATE.format(
+                            container_name=PLACE_CONTAINER,
+                        )
+                        send_vlm_request(node, img, prompt)
+                        state = STATE_PLACE_VLM_LOCATE
+                    else:
+                        grasp_json = json.dumps(grasp)
+                        print(f"  Grasp result: {grasp_json}")
+                        node.send_output("grasp_result", pa.array([grasp_json]))
+                        frame_count += 1
+                        state = STATE_IDLE
+
+            elif state == STATE_PLACE_VLM_LOCATE:
+                # VLM returns 0-1000 normalized coords; parse_locate_response converts to pixel
+                print(f"  [Place] Raw VLM response: {text[:500]}")
+                result = parse_locate_response(text)
+                if result is not None:
+                    place_cx, place_cy = result
+                    if place_cx < 0 or place_cy < 0:
+                        # VLM explicitly says object not found
+                        print(f"  [Place] VLM says '{PLACE_CONTAINER}' not found, falling back to grasp-only")
+                        grasp_json = json.dumps(best_grasp_result)
+                        print(f"  Grasp result: {grasp_json}")
+                        node.send_output("grasp_result", pa.array([grasp_json]))
+                        best_grasp_result = None
+                        frame_count += 1
+                        state = STATE_IDLE
+                        continue
+                    print(f"  [Place] VLM located '{PLACE_CONTAINER}' at pixel ({place_cx:.0f},{place_cy:.0f})")
+
+                    # Save place target visualization
+                    img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
+                        (HEIGHT, WIDTH, 3)
+                    )
+                    place_img = render_place_target(img, place_cx, place_cy)
+                    place_path = os.path.join(OUTPUT_DIR, f"critic_place_{frame_count:03d}.png")
+                    cv2.imwrite(place_path, cv2.cvtColor(place_img, cv2.COLOR_RGB2BGR))
+                    print(f"  Saved place target: {place_path}")
+
+                    # Add place target to grasp result and send
+                    grasp = best_grasp_result.copy() if best_grasp_result else {}
+                    grasp["place"] = [
+                        int(round(place_cx * 1000.0 / WIDTH)),
+                        int(round(place_cy * 1000.0 / HEIGHT)),
+                    ]
+                    grasp_json = json.dumps(grasp)
+                    print(f"  Grasp result: {grasp_json}")
+                    node.send_output("grasp_result", pa.array([grasp_json]))
+                    best_grasp_result = None
+                    frame_count += 1
+                    state = STATE_IDLE
+                else:
+                    print(f"  [Place] Failed to parse VLM location: {text}")
+                    print("  [Place] Falling back to grasp-only")
+                    grasp_json = json.dumps(best_grasp_result)
+                    print(f"  Grasp result: {grasp_json}")
+                    node.send_output("grasp_result", pa.array([grasp_json]))
+                    best_grasp_result = None
                     frame_count += 1
                     state = STATE_IDLE
 
