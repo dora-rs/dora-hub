@@ -43,8 +43,10 @@ from dora_motion_planner.collision_model import (
     OPENARM_CAPSULES,
     OPENARM_RIGHT_CAPSULES,
     OPENARM_GRIPPER_BOXES,
+    OPENARM_RIGHT_GRIPPER_BOXES,
+    OPENARM_BODY_CAPSULE,
 )
-from dora_motion_planner.grasp_utils import grasp_pose_from_jaw_pixels
+from dora_motion_planner.grasp_utils import grasp_pose_from_jaw_pixels, place_pose_from_pixel
 from dora_motion_planner.main import (
     _ik_batch_adam,
     validate_trajectory,
@@ -57,10 +59,13 @@ from dora_motion_planner.collision_model import (
 from dora_motion_planner.pointcloud import (
     compute_table_plane,
     depth_to_pointcloud,
+    filter_below_table,
+    mask_near_point,
     parse_camera_transform,
     transform_points,
     pointcloud_to_tensor,
 )
+from dora_motion_planner.compiled_fk import CompiledFK, CompiledFKAdapter
 from dora_motion_planner.trajectory_optimizer import TrajectoryOptimizer
 from dora_motion_planner.trajectory_json import save as save_trajectory
 
@@ -73,15 +78,22 @@ RIGHT_EE = "openarm_right_hand_tcp"
 
 # Trajectory defaults
 NUM_WAYPOINTS = 90
-NUM_SEEDS = 1
-MAX_ITERS = 400
+NUM_SEEDS = 8
+MAX_ITERS = 600
 DOWNSAMPLE_STRIDE = 8
 UPSAMPLE_FACTOR = 4
 SAFETY_MARGIN = 0.02
-GRASP_DEPTH_OFFSET = 0.03   # 30mm above object surface
-FLOOR_HEIGHT = 0.02          # min 20mm above ground (capsule clearance)
-APPROACH_MARGIN = 0.12       # pre-grasp 120mm above grasp
+GRASP_DEPTH_OFFSET = -0.03  # grasp 30mm below object top (jaw center at object mid-height)
+FLOOR_HEIGHT = 0.04          # min 40mm above ground (capsule clearance)
+APPROACH_MARGIN = 0.06       # pre-grasp 60mm above grasp
 IK_TOL = 0.08
+GRASP_IK_TOL = 0.015          # tighter tolerance for grasp/pre-grasp — forces position-only fallback
+DWELL_STEPS = 15             # hold at grasp/place for gripper action
+JAW_CONTACT_DEPTH = 0.03     # shift TCP 30mm along approach so jaw midpoint hits object
+APPROACH_ANGLE_DEG = 70.0    # gripper tilt from vertical (0=straight down, 90=horizontal facing forward)
+ROT_WEIGHT = 2.0             # IK orientation weight (higher = enforce gripper angle)
+PLACE_DEPTH_OFFSET = 0.11   # 110mm above place surface
+PLACE_APPROACH_MARGIN = 0.10 # pre-place 100mm above place
 
 
 # ---- Config loading ----
@@ -221,10 +233,11 @@ def load_targets(arg):
     else:
         raise ValueError(f"Unrecognised target format: {list(data.keys())}")
 
-    # Ensure labels
+    # Ensure labels — include machine name and mode (pick-place / grasp)
     for i, t in enumerate(targets):
         if "label" not in t:
-            t["label"] = f"target_{i}"
+            mode = "pick-place" if "place" in t else "grasp"
+            t["label"] = f"{mode}_{i}"
 
     return targets
 
@@ -232,9 +245,9 @@ def load_targets(arg):
 # ---- Depth capture ----
 
 def capture_depth(relay_path, width=IMAGE_WIDTH, height=IMAGE_HEIGHT):
-    """Capture aligned depth frame via xoq_realsense relay.
+    """Capture aligned depth + color frame via xoq_realsense relay.
 
-    Returns (depth_flat, (fx, fy, cx, cy)).
+    Returns (depth_flat, color_image, (fx, fy, cx, cy)).
     """
     import xoq_realsense as rs
 
@@ -255,12 +268,14 @@ def capture_depth(relay_path, width=IMAGE_WIDTH, height=IMAGE_HEIGHT):
         frames = pipeline.wait_for_frames()
         aligned = align.process(frames)
         depth_frame = aligned.get_depth_frame()
+        color_frame = aligned.get_color_frame()
 
         vsp = depth_frame.profile.as_video_stream_profile()
         intr = vsp.get_intrinsics()
         fx, fy, cx, cy = intr.fx, intr.fy, intr.ppx, intr.ppy
 
         depth_data = np.asanyarray(depth_frame.get_data()).ravel().astype(np.uint16)
+        color_data = np.asanyarray(color_frame.get_data()).reshape(height, width, 3)
         print(f"[realsense] Depth frame: {width}x{height}")
         print(f"[realsense] Intrinsics: fx={fx:.1f} fy={fy:.1f} cx={cx:.1f} cy={cy:.1f}")
 
@@ -270,7 +285,7 @@ def capture_depth(relay_path, width=IMAGE_WIDTH, height=IMAGE_HEIGHT):
             print(f"[realsense] Depth range: {valid.min()}-{valid.max()}mm, "
                   f"median={np.median(valid):.0f}mm")
 
-        return depth_data, (fx, fy, cx, cy)
+        return depth_data, color_data, (fx, fy, cx, cy)
     finally:
         pipeline.stop()
 
@@ -349,12 +364,16 @@ class GraspResult:
     collisions: list
     object_width: float = 0.0  # jaw-to-jaw distance in metres
     pc_robot: np.ndarray = field(default=None)
+    pc_colors: np.ndarray = field(default=None)  # (N, 3) float32 RGB in [0,1]
     table_corners: np.ndarray = field(default=None)  # (4, 3) frustum-projected table polygon
+    place_xyzrpy: list = field(default=None)
+    preplace_xyzrpy: list = field(default=None)
+    gripper_actions: list = field(default_factory=list)  # [{"waypoint": N, "grip": 0.7}, ...]
 
 
 def plan_single_target(
     target, depth, intrinsics, cam_t, cam_rot, device, urdf_path,
-    width=IMAGE_WIDTH, height=IMAGE_HEIGHT,
+    width=IMAGE_WIDTH, height=IMAGE_HEIGHT, color_image=None,
 ):
     """Plan a grasp trajectory for a single target.
 
@@ -393,8 +412,10 @@ def plan_single_target(
         u1, v1, u2, v2, depth, fx, fy, cx, cy,
         cam_translation=cam_t, cam_rotation=cam_rot,
         width=width, height=height,
-        grasp_depth_offset=GRASP_DEPTH_OFFSET,
+        grasp_depth_offset=0.0,
         floor_height=FLOOR_HEIGHT, approach_margin=APPROACH_MARGIN,
+        jaw_contact_depth=JAW_CONTACT_DEPTH,
+        approach_angle_deg=APPROACH_ANGLE_DEG,
     )
     if result is None:
         print(f"  ERROR: Invalid depth at jaw points for '{label}'")
@@ -405,10 +426,21 @@ def plan_single_target(
     print(f"  Pre-grasp: pos=({pregrasp_xyzrpy[0]:.4f}, {pregrasp_xyzrpy[1]:.4f}, {pregrasp_xyzrpy[2]:.4f})")
 
     # Build point cloud (shared across arm attempts)
-    pc_cam = depth_to_pointcloud(depth, fx, fy, cx, cy,
-                                  width=width, height=height,
-                                  stride=DOWNSAMPLE_STRIDE)
+    if color_image is not None:
+        pc_cam, pc_colors_cam = depth_to_pointcloud(
+            depth, fx, fy, cx, cy,
+            width=width, height=height,
+            stride=DOWNSAMPLE_STRIDE, color_image=color_image,
+        )
+    else:
+        pc_cam = depth_to_pointcloud(depth, fx, fy, cx, cy,
+                                      width=width, height=height,
+                                      stride=DOWNSAMPLE_STRIDE)
+        pc_colors_cam = None
     pc_robot = transform_points(pc_cam, cam_t, cam_rot)
+    # Keep full point cloud + colors for visualization
+    pc_robot_full = pc_robot.copy()
+    pc_colors_full = pc_colors_cam.copy() if pc_colors_cam is not None else None
     print(f"  Point cloud: {len(pc_robot)} points (raw)")
 
     # Fit table plane from camera frustum projection
@@ -424,15 +456,13 @@ def plan_single_target(
         print(f"  Table plane: z={plane_z:.3f}m, "
               f"x=[{bounds[0]:.2f},{bounds[1]:.2f}], y=[{bounds[2]:.2f},{bounds[3]:.2f}]")
 
-        # Remove table surface points from the SDF — the table plane cost
-        # already prevents the arm from going below the surface.  Keeping
-        # table surface points in the SDF creates a double-penalty that
-        # prevents the arm from passing *over* the table cleanly.
-        # Keep only obstacle points that stick up above the table.
-        z_above = plane_z + 0.02  # 20mm above table = still surface
-        mask = pc_robot[:, 2] > z_above
-        pc_robot = pc_robot[mask]
-        print(f"  Point cloud: {len(pc_robot)} points (after z>{z_above:.3f}m filter, obstacles only)")
+        # Remove table surface / floor / below-table points from the SDF.
+        # The table plane cost already prevents the arm from going below
+        # the surface; keeping these points creates false obstacles.
+        pc_robot, filt_mask = filter_below_table(pc_robot, plane_z)
+        if pc_colors_cam is not None:
+            pc_colors_cam = pc_colors_cam[filt_mask]
+        print(f"  Point cloud: {len(pc_robot)} points (after table filter, obstacles only)")
 
         if table_polygon is not None:
             poly_np = table_polygon.cpu().numpy()
@@ -440,26 +470,39 @@ def plan_single_target(
     else:
         print("  WARNING: No point cloud for table plane detection")
 
-    # Adjust grasp Z to midpoint between object top and table surface.
-    # This centres the gripper on the object rather than grasping near the top.
-    # For flat objects, clamp so the gripper doesn't go into the table.
+    # Adjust grasp Z to object top. Targeting the top compensates for
+    # gravity sag on the real arm which pulls the EE lower than planned.
     if table_plane is not None:
         table_z = table_plane[0]
-        mid_z = (object_top_z + table_z) / 2.0
-        min_grasp_z = table_z + GRASP_DEPTH_OFFSET  # at least 30mm above table
-        mid_z = max(mid_z, min_grasp_z)
+        grasp_z = object_top_z + GRASP_DEPTH_OFFSET
+        min_grasp_z = table_z + 0.02  # 20mm above table (hard minimum)
+        grasp_z = max(grasp_z, min_grasp_z)
         print(f"  Grasp Z: object_top={object_top_z:.3f}m, table={table_z:.3f}m "
-              f"→ mid={mid_z:.3f}m (min={min_grasp_z:.3f}m)")
-        grasp_xyzrpy[2] = mid_z
-        pregrasp_xyzrpy[2] = mid_z + APPROACH_MARGIN
+              f"→ grasp={grasp_z:.3f}m (min={min_grasp_z:.3f}m)")
+        # Adjust pre-grasp Z by the same delta as grasp Z.
+        # For vertical approach, pre-grasp is APPROACH_MARGIN above grasp.
+        # For angled/horizontal approach, pre-grasp is offset along the
+        # approach direction (computed in grasp_utils.py), so the Z offset
+        # between grasp and pre-grasp varies with angle.  Preserve it.
+        original_grasp_z = float(grasp_xyzrpy[2])
+        grasp_xyzrpy[2] = grasp_z
+        pregrasp_xyzrpy[2] += (grasp_z - original_grasp_z)
+    else:
+        # No table plane available — still apply depth offset above object surface
+        grasp_z = object_top_z + GRASP_DEPTH_OFFSET
+        print(f"  Grasp Z: object_top={object_top_z:.3f}m (no table plane) "
+              f"→ grasp={grasp_z:.3f}m")
+        original_grasp_z = float(grasp_xyzrpy[2])
+        grasp_xyzrpy[2] = grasp_z
+        pregrasp_xyzrpy[2] += (grasp_z - original_grasp_z)
 
     pc_tensor = pointcloud_to_tensor(pc_robot, device) if len(pc_robot) > 0 else None
 
     # Rank arms by IK error
     arm_candidates = []
-    for arm_name, ee_link, caps in [
-        ("left", LEFT_EE, OPENARM_CAPSULES),
-        ("right", RIGHT_EE, OPENARM_RIGHT_CAPSULES),
+    for arm_name, ee_link, caps, grip_boxes in [
+        ("left", LEFT_EE, OPENARM_CAPSULES, OPENARM_GRIPPER_BOXES),
+        ("right", RIGHT_EE, OPENARM_RIGHT_CAPSULES, OPENARM_RIGHT_GRIPPER_BOXES),
     ]:
         try_chain = build_chain(urdf_path, ee_link)
         try_ik = try_chain.to(dtype=torch.float32, device=str(device))
@@ -475,7 +518,7 @@ def plan_single_target(
         )
         print(f"  {arm_name} arm IK error: {err:.4f}m")
         if err <= IK_TOL:
-            arm_candidates.append((arm_name, err, ee_link, caps))
+            arm_candidates.append((arm_name, err, ee_link, caps, grip_boxes))
 
     if not arm_candidates:
         print(f"  ERROR: No arm can reach the target")
@@ -486,35 +529,139 @@ def plan_single_target(
 
     # Try each arm until we get a collision-free trajectory (or use the best)
     best_result = None
-    for arm_name, arm_err, ee_link, capsules in arm_candidates:
+    for arm_name, arm_err, ee_link, capsules, gripper_boxes in arm_candidates:
         print(f"\n  --- Trying {arm_name} arm (IK err={arm_err:.4f}m) ---")
 
         chain = build_chain(urdf_path, ee_link)
         joint_limits = chain.get_joint_limits()
         num_joints = len(chain.get_joint_parameter_names(exclude_fixed=True))
         ik_chain = chain.to(dtype=torch.float32, device=str(device))
-        capsule_model = CapsuleCollisionModel(capsules, device)
+        capsule_model = CapsuleCollisionModel(capsules, device, boxes=gripper_boxes,
+                                                body_capsule=OPENARM_BODY_CAPSULE)
+        capsule_model.set_gripper_opening(0.088)  # fully open during approach
 
         current_joints = torch.zeros(num_joints, dtype=torch.float32, device=device)
         lower = torch.tensor(joint_limits[0], dtype=torch.float32, device=device)
         upper = torch.tensor(joint_limits[1], dtype=torch.float32, device=device)
 
-        # Solve IK for pre-grasp — validate only against table (hard surface).
-        # Point cloud validation is too strict for endpoints since the gripper
-        # is supposed to approach the object, and the optimizer handles interior
-        # waypoints.  Retry with fresh seeds if config collides with table.
+        # Build target rotation matrix from the grasp RPY for orientation IK
+        from scipy.spatial.transform import Rotation as ScipyRotation
+        grasp_rot_mat = torch.tensor(
+            ScipyRotation.from_euler("XYZ", grasp_xyzrpy[3:6]).as_matrix(),
+            dtype=torch.float32, device=device,
+        )
+        use_rot = ROT_WEIGHT > 0
+        ik_rot_target = grasp_rot_mat  # may be overridden by place EE orientation
+
+        # --- Solve place IK FIRST (if target exists) ---
+        # The place IK typically achieves a good gripper orientation on
+        # the real arm.  We extract the actual EE orientation from the
+        # place solution and reuse it as the rotation target for the
+        # grasp/pre-grasp IK, so the gripper angle matches at both
+        # positions.  The grasp approach is still vertical z-down.
+        q_place = None
+        place_xyzrpy_result = None
+        preplace_xyzrpy_result = None
+        has_place = False
+        grasp_ik_seed = current_joints  # default seed; overridden if place IK succeeds
+
+        if target.get("place") is not None:
+            place = target["place"]
+            pu = float(place[0]) * width / 1000.0
+            pv = float(place[1]) * height / 1000.0
+            print(f"  Place pixel: ({pu:.0f},{pv:.0f})")
+
+            place_result = place_pose_from_pixel(
+                pu, pv, depth, fx, fy, cx, cy,
+                cam_translation=cam_t, cam_rotation=cam_rot,
+                grasp_rpy=grasp_xyzrpy[3:6],
+                width=width, height=height,
+                place_depth_offset=PLACE_DEPTH_OFFSET,
+                floor_height=FLOOR_HEIGHT,
+                approach_margin=PLACE_APPROACH_MARGIN,
+                jaw_contact_depth=0.0,  # no TCP offset for place (object drops to target)
+            )
+            if place_result is None:
+                print(f"  WARNING: Invalid depth at place pixel, falling back to grasp-only")
+            else:
+                place_xyzrpy_local, preplace_xyzrpy_local = place_result
+
+                # Adjust place Z: at least as high as the grasp Z so
+                # the arm never dips lower when placing than when picking.
+                if table_plane is not None:
+                    table_z = table_plane[0]
+                    min_place_z = max(table_z + PLACE_DEPTH_OFFSET, grasp_xyzrpy[2])
+                    if place_xyzrpy_local[2] < min_place_z:
+                        place_xyzrpy_local[2] = min_place_z
+                    preplace_xyzrpy_local[2] = place_xyzrpy_local[2] + PLACE_APPROACH_MARGIN
+
+                t0 = time.time()
+                place_got_orientation = False
+                q_place_cand, place_err = _ik_batch_adam(
+                    ik_chain,
+                    torch.tensor(place_xyzrpy_local[:3], dtype=torch.float32, device=device),
+                    grasp_rot_mat if use_rot else None,
+                    current_joints, lower, upper, device,
+                    num_seeds=32, max_iters=2000, rot_weight=ROT_WEIGHT,
+                )
+                if place_err <= IK_TOL:
+                    place_got_orientation = use_rot
+                elif use_rot:
+                    print(f"  Place IK with orientation failed (err={place_err:.4f}m), retrying position-only...")
+                    q_place_cand, place_err = _ik_batch_adam(
+                        ik_chain,
+                        torch.tensor(place_xyzrpy_local[:3], dtype=torch.float32, device=device),
+                        None, current_joints, lower, upper, device,
+                        num_seeds=32, max_iters=2000, rot_weight=0.0,
+                    )
+                if place_err > IK_TOL:
+                    print(f"  Place IK failed (err={place_err:.4f}m), falling back to grasp-only")
+                else:
+                    print(f"  Place IK: err={place_err:.4f}m, {time.time()-t0:.1f}s"
+                          f"{'' if place_got_orientation else ' (position-only)'}")
+                    q_place = q_place_cand
+                    place_xyzrpy_result = list(place_xyzrpy_local)
+                    preplace_xyzrpy_result = list(preplace_xyzrpy_local)
+                    has_place = True
+                    grasp_ik_seed = q_place
+
+                    # Only use the place orientation for grasp IK if place
+                    # IK succeeded WITH the orientation constraint.  If it
+                    # fell back to position-only, keep the original grasp
+                    # rotation target (from the approach angle).
+                    if place_got_orientation:
+                        with torch.no_grad():
+                            place_fk = ik_chain.forward_kinematics(q_place.unsqueeze(0))
+                            ik_rot_target = place_fk.get_matrix()[0, :3, :3].clone()
+                        print(f"  Using place EE orientation for grasp IK target")
+                    else:
+                        print(f"  Keeping grasp orientation (place was position-only)")
+
+        # --- Solve pre-grasp IK ---
+        # Seeded from q_place (if available) so the IK converges to the
+        # same branch and wrist orientation as the place solution.
         IK_MAX_RETRIES = 3
         q_pregrasp = None
         for ik_try in range(IK_MAX_RETRIES):
             t0 = time.time()
             q_candidate, pre_err = _ik_batch_adam(
                 ik_chain, torch.tensor(pregrasp_xyzrpy[:3], dtype=torch.float32, device=device),
-                None, current_joints, lower, upper, device,
-                num_seeds=32, max_iters=2000, rot_weight=0.0,
+                ik_rot_target if use_rot else None,
+                grasp_ik_seed, lower, upper, device,
+                num_seeds=32, max_iters=2000, rot_weight=ROT_WEIGHT,
             )
-            if pre_err > IK_TOL:
-                print(f"  Pre-grasp IK failed (err={pre_err:.4f}m), skipping arm")
-                break
+            if pre_err > GRASP_IK_TOL:
+                # Fallback: try without orientation constraint
+                if use_rot:
+                    print(f"  Pre-grasp IK with orientation failed (err={pre_err:.4f}m), retrying position-only...")
+                    q_candidate, pre_err = _ik_batch_adam(
+                        ik_chain, torch.tensor(pregrasp_xyzrpy[:3], dtype=torch.float32, device=device),
+                        None, grasp_ik_seed, lower, upper, device,
+                        num_seeds=32, max_iters=2000, rot_weight=0.0,
+                    )
+                if pre_err > GRASP_IK_TOL:
+                    print(f"  Pre-grasp IK failed (err={pre_err:.4f}m), skipping arm")
+                    break
             pre_collisions = validate_ik_config(
                 ik_chain, capsule_model, q_candidate, table_plane, table_polygon,
                 SAFETY_MARGIN, device,
@@ -530,131 +677,341 @@ def plan_single_target(
             print(f"  Pre-grasp IK: no table-clear config after {IK_MAX_RETRIES} attempts, skipping arm")
             continue
 
-        # Solve IK for grasp — no table validation needed since the
-        # descend phase is unoptimized and collision-skipped (the gripper
-        # IS supposed to be near the table at the grasp pose).
+        # --- Solve grasp IK ---
+        # Uses the place EE orientation as target (if available) so the
+        # gripper angle matches the place pose.  Approach is vertical z-down.
         t0 = time.time()
         q_grasp, grasp_err = _ik_batch_adam(
             ik_chain, torch.tensor(grasp_xyzrpy[:3], dtype=torch.float32, device=device),
-            None, q_pregrasp, lower, upper, device,
-            num_seeds=32, max_iters=2000, rot_weight=0.0,
+            ik_rot_target if use_rot else None,
+            q_pregrasp, lower, upper, device,
+            num_seeds=32, max_iters=2000, rot_weight=ROT_WEIGHT,
         )
-        if grasp_err > IK_TOL:
-            print(f"  Grasp IK failed (err={grasp_err:.4f}m), skipping arm")
-            continue
+        if grasp_err > GRASP_IK_TOL:
+            # Fallback: try without orientation constraint
+            if use_rot:
+                print(f"  Grasp IK with orientation failed (err={grasp_err:.4f}m), retrying position-only...")
+                q_grasp, grasp_err = _ik_batch_adam(
+                    ik_chain, torch.tensor(grasp_xyzrpy[:3], dtype=torch.float32, device=device),
+                    None, q_pregrasp, lower, upper, device,
+                    num_seeds=32, max_iters=2000, rot_weight=0.0,
+                )
+            if grasp_err > GRASP_IK_TOL:
+                print(f"  Grasp IK failed (err={grasp_err:.4f}m), skipping arm")
+                continue
         print(f"  Grasp IK: err={grasp_err:.4f}m, {time.time()-t0:.1f}s")
 
-        optimizer = TrajectoryOptimizer(chain=chain, capsule_model=capsule_model,
+        # Use compiled FK for left arm — pre-baked offsets, ~8% faster
+        if ee_link == "openarm_left_hand_tcp":
+            opt_chain = CompiledFKAdapter(CompiledFK(device))
+        else:
+            opt_chain = chain
+        optimizer = TrajectoryOptimizer(chain=opt_chain, capsule_model=capsule_model,
                                         joint_limits=joint_limits, device=device)
+        clearance_z = (table_plane[0] + 0.15) if table_plane is not None else None
         if table_plane is not None:
             optimizer.set_table(table_plane, table_polygon)
+            # Keep EE above the table during optimized phases
+            optimizer.set_min_height(clearance_z)  # 150mm above table
 
-        # --- Lift phase: raise the arm vertically above the table first ---
-        # Solve IK at several intermediate heights and interpolate between
-        # consecutive solutions.  This gives a Cartesian-linear vertical
-        # path that avoids table collisions (joint-space linear goes
-        # sideways through the table).
-        segments = []
-        q_phase1_start = current_joints
+        # --- Phase 1: Lift (fixed, IK-interpolated) ---
+        # Raise the EE vertically above the table via IK at intermediate
+        # heights. Fine z-steps (25mm) keep the interpolated path smooth.
+        # The home position has links below the table — those collisions
+        # are expected and unavoidable during lift/lower.
+        lift_parts = [current_joints.unsqueeze(0)]  # start with home
+        q_lift_end = current_joints  # default if no lift needed
         if table_plane is not None:
             with torch.no_grad():
                 home_fk = ik_chain.forward_kinematics(current_joints.unsqueeze(0))
                 home_ee = home_fk.get_matrix()[0, :3, 3]  # (3,)
-            clearance_z = table_plane[0] + 0.15  # 150mm above table
             if home_ee[2].item() < clearance_z:
-                print(f"  Lift phase: raising EE from z={home_ee[2].item():.3f}m "
+                print(f"  Lift: raising EE from z={home_ee[2].item():.3f}m "
                       f"to z={clearance_z:.3f}m")
-                # Solve IK at intermediate heights every ~50mm
                 z_start = home_ee[2].item()
-                n_ik = max(3, int((clearance_z - z_start) / 0.05) + 1)
+                n_ik = max(5, int((clearance_z - z_start) / 0.025) + 1)
                 z_vals = np.linspace(z_start, clearance_z, n_ik)
-                ik_waypoints = [current_joints]
-                lift_ok = True
+                prev_q = current_joints
                 for z_i in z_vals[1:]:
                     pos_i = home_ee.clone()
                     pos_i[2] = z_i
                     q_i, err_i = _ik_batch_adam(
                         ik_chain, pos_i, None,
-                        ik_waypoints[-1], lower, upper, device,
+                        prev_q, lower, upper, device,
                         num_seeds=16, max_iters=500, rot_weight=0.0,
                     )
                     if err_i > IK_TOL:
                         print(f"  Lift IK failed at z={z_i:.3f}m (err={err_i:.4f}m)")
-                        lift_ok = False
                         break
-                    ik_waypoints.append(q_i)
+                    lift_parts.append(q_i.unsqueeze(0))
+                    prev_q = q_i
+                q_lift_end = prev_q
+                print(f"  Lift: {len(lift_parts)} IK waypoints")
 
-                if lift_ok:
-                    # Interpolate between consecutive IK solutions
-                    steps_per_seg = max(2, (NUM_WAYPOINTS // 8) // len(ik_waypoints))
-                    lift_parts = []
-                    for k in range(len(ik_waypoints) - 1):
-                        t_frac = torch.linspace(0, 1, steps_per_seg + 1, device=device).unsqueeze(1)
-                        seg = ik_waypoints[k] + t_frac * (ik_waypoints[k + 1] - ik_waypoints[k])
-                        lift_parts.append(seg if k == 0 else seg[1:])  # skip duplicate
-                    traj_lift = torch.cat(lift_parts, dim=0).cpu()
-                    print(f"  Lift: {traj_lift.shape[0]} waypoints ({n_ik} IK solutions)")
-                    segments.append(traj_lift)
-                    q_phase1_start = ik_waypoints[-1]
+        # Densify lift via linear interpolation between IK solutions
+        if len(lift_parts) > 1:
+            dense_lift = []
+            pts_per_seg = max(2, 20 // (len(lift_parts) - 1))
+            for k in range(len(lift_parts) - 1):
+                t_frac = torch.linspace(0, 1, pts_per_seg + 1, device=device).unsqueeze(1)
+                seg = lift_parts[k] + t_frac * (lift_parts[k + 1] - lift_parts[k])
+                dense_lift.append(seg if k == 0 else seg[1:])
+            traj_lift = torch.cat(dense_lift, dim=0).cpu()
+        else:
+            traj_lift = lift_parts[0].cpu()
+        print(f"  Lift trajectory: {traj_lift.shape[0]} waypoints (fixed)")
 
+        # --- Phase 1.5: Forward (fixed, IK-interpolated) ---
+        # Move the EE horizontally from above-home toward above-pre-grasp,
+        # staying at clearance height.  This swings the arm past the central
+        # support pole before the optimizer takes over, guaranteeing the
+        # approach/retreat phases start from a pole-clear configuration.
+        forward_parts = []
+        q_forward_end = q_lift_end  # default if no forward needed
+        if table_plane is not None:
+            with torch.no_grad():
+                lift_fk = ik_chain.forward_kinematics(q_lift_end.unsqueeze(0))
+                lift_ee = lift_fk.get_matrix()[0, :3, 3]
+            # Staging point per arm — slight lateral shift from home to clear
+            # the central pole before the optimizer takes over.
+            if ee_link == LEFT_EE:
+                FORWARD_STAGING_XY = (-0.2, -0.3)
+            else:
+                FORWARD_STAGING_XY = (-0.3, 0.1)
+            staging = torch.tensor([FORWARD_STAGING_XY[0], FORWARD_STAGING_XY[1], clearance_z],
+                                   dtype=torch.float32, device=device)
+            horiz_dist = torch.sqrt((staging[0] - lift_ee[0])**2 +
+                                    (staging[1] - lift_ee[1])**2).item()
+            if horiz_dist > 0.02:  # only if >2cm horizontal travel
+                n_fwd = max(5, int(horiz_dist / 0.025) + 1)
+                print(f"  Forward: EE ({lift_ee[0].item():.3f}, {lift_ee[1].item():.3f}) "
+                      f"→ ({staging[0].item():.3f}, {staging[1].item():.3f}) "
+                      f"at z={clearance_z:.3f}m ({n_fwd} IK steps, {horiz_dist*100:.0f}cm)")
+                prev_q = q_lift_end
+                for i in range(1, n_fwd + 1):
+                    alpha = i / n_fwd
+                    pos_i = lift_ee + alpha * (staging - lift_ee)
+                    pos_i[2] = clearance_z
+                    q_i, err_i = _ik_batch_adam(
+                        ik_chain, pos_i, None,
+                        prev_q, lower, upper, device,
+                        num_seeds=16, max_iters=500, rot_weight=0.0,
+                    )
+                    if err_i > IK_TOL:
+                        print(f"  Forward IK failed at step {i}/{n_fwd} "
+                              f"(err={err_i:.4f}m), stopping early")
+                        break
+                    forward_parts.append(q_i.unsqueeze(0))
+                    prev_q = q_i
+                q_forward_end = prev_q
+                print(f"  Forward: {len(forward_parts)} IK waypoints")
+
+        # Densify forward via linear interpolation between IK solutions
+        if forward_parts:
+            all_fwd = [q_lift_end.unsqueeze(0)] + forward_parts
+            dense_fwd = []
+            pts_per_seg = max(2, 20 // (len(all_fwd) - 1))
+            for k in range(len(all_fwd) - 1):
+                t_frac = torch.linspace(0, 1, pts_per_seg + 1, device=device).unsqueeze(1)
+                seg = all_fwd[k] + t_frac * (all_fwd[k + 1] - all_fwd[k])
+                dense_fwd.append(seg if k == 0 else seg[1:])
+            traj_forward = torch.cat(dense_fwd, dim=0).cpu()
+        else:
+            traj_forward = q_lift_end.unsqueeze(0).cpu()
+        print(f"  Forward trajectory: {traj_forward.shape[0]} waypoints (fixed)")
+
+        # --- Phase 2: Approach (optimized, forward-end → pre-grasp) ---
         t0 = time.time()
-        traj1, cost1 = optimizer.optimize(q_start=q_phase1_start, q_goal=q_pregrasp,
-                                           point_cloud=pc_tensor, T=NUM_WAYPOINTS,
-                                           num_seeds=NUM_SEEDS, max_iters=MAX_ITERS)
-        print(f"  Phase 1 (approach): cost={cost1:.4f}, {time.time()-t0:.1f}s")
+        traj_approach, cost_approach = optimizer.optimize(
+            q_start=q_forward_end, q_goal=q_pregrasp,
+            point_cloud=pc_tensor, T=NUM_WAYPOINTS,
+            num_seeds=NUM_SEEDS, max_iters=MAX_ITERS,
+        )
+        print(f"  Approach optimized: cost={cost_approach:.4f}, {time.time()-t0:.1f}s")
 
-        # Phase 2: linear descent from pre-grasp to grasp (no optimizer —
-        # the gripper is supposed to be near the object here)
+        # --- Phase 3: Descend (linear, pre-grasp → grasp) ---
         DESCEND_STEPS = 10
         t_frac = torch.linspace(0, 1, DESCEND_STEPS, device=q_pregrasp.device).unsqueeze(1)
-        traj2 = q_pregrasp + t_frac * (q_grasp - q_pregrasp)
-        traj2 = traj2.cpu()
-        print(f"  Phase 2 (descend): {DESCEND_STEPS} linear waypoints (pre-grasp → grasp)")
+        traj_descend = q_pregrasp + t_frac * (q_grasp - q_pregrasp)
+        traj_descend = traj_descend.cpu()
+        print(f"  Descend: {DESCEND_STEPS} linear waypoints (pre-grasp → grasp)")
 
-        # Assemble full trajectory
-        segments.append(traj1)
-        segments.append(traj2[1:])  # skip duplicate waypoint at junction
-        # Remove duplicate waypoints at segment junctions
-        assembled = [segments[0]]
-        for seg in segments[1:]:
-            assembled.append(seg[1:])  # skip first wp (= last of previous)
-        full_traj = torch.cat(assembled, dim=0)
+        if has_place:
+            # ---- 8-phase pick-and-place trajectory ----
+            print(f"\n  --- Building pick-and-place trajectory ---")
 
-        # Smooth junction regions
-        def _smooth_junction(traj, junction_idx, radius=5, passes=5):
-            jstart = max(1, junction_idx - radius)
-            jend = min(traj.shape[0] - 1, junction_idx + radius)
-            for _ in range(passes):
-                for i in range(jstart, jend):
-                    traj[i] = (traj[i - 1] + traj[i + 1]) / 2.0
+            # Build transport point cloud: remove the grasped object so the
+            # optimizer doesn't treat it as an obstacle while carrying it.
+            grasp_center = np.array(grasp_xyzrpy[:3], dtype=np.float32)
+            obj_radius = max(object_width * 2.0, 0.06)  # generous: 2x jaw width or 6cm min
+            keep_mask = mask_near_point(pc_robot, grasp_center, obj_radius)
+            pc_transport = pc_robot[keep_mask]
+            pc_transport_tensor = (
+                pointcloud_to_tensor(pc_transport, device) if len(pc_transport) > 0 else None
+            )
+            print(f"  Transport cloud: {len(pc_robot)} → {len(pc_transport)} points "
+                  f"(removed {len(pc_robot)-len(pc_transport)} near grasp, r={obj_radius*100:.0f}cm)")
 
-        # Find junction points
-        wp_offset = 0
-        for k, seg in enumerate(segments[:-1]):
-            wp_offset += seg.shape[0] - 1  # -1 because we skip duplicates
-            _smooth_junction(full_traj, wp_offset)
+            # Phase 4: Dwell at grasp (hold for gripper close)
+            traj_grasp_dwell = q_grasp.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
 
-        total_wp = full_traj.shape[0]
-        total_cost = cost1
-        descend_start = total_wp - DESCEND_STEPS  # first descend waypoint index
+            # Phase 5: Transport (grasp → place, optimized with linear init)
+            # Go directly to q_place (not q_preplace) to avoid IK branch
+            # mismatch between pre-place and place heights.  The optimizer
+            # handles both the horizontal movement and descent.
+            T_transport = NUM_WAYPOINTS
+            t_frac_transport = torch.linspace(
+                0, 1, T_transport, device=q_grasp.device
+            ).unsqueeze(1)
+            linear_transport = q_grasp + t_frac_transport * (q_place - q_grasp)
 
-        collisions = validate_trajectory(
-            ik_chain, capsule_model, full_traj, pc_tensor, SAFETY_MARGIN,
-            table_plane=optimizer.table_plane, table_polygon=table_polygon,
-        )
-        # Filter: skip t=0 (home position before lift) and the descend phase
-        # (linear pre-grasp→grasp where gripper IS near the object).  Only
-        # flag table collisions in the descend region (hard surface).
-        hard_collisions = [
-            c for c in collisions
-            if c[0] > 0 and (c[0] < descend_start or "[table]" in c[1])
-        ]
-        soft_collisions = [c for c in collisions if c not in hard_collisions]
-        if soft_collisions:
-            n_soft = len(set(c[0] for c in soft_collisions))
-            print(f"  (Ignoring {n_soft} grasp-endpoint point-cloud margin violations)")
-        _log_collision_check(hard_collisions, total_wp)
-        collisions = hard_collisions
+            t0 = time.time()
+            traj_transport, cost_transport = optimizer.optimize(
+                q_start=q_grasp, q_goal=q_place,
+                point_cloud=pc_transport_tensor, T=T_transport,
+                num_seeds=NUM_SEEDS, max_iters=MAX_ITERS,
+                init_trajectory=linear_transport,
+            )
+            print(f"  Transport optimized: cost={cost_transport:.4f}, {time.time()-t0:.1f}s "
+                  f"(grasp → place direct, min_z={clearance_z:.3f})")
+
+            # Phase 6: No separate descend — transport goes directly to place
+
+            # Phase 7: Dwell at place (hold for gripper open)
+            traj_place_dwell = q_place.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
+
+            # Phase 8: Retreat (place → forward-end, optimized with linear init)
+            # Single optimized phase avoids IK branch mismatch between
+            # place and pre-place heights.
+            T_retreat = NUM_WAYPOINTS
+            t_frac_retreat = torch.linspace(
+                0, 1, T_retreat, device=q_place.device
+            ).unsqueeze(1)
+            linear_retreat = q_place + t_frac_retreat * (q_forward_end - q_place)
+
+            t0 = time.time()
+            traj_retreat, cost_retreat = optimizer.optimize(
+                q_start=q_place, q_goal=q_forward_end,
+                point_cloud=pc_transport_tensor, T=T_retreat,
+                num_seeds=NUM_SEEDS, max_iters=MAX_ITERS,
+                init_trajectory=linear_retreat,
+            )
+            print(f"  Retreat optimized: cost={cost_retreat:.4f}, {time.time()-t0:.1f}s "
+                  f"(place → forward-end)")
+
+            # Phase 9: Backward (reverse of forward — swing back toward pole)
+            traj_backward = traj_forward.flip(0)
+            print(f"  Backward trajectory: {traj_backward.shape[0]} waypoints (reverse forward)")
+
+            # Phase 10: Lower back to home (reverse of lift)
+            traj_lower = traj_lift.flip(0)
+            print(f"  Lower trajectory: {traj_lower.shape[0]} waypoints (reverse lift → home)")
+
+            # Assemble all phases (skip duplicates at junctions)
+            full_traj = torch.cat([
+                traj_lift,                    # Phase 1: lift from home
+                traj_forward[1:],             # Phase 2: forward past pole
+                traj_approach[1:],            # Phase 3: approach pre-grasp
+                traj_descend[1:],             # Phase 4: descend to grasp
+                traj_grasp_dwell,             # Phase 5: dwell at grasp
+                traj_transport[1:],           # Phase 6: transport to place
+                traj_place_dwell,             # Phase 7: dwell at place
+                traj_retreat[1:],             # Phase 8: retreat to forward-end
+                traj_backward[1:],            # Phase 9: backward past pole
+                traj_lower[1:],              # Phase 10: lower to home
+            ], dim=0)
+
+            total_cost = cost_approach + cost_transport + cost_retreat
+
+            # Compute coarse waypoint indices for collision filtering and gripper actions
+            n_lift = traj_lift.shape[0]
+            n_forward = traj_forward.shape[0] - 1
+            n_approach = traj_approach.shape[0] - 1
+            n_descend_grasp = DESCEND_STEPS - 1
+            n_grasp_dwell = DWELL_STEPS
+            n_transport = traj_transport.shape[0] - 1
+            n_place_dwell = DWELL_STEPS
+
+            descend_grasp_start = n_lift + n_forward + n_approach
+            grasp_dwell_start = descend_grasp_start + n_descend_grasp
+            grasp_dwell_end = grasp_dwell_start + n_grasp_dwell
+            transport_end = grasp_dwell_end + n_transport
+            place_dwell_start = transport_end
+            place_dwell_end = place_dwell_start + n_place_dwell
+
+            total_wp = full_traj.shape[0]
+            print(f"  Pick-and-place: {total_wp} coarse waypoints, "
+                  f"cost={total_cost:.4f}")
+
+            # Collision validation — skip lift/forward/lower/backward (fixed IK
+            # paths near the pole) and descend/dwell/transport phases.
+            n_retreat = traj_retreat.shape[0] - 1
+            n_backward = traj_backward.shape[0] - 1
+            backward_start = place_dwell_end + n_retreat
+            lower_start = backward_start + n_backward
+            collisions = validate_trajectory(
+                ik_chain, capsule_model, full_traj, pc_tensor, SAFETY_MARGIN,
+                table_plane=optimizer.table_plane, table_polygon=table_polygon,
+            )
+            skip_ranges = [
+                (0, n_lift + n_forward),                  # lift + forward from home
+                (descend_grasp_start, place_dwell_end),   # grasp descend → place dwell
+                (backward_start, total_wp),               # backward + lower to home
+            ]
+            hard_collisions = [
+                c for c in collisions
+                if not any(lo <= c[0] < hi for lo, hi in skip_ranges)
+            ]
+            soft_collisions = [c for c in collisions if c not in hard_collisions]
+            if soft_collisions:
+                n_soft = len(set(c[0] for c in soft_collisions))
+                print(f"  (Ignoring {n_soft} grasp/place-phase margin violations)")
+            _log_collision_check(hard_collisions, total_wp)
+            collisions = hard_collisions
+
+            # Compute gripper actions (on coarse indices, will be scaled after upsample)
+            GRIPPER_MAX_OPENING = 0.088
+            GRIP_MARGIN = 0.005
+            close_to = max(0.0, object_width - GRIP_MARGIN)
+            grip_close = 1.0 - (close_to / GRIPPER_MAX_OPENING)
+            grip_close = float(np.clip(grip_close, 0.0, 1.0))
+
+            coarse_gripper_actions = [
+                {"waypoint": grasp_dwell_start, "grip": grip_close},
+                {"waypoint": place_dwell_start, "grip": 0.0},
+            ]
+            print(f"  Gripper: close={grip_close:.2f} @wp{grasp_dwell_start}, "
+                  f"open @wp{place_dwell_start}")
+
+        else:
+            # ---- grasp-only trajectory (lift + forward + approach + descend) ----
+            full_traj = torch.cat([
+                traj_lift, traj_forward[1:], traj_approach[1:], traj_descend[1:],
+            ], dim=0)
+
+            total_wp = full_traj.shape[0]
+            total_cost = cost_approach
+            n_lift = traj_lift.shape[0]
+            n_forward = traj_forward.shape[0] - 1
+            approach_start = n_lift + n_forward
+            descend_start = approach_start + traj_approach.shape[0] - 1
+
+            collisions = validate_trajectory(
+                ik_chain, capsule_model, full_traj, pc_tensor, SAFETY_MARGIN,
+                table_plane=optimizer.table_plane, table_polygon=table_polygon,
+            )
+            hard_collisions = [
+                c for c in collisions
+                if approach_start <= c[0] < descend_start  # approach phase only
+            ]
+            soft_collisions = [c for c in collisions if c not in hard_collisions]
+            if soft_collisions:
+                n_soft = len(set(c[0] for c in soft_collisions))
+                print(f"  (Ignoring {n_soft} grasp-endpoint point-cloud margin violations)")
+            _log_collision_check(hard_collisions, total_wp)
+            collisions = hard_collisions
+
+            coarse_gripper_actions = []
 
         # Upsample via cubic spline for smoother execution
         from scipy.interpolate import CubicSpline
@@ -671,6 +1028,13 @@ def plan_single_target(
         traj_fine = np.clip(traj_fine, lower_np, upper_np)
         print(f"  Upsampled: {n_coarse} → {n_fine} waypoints (×{UPSAMPLE_FACTOR})")
         traj_np = traj_fine.astype(np.float32)
+
+        # Scale gripper actions to upsampled indices
+        gripper_actions = []
+        for action in coarse_gripper_actions:
+            fine_wp = int(action["waypoint"] * (n_fine - 1) / (n_coarse - 1))
+            gripper_actions.append({"waypoint": fine_wp, "grip": action["grip"]})
+
         result = GraspResult(
             label=label,
             arm=arm_name,
@@ -682,16 +1046,24 @@ def plan_single_target(
             cost=float(total_cost),
             collisions=collisions,
             object_width=object_width,
-            pc_robot=pc_robot,
+            pc_robot=pc_robot_full,
+            pc_colors=pc_colors_full,
             table_corners=table_corners_robot,
+            place_xyzrpy=place_xyzrpy_result,
+            preplace_xyzrpy=preplace_xyzrpy_result,
+            gripper_actions=gripper_actions,
         )
 
         if not collisions:
-            print(f"  {arm_name} arm: collision-free!")
-            return result
+            print(f"  {arm_name} arm: collision-free, cost={total_cost:.1f}")
 
-        # Keep best result so far (fewest collisions)
-        if best_result is None or len(collisions) < len(best_result.collisions):
+        # Keep best result: prefer pick-and-place over grasp-only,
+        # then fewest collisions, then lowest cost.
+        def _score(r):
+            has_place = r.place_xyzrpy is not None
+            return (not has_place, len(r.collisions), r.cost)
+
+        if best_result is None or _score(result) < _score(best_result):
             best_result = result
 
     if best_result is not None:
@@ -844,9 +1216,9 @@ def render_trajectory_gif(
     fig = plt.figure(figsize=(20, 16))
     views = [
         (1, "Top", 90, -90),
-        (2, "Front", 0, -45),
+        (2, "Front", 20, -45),
         (3, "Side", 25, -60),
-        (4, "Right", 0, 45),
+        (4, "Right", 20, 45),
     ]
     axes = []
     for idx, title, elev, azim in views:
@@ -856,11 +1228,14 @@ def render_trajectory_gif(
         axes.append(ax)
 
     # Point cloud for viz (subsample to 5000 points)
+    pc_colors = result.pc_colors
     if pc_robot is not None and len(pc_robot) > 0:
         stride_viz = max(1, len(pc_robot) // 5000)
         pc_viz = pc_robot[::stride_viz]
+        pc_viz_colors = pc_colors[::stride_viz] if pc_colors is not None else None
     else:
         pc_viz = None
+        pc_viz_colors = None
 
     # Axis limits
     pts_for_bounds = [ee_trail]
@@ -886,8 +1261,12 @@ def render_trajectory_gif(
             ax.view_init(elev=elev, azim=azim)
 
             if pc_viz is not None:
-                ax.scatter(pc_viz[:, 0], pc_viz[:, 1], pc_viz[:, 2],
-                           c="gray", s=0.5, alpha=0.1)
+                if pc_viz_colors is not None:
+                    ax.scatter(pc_viz[:, 0], pc_viz[:, 1], pc_viz[:, 2],
+                               c=pc_viz_colors, s=1.0, alpha=0.3)
+                else:
+                    ax.scatter(pc_viz[:, 0], pc_viz[:, 1], pc_viz[:, 2],
+                               c="gray", s=0.5, alpha=0.08)
 
             # Table plane quadrilateral
             if table_corners is not None:
@@ -923,6 +1302,24 @@ def render_trajectory_gif(
                        s=40, marker=mk, zorder=10)
             ax.scatter(*ee_trail[0], c="blue", s=50, marker="^", zorder=10)
             ax.scatter(*ee_trail[-1], c="red", s=50, marker="v", zorder=10)
+
+            # Grasp and place target markers
+            if result.grasp_xyzrpy is not None:
+                gp = np.array(result.grasp_xyzrpy[:3])
+                ax.scatter(*gp, c="lime", s=120, marker="*", edgecolors="darkgreen",
+                           linewidths=1, zorder=11, label="Grasp")
+            if result.pregrasp_xyzrpy is not None:
+                pp = np.array(result.pregrasp_xyzrpy[:3])
+                ax.scatter(*pp, c="cyan", s=60, marker="D", edgecolors="teal",
+                           linewidths=0.5, zorder=11, label="Pre-grasp")
+            if result.place_xyzrpy is not None:
+                plp = np.array(result.place_xyzrpy[:3])
+                ax.scatter(*plp, c="orange", s=120, marker="*", edgecolors="darkorange",
+                           linewidths=1, zorder=11, label="Place")
+            if result.preplace_xyzrpy is not None:
+                ppp = np.array(result.preplace_xyzrpy[:3])
+                ax.scatter(*ppp, c="yellow", s=60, marker="D", edgecolors="goldenrod",
+                           linewidths=0.5, zorder=11, label="Pre-place")
 
             ax.set_xlim(center[0] - max_range, center[0] + max_range)
             ax.set_ylim(center[1] - max_range, center[1] + max_range)
@@ -969,38 +1366,59 @@ def save_result(result, output_dir, camera_transform_str):
     output_dir.mkdir(parents=True, exist_ok=True)
     out_path = output_dir / f"{result.label}_trajectory.json"
 
-    # Gripper: open throughout, close proportionally to object width at the end.
-    # Total jaw opening = 88mm (44mm per finger). Gripper value 0.0=fully open,
-    # 1.0=fully closed. Close to object width minus a small grip margin.
-    GRIPPER_MAX_OPENING = 0.088  # 88mm total (2 × 44mm per finger)
-    GRIP_MARGIN = 0.005          # 5mm squeeze past object surface
     num_wp = result.trajectory.shape[0]
     gripper = np.zeros(num_wp, dtype=np.float32)
-    # How much to close: object_width is what we need to reach, minus margin
-    close_to = max(0.0, result.object_width - GRIP_MARGIN)
-    # Gripper value = fraction of travel from open to closed
-    grip_close = 1.0 - (close_to / GRIPPER_MAX_OPENING)
-    grip_close = np.clip(grip_close, 0.0, 1.0)
-    gripper[-1] = grip_close
-    print(f"  Gripper: object={result.object_width*1000:.0f}mm, "
-          f"close to {close_to*1000:.0f}mm opening, "
-          f"grip={grip_close:.2f} (0=open, 1=closed)")
+
+    GRIPPER_RAMP_STEPS = 40  # ramp over 40 waypoints (~4s at dt=0.1)
+
+    if result.gripper_actions:
+        # Pick-and-place: apply gripper actions with gradual ramp
+        prev_grip = 0.0
+        for action in result.gripper_actions:
+            wp = action["waypoint"]
+            target = action["grip"]
+            ramp_end = min(wp + GRIPPER_RAMP_STEPS, num_wp)
+            ramp_len = ramp_end - wp
+            if ramp_len > 0:
+                ramp = np.linspace(prev_grip, target, ramp_len + 1)[1:]
+                gripper[wp:ramp_end] = ramp
+            gripper[ramp_end:] = target
+            prev_grip = target
+        print(f"  Gripper actions: {len(result.gripper_actions)} events "
+              f"(pick-and-place mode, ramp={GRIPPER_RAMP_STEPS} steps)")
+    else:
+        # Grasp-only: close proportionally to object width at the end
+        GRIPPER_MAX_OPENING = 0.088  # 88mm total (2 x 44mm per finger)
+        GRIP_MARGIN = 0.005          # 5mm squeeze past object surface
+        close_to = max(0.0, result.object_width - GRIP_MARGIN)
+        grip_close = 1.0 - (close_to / GRIPPER_MAX_OPENING)
+        grip_close = np.clip(grip_close, 0.0, 1.0)
+        gripper[-1] = grip_close
+        print(f"  Gripper: object={result.object_width*1000:.0f}mm, "
+              f"close to {close_to*1000:.0f}mm opening, "
+              f"grip={grip_close:.2f} (0=open, 1=closed)")
+
+    extra_metadata = {
+        "target": result.label,
+        "camera_transform": camera_transform_str,
+        "ik_tolerance": IK_TOL,
+        "pre_grasp_err": result.ik_pre_err,
+        "grasp_err": result.ik_grasp_err,
+        "total_cost": result.cost,
+        "num_collisions": len(result.collisions),
+        "grasp_xyzrpy": [float(v) for v in result.grasp_xyzrpy],
+        "pregrasp_xyzrpy": [float(v) for v in result.pregrasp_xyzrpy],
+    }
+    if result.place_xyzrpy is not None:
+        extra_metadata["place_xyzrpy"] = [float(v) for v in result.place_xyzrpy]
+    if result.preplace_xyzrpy is not None:
+        extra_metadata["preplace_xyzrpy"] = [float(v) for v in result.preplace_xyzrpy]
 
     save_trajectory(
         str(out_path), result.trajectory,
         arm=result.arm, dt=0.1, kp=30.0, kd=1.0,
         gripper=gripper,
-        extra_metadata={
-            "target": result.label,
-            "camera_transform": camera_transform_str,
-            "ik_tolerance": IK_TOL,
-            "pre_grasp_err": result.ik_pre_err,
-            "grasp_err": result.ik_grasp_err,
-            "total_cost": result.cost,
-            "num_collisions": len(result.collisions),
-            "grasp_xyzrpy": [float(v) for v in result.grasp_xyzrpy],
-            "pregrasp_xyzrpy": [float(v) for v in result.pregrasp_xyzrpy],
-        },
+        extra_metadata=extra_metadata,
     )
     print(f"  Trajectory saved: {out_path}")
     return out_path
@@ -1021,9 +1439,11 @@ def main():
                         help="Arm pair label (for logging; arm selection is by IK error)")
     parser.add_argument("--camera", default=None,
                         help="RealSense label (first enabled if omitted)")
+    parser.add_argument("--depth", default=None,
+                        help="Path to .npz depth fixture (skip live RealSense capture)")
     parser.add_argument("--output", default="./output",
                         help="Output directory (default: ./output)")
-    parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"],
+    parser.add_argument("--device", default="cuda", choices=["cuda", "cpu", "mps"],
                         help="Compute device (default: cuda)")
     parser.add_argument("--no-gif", action="store_true",
                         help="Skip GIF rendering")
@@ -1034,30 +1454,73 @@ def main():
     # Resolve config
     print("=== Grasp Trajectory Planner ===\n")
     config = load_config(args.config)
-    camera_result = resolve_camera(config, args.camera)
-    if camera_result is None:
-        print("ERROR: Could not resolve camera from config")
-        sys.exit(1)
-    camera_transform_str, relay_path = camera_result
+
+    camera_transform_str = None
+    relay_path = None
+    if not args.depth:
+        camera_result = resolve_camera(config, args.camera)
+        if camera_result is None:
+            print("ERROR: Could not resolve camera from config")
+            sys.exit(1)
+        camera_transform_str, relay_path = camera_result
+    else:
+        # Still try to resolve camera for the transform string (if not in fixture)
+        camera_result = resolve_camera(config, args.camera)
+        if camera_result is not None:
+            camera_transform_str, relay_path = camera_result
 
     robot_pair = resolve_robot(config, args.robot, camera_relay_path=relay_path)
 
     # Resolve paths and device
     urdf_path = Path(args.urdf) if args.urdf else DEFAULT_URDF
     output_dir = Path(args.output)
-    device = torch.device(args.device if args.device == "cpu" or torch.cuda.is_available() else "cpu")
+    if args.device == "cuda" and torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif args.device == "mps":
+        # MPS (Apple Metal) is slower than CPU for trajectory optimization
+        # due to kernel launch overhead on hundreds of small sequential ops.
+        print("NOTE: MPS requested but CPU is faster for this workload, using CPU")
+        device = torch.device("cpu")
+    elif args.device == "cpu":
+        device = torch.device("cpu")
+    else:
+        print(f"WARNING: {args.device} not available, falling back to cpu")
+        device = torch.device("cpu")
     print(f"Device: {device}")
     print(f"URDF: {urdf_path}")
 
     # Load targets
     targets = load_targets(args.targets)
+
+    # Prefix labels with machine name derived from --camera (e.g. "champagne-realsense" → "champagne")
+    machine = None
+    if args.camera:
+        machine = args.camera.split("-")[0]
+    if machine:
+        for t in targets:
+            t["label"] = f"{machine}_{t['label']}"
+
     print(f"\nTargets: {len(targets)}")
     for t in targets:
-        print(f"  - {t['label']}: p1={t['p1']}, p2={t['p2']}")
+        place_str = f", place={t['place']}" if "place" in t else ""
+        print(f"  - {t['label']}: p1={t['p1']}, p2={t['p2']}{place_str}")
 
     # Capture depth (once for all targets)
-    print(f"\n[1/{len(targets)+1}] Capturing depth from RealSense...")
-    depth, intrinsics = capture_depth(relay_path)
+    if args.depth:
+        print(f"\n[1/{len(targets)+1}] Loading depth from {args.depth}...")
+        fixture = np.load(args.depth, allow_pickle=True)
+        depth = fixture["depth"]
+        color_image = fixture["color"]
+        fx, fy, cx, cy = fixture["intrinsics"]
+        intrinsics = (float(fx), float(fy), float(cx), float(cy))
+        if "camera_transform_str" in fixture:
+            camera_transform_str = str(fixture["camera_transform_str"])
+            print(f"  Using camera transform from fixture: {camera_transform_str}")
+        w, h = fixture["image_size"]
+        print(f"  Loaded: {w}x{h}, intrinsics=({fx:.1f},{fy:.1f},{cx:.1f},{cy:.1f})")
+    else:
+        print(f"\n[1/{len(targets)+1}] Capturing depth from RealSense...")
+        depth, color_image, intrinsics = capture_depth(relay_path)
     cam_t, cam_rot = parse_camera_transform(camera_transform_str)
 
     # Adjust camera translation to arm-local frame
@@ -1075,6 +1538,7 @@ def main():
         print(f"\n[{step}/{len(targets)+1}] Planning '{target['label']}'...")
         result = plan_single_target(
             target, depth, intrinsics, cam_t, cam_rot, device, urdf_path,
+            color_image=color_image,
         )
         if result is None:
             print(f"  SKIPPED: planning failed for '{target['label']}'")

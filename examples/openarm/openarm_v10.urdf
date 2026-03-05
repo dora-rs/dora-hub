@@ -251,7 +251,7 @@
     </inertial>
   </link>
   <joint name="L_J3" type="revolute">
-    <origin rpy="0 0 0" xyz="0.0301 0.0 0.06625"/>
+    <origin rpy="0 0 0" xyz="0.0301 0.0 0.11625"/>
     <parent link="openarm_left_link2"/>
     <child link="openarm_left_link3"/>
     <axis xyz="0 0 1"/>
@@ -485,7 +485,7 @@
     </inertial>
   </link>
   <joint name="R_J3" type="revolute">
-    <origin rpy="0 0 0" xyz="0.0301 0.0 0.06625"/>
+    <origin rpy="0 0 0" xyz="0.0301 0.0 0.11625"/>
     <parent link="openarm_right_link2"/>
     <child link="openarm_right_link3"/>
     <axis xyz="0 0 1"/>

@@ -52,8 +52,8 @@ nodes:
     env:
       IMAGE_WIDTH: "1280"
       IMAGE_HEIGHT: "720"
-      TARGET_OBJECT: "the yellow block"
-      PLACE_CONTAINER: "the green box"
+      TARGET_OBJECT: "the black chess piece"
+      PLACE_CONTAINER: "the chessboard"
       USE_THINK: "true"
       OUTPUT_DIR: "."
       USE_SAM2: "false"
@@ -63,8 +63,8 @@ nodes:
   - id: vlm
     path: ../../target/release/dora-qwen-omni
     args: >-
-      --model /home/baguette/models/qwen3-vl-a3b-thinking/Qwen3VL-30B-A3B-Thinking-Q4_K_M.gguf
-      --mmproj /home/baguette/models/qwen3-vl-a3b-thinking/mmproj-Qwen3VL-30B-A3B-Thinking-F16.gguf
+      --model /home/baguette/models/qwen3.5-35b-a3b/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf
+      --mmproj /home/baguette/models/qwen3.5-35b-a3b/mmproj-F16.gguf
       --prompt Output:
       -t 24
       --n-predict 8192
@@ -91,7 +91,7 @@ nodes:
     env:
       URDF_PATH: "../openarm/openarm_v10.urdf"
       END_EFFECTOR_LINK: "openarm_left_hand_tcp"
-      CAMERA_TRANSFORM: "-0.23 0.81 0.25 95 -45 0"
+      CAMERA_TRANSFORM: "-0.27 0.78 0.25 94.8 0.3 -54"
       IMAGE_WIDTH: "1280"
       IMAGE_HEIGHT: "720"
       DOWNSAMPLE_STRIDE: "8"

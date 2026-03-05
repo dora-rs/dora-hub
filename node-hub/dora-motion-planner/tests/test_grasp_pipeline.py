@@ -7,7 +7,7 @@ Uses the real URDF, camera transform, and realistic depth data to verify
 the entire pipeline produces valid, collision-checked trajectories.
 
 Matches the config from examples/openarm-grasp/openarm-grasp-motion.yml:
-  CAMERA_TRANSFORM: "-0.26 0.71 0.3 90 -45 0"
+  CAMERA_TRANSFORM: "-0.26 0.71 0.3 90 0 -45"
   IMAGE_WIDTH: 1280, IMAGE_HEIGHT: 720
   END_EFFECTOR_LINK: "openarm_left_hand_tcp"
 """
@@ -38,7 +38,7 @@ URDF_PATH = (
     / "openarm"
     / "openarm_v10.urdf"
 )
-CAMERA_TRANSFORM_STR = "-0.26 0.71 0.3 90 -45 0"
+CAMERA_TRANSFORM_STR = "-0.26 0.71 0.3 90 0 -45"
 IMAGE_WIDTH = 1280
 IMAGE_HEIGHT = 720
 END_EFFECTOR_LINK = "openarm_left_hand_tcp"
@@ -152,7 +152,7 @@ class TestGraspDeprojection:
         )
 
         assert result is not None, "Failed to compute grasp pose from jaw pixels"
-        grasp_xyzrpy, pregrasp_xyzrpy = result
+        grasp_xyzrpy, pregrasp_xyzrpy, _, _ = result
 
         # Grasp should be in the arm's reachable workspace
         x, y, z = grasp_xyzrpy[:3]
@@ -193,7 +193,7 @@ class TestIKSolver:
         )
         assert result is not None
 
-        grasp_xyzrpy, pregrasp_xyzrpy = result
+        grasp_xyzrpy, pregrasp_xyzrpy, _, _ = result
         joint_limits = chain.get_joint_limits()
         current_joints = torch.zeros(
             len(chain.get_joint_parameter_names(exclude_fixed=True)),
@@ -315,7 +315,7 @@ class TestFullGraspPipeline:
             approach_margin=APPROACH_MARGIN,
         )
         assert result is not None, "Grasp pose computation failed"
-        grasp_xyzrpy, pregrasp_xyzrpy = result
+        grasp_xyzrpy, pregrasp_xyzrpy, _, _ = result
         print(f"Grasp: {np.round(grasp_xyzrpy, 4)}")
         print(f"Pre-grasp: {np.round(pregrasp_xyzrpy, 4)}")
 
@@ -437,7 +437,7 @@ class TestFullGraspPipeline:
                 results.append((grasp["desc"], "deprojection_failed", None))
                 continue
 
-            grasp_xyzrpy, pregrasp_xyzrpy = result
+            grasp_xyzrpy, pregrasp_xyzrpy, _, _ = result
 
             q_pregrasp = solve_ik(
                 ik_chain, pregrasp_xyzrpy, current_joints, joint_limits, device,

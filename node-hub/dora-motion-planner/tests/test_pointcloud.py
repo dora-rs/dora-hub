@@ -89,7 +89,7 @@ class TestCameraTransform:
 
     def test_xyzrpy_depth_maps_downward(self):
         """With viewer RPY=(90,-45,0), camera depth maps to -Z (down) in URDF."""
-        _, rot = parse_camera_transform("-0.23 0.71 0.3 90 -45 0")
+        _, rot = parse_camera_transform("-0.23 0.71 0.3 90 0 -45")
         R = rot.as_matrix()
         # CV camera Z-axis (depth/forward) should map to URDF -Z (downward)
         cam_z_in_urdf = R @ [0, 0, 1]
@@ -97,7 +97,7 @@ class TestCameraTransform:
 
     def test_xyzrpy_center_pixel_projection(self):
         """Center pixel at 0.5m depth projects directly below camera in URDF."""
-        t, rot = parse_camera_transform("-0.23 0.71 0.3 90 -45 0")
+        t, rot = parse_camera_transform("-0.23 0.71 0.3 90 0 -45")
         p_cv = np.array([[0, 0, 0.5]], dtype=np.float32)
         p_robot = transform_points(p_cv, t, rot)
         # Camera at URDF (-0.23, -0.3, 0.71) looking straight down
@@ -106,7 +106,7 @@ class TestCameraTransform:
 
     def test_xyzrpy_off_center_pixel(self):
         """Off-center pixel at depth 0.4m projects to an offset position."""
-        t, rot = parse_camera_transform("-0.23 0.71 0.3 90 -45 0")
+        t, rot = parse_camera_transform("-0.23 0.71 0.3 90 0 -45")
         # Pixel (640, 500) at depth 0.4m, intrinsics: fx=906, fy=905, cx=644, cy=379
         fx, fy, cx, cy = 906, 905, 644, 379
         u, v, d = 640, 500, 0.4

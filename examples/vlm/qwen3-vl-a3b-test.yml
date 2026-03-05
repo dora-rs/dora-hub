@@ -26,7 +26,7 @@ nodes:
 
   - id: dora-qwen-omni
     path: ../../target/release/dora-qwen-omni
-    args: --model /home/champagne/models/qwen3-vl-a3b/Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf --mmproj /home/champagne/models/qwen3-vl-a3b/mmproj-Qwen3VL-30B-A3B-Instruct-F16.gguf --prompt "Output:" -t 24 --n-predict 30
+    args: --model /home/champagne/models/qwen3.5-35b-a3b/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf --mmproj /home/champagne/models/qwen3.5-35b-a3b/mmproj-F16.gguf --prompt "Output:" -t 24 --n-predict 30
     inputs:
       text: formatter/text
     outputs:

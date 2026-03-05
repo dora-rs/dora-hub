@@ -44,13 +44,42 @@ dora stop <dataflow-id>
 dora destroy
 ```
 
-### Qwen3-VL-A3B Model
+### Qwen3.5-35B-A3B Model
 
-- Model path: `/home/champagne/models/qwen3-vl-a3b/Qwen3VL-30B-A3B-Instruct-Q4_K_M.gguf`
-- mmproj path: `/home/champagne/models/qwen3-vl-a3b/mmproj-Qwen3VL-30B-A3B-Instruct-F16.gguf`
-- 30B total params, 3B active (MoE), Q4_K_M quantization (~18GB VRAM)
-- Performance on RTX 5090: ~1.2s per frame (bottleneck is vision encoder prefill: 300 batches × 3ms)
-- Constraining output (bbox vs sentences) doesn't meaningfully affect speed
+- Model path (champagne): `/home/champagne/models/qwen3.5-35b-a3b/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf`
+- Model path (baguette): `/home/baguette/models/qwen3.5-35b-a3b/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf`
+- mmproj path: `mmproj-F16.gguf` (same dir)
+- 35B total params, 3B active (MoE, 256 experts), Q4_K_M quantization (~19GB VRAM)
+- Uses llama-cpp-rs v0.1.137 (llama.cpp with Qwen3.5 support via PR #19468)
+- Architecture: `qwen35moe`, projector: `qwen3vl_merger`
+
+### Generating grasp/pick-and-place trajectories
+
+Run `grasp_trajectory.py` standalone on champagne (no dora/CAN needed — reads depth from xoq-realsense relay):
+
+```bash
+ssh champagne@172.18.128.207
+source ~/miniconda3/etc/profile.d/conda.sh && conda activate base
+cd ~/dora-hub/examples/openarm-grasp
+
+# Pick-and-place: pick yellow cube, place in green box
+python grasp_trajectory.py \
+    --config openarm-config.json \
+    --targets '{"p1": [316, 382], "p2": [359, 382], "place": [609, 528]}' \
+    --camera champagne-realsense --device cuda
+
+# Grasp-only (2-phase: home → pre-grasp → grasp)
+python grasp_trajectory.py \
+    --config openarm-config.json \
+    --targets '{"p1": [316, 382], "p2": [359, 382]}' \
+    --camera champagne-realsense --device cuda
+```
+
+- Coordinates are 0-1000 normalized pixel coords (same as `grasp_selector.py` output)
+- `--camera` selects the RealSense by label from `openarm-config.json` (reads via xoq relay)
+- Outputs: `output/<label>_trajectory.json`, `output/<label>_trajectory.gif`, `output/<label>_final.png`
+- Tries both arms, picks the one with lowest collision count / cost
+- Copy results locally: `scp champagne@172.18.128.207:~/dora-hub/examples/openarm-grasp/output/* examples/openarm-grasp/output/`
 
 ## dora-qwen-omni Input Format
 

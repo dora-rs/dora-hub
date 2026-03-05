@@ -41,6 +41,7 @@ DEPTH_THRESHOLD_MM = float(os.getenv("DEPTH_THRESHOLD_MM", "30"))
 USE_SAM2 = os.getenv("USE_SAM2", "true").lower() in ("1", "true", "yes")
 USE_SAM3 = os.getenv("USE_SAM3", "false").lower() in ("1", "true", "yes")
 PLACE_CONTAINER = os.getenv("PLACE_CONTAINER", "")  # e.g. "the pan" — enables place detection
+SKIP_VLM_RATING = os.getenv("SKIP_VLM_RATING", "false").lower() in ("1", "true", "yes")
 
 # Gripper physical dimensions (SO-100 / similar small gripper)
 GRIPPER_MAX_OPENING_MM = 100.0  # full opening
@@ -761,6 +762,7 @@ state = STATE_IDLE
 latest_image = None
 latest_depth = None
 latest_intrinsics = None
+pending_trigger = False
 candidates = []
 locate_center = None
 rating_idx = 0
@@ -779,9 +781,39 @@ for _old in _glob.glob(os.path.join(OUTPUT_DIR, "critic_*.png")):
 frame_count = 0
 
 
+def _emit_best_geo(node, img, cands, fc):
+    """Skip VLM rating — pick the best geometric candidate and emit immediately."""
+    global state, best_grasp_result, place_center, frame_count
+    winner = max(cands, key=lambda c: c.geo_score)
+    print(f"[Skip VLM] Using best geometric candidate "
+          f"({winner.angle_deg:.0f}deg, geo={winner.geo_score:.2f})")
+    node.send_output("status", pa.array([f"Grasp found ({winner.angle_deg:.0f}deg)"]))
+    grasp = format_grasp_result(winner)
+
+    if PLACE_CONTAINER:
+        best_grasp_result = grasp
+        print(f"\n[Place] Asking VLM to locate '{PLACE_CONTAINER}'...")
+        node.send_output("status", pa.array([f"Locating '{PLACE_CONTAINER}'..."]))
+        prompt = PLACE_LOCATE_PROMPT_TEMPLATE.format(
+            container_name=PLACE_CONTAINER,
+        )
+        send_vlm_request(node, img, prompt)
+        state = STATE_PLACE_VLM_LOCATE
+    else:
+        grasp_json = json.dumps(grasp)
+        print(f"  Grasp result: {grasp_json}")
+        node.send_output("grasp_result", pa.array([grasp_json]))
+        frame_count += 1
+        state = STATE_IDLE
+
+
 def _start_rating(node, img, cands, fc):
     """Begin the VLM rating loop for the first candidate."""
     global state, candidates, scores, reasons, rating_idx
+
+    if SKIP_VLM_RATING:
+        return _emit_best_geo(node, img, cands, fc)
+
     candidates = cands
     scores = []
     reasons = []
@@ -815,6 +847,10 @@ for event in node:
                         fl = None
                 if isinstance(fl, list) and len(fl) >= 2:
                     latest_intrinsics = (float(fl[0]), float(fl[1]))
+            # Process deferred trigger now that we have an image
+            if pending_trigger:
+                pending_trigger = False
+                event_id = "trigger"
 
         elif event_id == "depth":
             raw = event["value"].to_numpy()
@@ -839,12 +875,14 @@ for event in node:
                 print(f"Busy (state={state}), ignoring trigger")
                 continue
             if latest_image is None:
-                print("No image yet, skipping")
+                print("No image yet, deferring trigger until first frame")
+                pending_trigger = True
                 continue
 
             if USE_SAM3:
                 # SAM3 mode: skip VLM locate, send text prompt to SAM3 directly
                 print(f"[SAM3] Sending text prompt: '{TARGET_OBJECT}'")
+                node.send_output("status", pa.array([f"Segmenting '{TARGET_OBJECT}'..."]))
                 node.send_output(
                     "sam3_text",
                     pa.array([TARGET_OBJECT]),
@@ -856,6 +894,7 @@ for event in node:
                     (HEIGHT, WIDTH, 3)
                 )
                 print(f"[Pass 1] Asking VLM to locate {TARGET_OBJECT}...")
+                node.send_output("status", pa.array([f"VLM locating '{TARGET_OBJECT}'..."]))
                 prompt = LOCATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
                 send_vlm_request(node, img, prompt)
                 state = STATE_LOCATE_PENDING
@@ -869,6 +908,7 @@ for event in node:
                 mask_raw = event["value"].to_numpy(zero_copy_only=False)
                 if mask_raw.size == 0 or mask_raw.size < mask_h * mask_w:
                     print("  [Place] SAM3 returned empty mask, falling back to grasp-only")
+                    node.send_output("status", pa.array([f"Place target '{PLACE_CONTAINER}' not found, grasp-only"]))
                     grasp_json = json.dumps(best_grasp_result)
                     print(f"  Grasp result: {grasp_json}")
                     node.send_output("grasp_result", pa.array([grasp_json]))
@@ -883,6 +923,7 @@ for event in node:
                 if n_mask < 100:
                     # Empty mask — send grasp-only result
                     print("  [Place] Container mask too small, falling back to grasp-only")
+                    node.send_output("status", pa.array([f"Place target '{PLACE_CONTAINER}' not found, grasp-only"]))
                     grasp_json = json.dumps(best_grasp_result)
                     print(f"  Grasp result: {grasp_json}")
                     node.send_output("grasp_result", pa.array([grasp_json]))
@@ -938,7 +979,11 @@ for event in node:
             mask_h = int(mask_meta.get("height", HEIGHT))
             mask_raw = event["value"].to_numpy(zero_copy_only=False)
             if mask_raw.size == 0 or mask_raw.size < mask_h * mask_w:
-                print(f"  {source_name} returned empty mask, retrying...")
+                print(f"  {source_name} returned empty mask for '{TARGET_OBJECT}'")
+                node.send_output("grasp_result", pa.array([json.dumps({
+                    "status": "failed",
+                    "reason": f"Could not segment '{TARGET_OBJECT}'",
+                })]))
                 state = STATE_IDLE
                 continue
             mask = (mask_raw.reshape((mask_h, mask_w)) > 0).astype(np.uint8) * 255
@@ -1149,6 +1194,7 @@ for event in node:
                     if place_cx < 0 or place_cy < 0:
                         # VLM explicitly says object not found
                         print(f"  [Place] VLM says '{PLACE_CONTAINER}' not found, falling back to grasp-only")
+                        node.send_output("status", pa.array([f"Place target '{PLACE_CONTAINER}' not found, grasp-only"]))
                         grasp_json = json.dumps(best_grasp_result)
                         print(f"  Grasp result: {grasp_json}")
                         node.send_output("grasp_result", pa.array([grasp_json]))
@@ -1182,6 +1228,7 @@ for event in node:
                 else:
                     print(f"  [Place] Failed to parse VLM location: {text}")
                     print("  [Place] Falling back to grasp-only")
+                    node.send_output("status", pa.array([f"Place target '{PLACE_CONTAINER}' not found, grasp-only"]))
                     grasp_json = json.dumps(best_grasp_result)
                     print(f"  Grasp result: {grasp_json}")
                     node.send_output("grasp_result", pa.array([grasp_json]))

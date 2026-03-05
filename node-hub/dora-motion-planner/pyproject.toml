@@ -9,6 +9,7 @@ requires-python = ">=3.10"
 dependencies = [
   "dora-rs >= 0.3.9",
   "numpy",
+  "pin",
   "pytorch-kinematics>=0.7.5",
   "torch",
   "scipy",

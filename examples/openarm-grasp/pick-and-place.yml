@@ -63,8 +63,8 @@ nodes:
   - id: vlm
     path: ../../target/release/dora-qwen-omni
     args: >-
-      --model /home/champagne/models/qwen3-vl-a3b-thinking/Qwen3VL-30B-A3B-Thinking-Q4_K_M.gguf
-      --mmproj /home/champagne/models/qwen3-vl-a3b-thinking/mmproj-Qwen3VL-30B-A3B-Thinking-F16.gguf
+      --model /home/champagne/models/qwen3.5-35b-a3b/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf
+      --mmproj /home/champagne/models/qwen3.5-35b-a3b/mmproj-F16.gguf
       --prompt Output:
       -t 24
       --n-predict 8192

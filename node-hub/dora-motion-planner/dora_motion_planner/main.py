@@ -52,10 +52,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import pinocchio as pin
 import pyarrow as pa
 import pytorch_kinematics as pk
 import torch
 from dora import Node
+from scipy.spatial.transform import Rotation as ScipyRotation, Slerp
 
 from .collision_model import (
     CapsuleCollisionModel,
@@ -77,7 +79,13 @@ from .pointcloud import (
     transform_points,
     pointcloud_to_tensor,
 )
-from .trajectory_json import save as save_trajectory_json, load as load_trajectory_json
+from .trajectory_json import (
+    save as save_trajectory_json,
+    build as build_trajectory_json,
+    load as load_trajectory_json,
+    GRIPPER_OPEN_RAD,
+    GRIPPER_CLOSED_RAD,
+)
 from .compiled_fk import CompiledFK, CompiledFKAdapter, LINK_NAMES as _LEFT_FK_LINKS
 from .trajectory_optimizer import TrajectoryOptimizer
 
@@ -94,10 +102,11 @@ CAMERA_TRANSFORM_STR = os.getenv("CAMERA_TRANSFORM", "0.79 0.81 1.23 90 0 -45")
 DOWNSAMPLE_STRIDE = int(os.getenv("DOWNSAMPLE_STRIDE", "8"))
 SAFETY_MARGIN = float(os.getenv("SAFETY_MARGIN", "0.02"))
 NUM_WAYPOINTS = int(os.getenv("NUM_WAYPOINTS", "200"))
-NUM_SEEDS = int(os.getenv("NUM_SEEDS", "8"))
+NUM_SEEDS = int(os.getenv("NUM_SEEDS", "4"))
 MAX_ITERS = int(os.getenv("MAX_ITERS", "200"))
 DEVICE = os.getenv("DEVICE", "cuda")
 GRASP_DEPTH_OFFSET = float(os.getenv("GRASP_DEPTH_OFFSET", "-0.01"))
+PLACE_DEPTH_OFFSET = float(os.getenv("PLACE_DEPTH_OFFSET", "0.05"))
 FLOOR_HEIGHT = float(os.getenv("FLOOR_HEIGHT", "0.005"))
 APPROACH_MARGIN = float(os.getenv("APPROACH_MARGIN", "0.03"))
 JAW_CONTACT_DEPTH = float(os.getenv("JAW_CONTACT_DEPTH", "0.02"))
@@ -113,10 +122,10 @@ PLAYBACK = PLAYBACK_MODE in ("1", "true", "yes", "confirm")
 # When set, grasp planning extends to: pick → close → transport → place → open → home.
 PLACE_TARGET_STR = os.getenv("PLACE_TARGET", "")
 DWELL_STEPS = int(os.getenv("DWELL_STEPS", "15"))  # hold waypoints for gripper action
+CARTESIAN_SPEED = float(os.getenv("CARTESIAN_SPEED", "0.15"))  # m/s EE speed
+PLAYBACK_HZ = 30  # trajectory playback rate
 
-# Gripper motor angle constants (from trajectory_json)
-GRIPPER_OPEN_RAD = -1.0472    # fully open (-60°)
-GRIPPER_CLOSED_RAD = 0.0      # fully closed
+# Gripper motor angle constants (imported from trajectory_json)
 GRIPPER_TRAVEL_MM = 44.0      # jaw travel range in mm
 
 
@@ -124,9 +133,9 @@ def compute_gripper_close_rad(object_width_m):
     """Compute gripper close angle based on object width.
 
     Instead of fully closing, close just enough to grip the object
-    with a 5mm squeeze margin.
+    with a 15mm squeeze margin for a firm hold.
     """
-    target_gap_mm = max(0, object_width_m * 1000 - 5)  # 5mm squeeze margin
+    target_gap_mm = max(0, object_width_m * 1000 - 25)  # 25mm squeeze margin
     return GRIPPER_OPEN_RAD * min(1.0, target_gap_mm / GRIPPER_TRAVEL_MM)
 
 # Parse place target at module level
@@ -155,6 +164,84 @@ def build_chain(urdf_path: str, end_effector_link: str) -> pk.Chain:
 
 
 @dataclass
+class PinIK:
+    """Pinocchio-based fast IK solver for a single arm."""
+
+    model: pin.Model
+    data: pin.Data
+    frame_id: int
+    joint_indices: list  # indices into full model q for this arm's 7 joints
+
+    def solve(self, target_pos, q_init=None, max_iter=200, eps=1e-3, damp=1e-6,
+              target_rot=None, rot_weight=0.5, nullspace_weight=1.0):
+        """IK solver. Position-only by default; add target_rot (3x3) for 6-DOF.
+
+        Uses nullspace projection to keep joints close to q_init, preventing
+        wrist flips in redundant configurations.
+
+        Returns (q_arm, pos_err) — q_arm is 7-DOF.
+        """
+        q = pin.neutral(self.model)
+        q_ref = q.copy()
+        if q_init is not None:
+            for i, ji in enumerate(self.joint_indices):
+                q[ji] = float(q_init[i])
+                q_ref[ji] = float(q_init[i])
+        use_rot = target_rot is not None
+        nv = self.model.nv
+        for _ in range(max_iter):
+            pin.forwardKinematics(self.model, self.data, q)
+            pin.updateFramePlacements(self.model, self.data)
+            oMf = self.data.oMf[self.frame_id]
+            pos_err = target_pos - oMf.translation
+            if use_rot:
+                rot_err = pin.log3(target_rot @ oMf.rotation.T)
+                err = np.concatenate([pos_err, rot_weight * rot_err])
+                if np.linalg.norm(pos_err) < eps and np.linalg.norm(rot_err) < eps * 5:
+                    break
+                J = pin.computeFrameJacobian(
+                    self.model, self.data, q, self.frame_id, pin.LOCAL_WORLD_ALIGNED
+                )
+                J[3:, :] *= rot_weight
+            else:
+                err = pos_err
+                if np.linalg.norm(err) < eps:
+                    break
+                J = pin.computeFrameJacobian(
+                    self.model, self.data, q, self.frame_id, pin.LOCAL_WORLD_ALIGNED
+                )[:3, :]
+            JJt = J @ J.T + damp * np.eye(J.shape[0])
+            J_pinv = J.T @ np.linalg.solve(JJt, np.eye(J.shape[0]))
+            dq = J_pinv @ err
+            # Nullspace projection: use redundancy to stay close to q_init
+            if nullspace_weight > 0 and q_init is not None:
+                N = np.eye(nv) - J_pinv @ J
+                dq += N @ (nullspace_weight * (q_ref - q))
+            q = pin.integrate(self.model, q, dq)
+            q = np.clip(q, self.model.lowerPositionLimit, self.model.upperPositionLimit)
+        pin.forwardKinematics(self.model, self.data, q)
+        pin.updateFramePlacements(self.model, self.data)
+        final_err = np.linalg.norm(target_pos - self.data.oMf[self.frame_id].translation)
+        q_arm = np.array([q[ji] for ji in self.joint_indices], dtype=np.float32)
+        return q_arm, final_err
+
+
+def _build_pin_ik(urdf_path, ee_link_name, arm_side):
+    """Build a PinIK solver for one arm."""
+    model = pin.buildModelFromUrdf(urdf_path)
+    data = model.createData()
+    frame_id = model.getFrameId(ee_link_name)
+    # Map arm joints: L_J1..L_J7 or R_J1..R_J7 → model q indices
+    prefix = "L_" if arm_side == "left" else "R_"
+    joint_indices = []
+    for i in range(1, model.njoints):
+        name = model.names[i]
+        if name.startswith(prefix) and name.endswith(tuple(f"J{j}" for j in range(1, 8))):
+            joint_indices.append(i - 1)  # q index = joint index - 1
+    return PinIK(model, data, frame_id, joint_indices)
+
+
+@dataclass
 class ArmConfig:
     """Per-arm state: kinematic chain, optimizer, and current joint positions."""
 
@@ -164,6 +251,7 @@ class ArmConfig:
     joint_limits: tuple
     num_joints: int
     current_joints: torch.Tensor
+    pin_ik: PinIK = None
 
 
 def _init_arm(name, urdf_path, ee_link, capsules, device, boxes=None):
@@ -234,7 +322,13 @@ def _init_arm(name, urdf_path, ee_link, capsules, device, boxes=None):
                 f"all {len(matched)} FK links matched"
             )
 
-    return ArmConfig(name, ik_chain, optimizer, joint_limits, num_joints, current_joints)
+    # Build pinocchio-based fast IK solver
+    pin_solver = _build_pin_ik(urdf_path, ee_link, name)
+    print(f"[motion-planner] {name} pinocchio IK: frame={pin_solver.frame_id}, "
+          f"joints={pin_solver.joint_indices}")
+
+    return ArmConfig(name, ik_chain, optimizer, joint_limits, num_joints, current_joints,
+                     pin_ik=pin_solver)
 
 
 def select_arm(metadata, target_y=None):
@@ -268,6 +362,14 @@ def _estimate_target_y(u1, v1, u2, v2, depth, intrinsics, image_size, cam_t, cam
     return float(pt_robot[1])
 
 
+def _fk_pos_chain(ik_chain, q):
+    """Get end-effector XYZ for a single joint config (standalone helper)."""
+    with torch.no_grad():
+        q_dev = q.to(ik_chain.device) if q.device != ik_chain.device else q
+        fk = ik_chain.forward_kinematics(q_dev.unsqueeze(0))
+        return fk.get_matrix()[0, :3, 3].cpu().numpy()
+
+
 def _ik_batch_adam(
     ik_chain,
     target_pos,
@@ -276,7 +378,7 @@ def _ik_batch_adam(
     lower,
     upper,
     device,
-    num_seeds=48,
+    num_seeds=4,
     max_iters=2000,
     rot_weight=0.0,
 ):
@@ -336,18 +438,35 @@ def solve_ik(
     current_joints,
     joint_limits,
     device,
-    num_seeds=48,
-    max_iters=2000,
+    num_seeds=4,
+    max_iters=500,
+    pos_threshold=0.02,
+    position_only=False,
+    pin_ik=None,
 ):
-    """Solve IK via batched Adam gradient descent.
+    """Solve IK — pinocchio first (fast), Adam fallback (GPU, orientation).
 
-    Tries full pose IK first; if that fails, falls back to position-only
-    (the arm reaches the right position with whatever orientation it can).
+    Args:
+        pos_threshold: Max acceptable position error in meters (default 0.02).
+        position_only: If True, skip orientation and solve position-only directly.
+        pin_ik: Optional PinIK solver for fast position-only IK.
 
     Returns q_goal tensor or None.
     """
     t_ik_start = time.perf_counter()
-    target_pos = torch.tensor(target_xyzrpy[:3], dtype=torch.float32, device=device)
+    target_xyz = target_xyzrpy[:3]
+
+    # Try pinocchio first (position-only, ~0.1ms)
+    if pin_ik is not None:
+        q_init = current_joints.cpu().numpy() if torch.is_tensor(current_joints) else current_joints
+        q_np, err = pin_ik.solve(np.array(target_xyz, dtype=np.float64), q_init=q_init)
+        if err <= pos_threshold:
+            t_ik = time.perf_counter() - t_ik_start
+            print(f"[motion-planner] IK ok: pos_err={err:.4f}m (pinocchio, {t_ik*1000:.1f}ms)")
+            return torch.tensor(q_np, dtype=torch.float32, device=device)
+
+    # Fallback: batched Adam (GPU)
+    target_pos = torch.tensor(target_xyz, dtype=torch.float32, device=device)
     target_rot = pk.transforms.euler_angles_to_matrix(
         torch.tensor(target_xyzrpy[3:6], dtype=torch.float32, device=device),
         convention="XYZ",
@@ -355,40 +474,24 @@ def solve_ik(
     lower = torch.tensor(joint_limits[0], dtype=torch.float32, device=device)
     upper = torch.tensor(joint_limits[1], dtype=torch.float32, device=device)
 
-    # Try with soft orientation first
-    q, err = _ik_batch_adam(
-        ik_chain,
-        target_pos,
-        target_rot,
-        current_joints,
-        lower,
-        upper,
-        device,
-        num_seeds,
-        max_iters,
-        rot_weight=0.1,
-    )
-    if err <= 0.02:
-        t_ik = time.perf_counter() - t_ik_start
-        print(f"[motion-planner] IK ok: pos_err={err:.4f}m (with orientation, {t_ik:.2f}s)")
-        return q
+    if not position_only:
+        q, err = _ik_batch_adam(
+            ik_chain, target_pos, target_rot, current_joints,
+            lower, upper, device, num_seeds, max_iters, rot_weight=0.1,
+        )
+        if err <= pos_threshold:
+            t_ik = time.perf_counter() - t_ik_start
+            print(f"[motion-planner] IK ok: pos_err={err:.4f}m (adam+orient, {t_ik:.2f}s)")
+            return q
 
-    # Fallback: position-only
     q, err = _ik_batch_adam(
-        ik_chain,
-        target_pos,
-        None,
-        current_joints,
-        lower,
-        upper,
-        device,
-        num_seeds,
-        max_iters,
-        rot_weight=0.0,
+        ik_chain, target_pos, None, current_joints,
+        lower, upper, device, num_seeds, max_iters, rot_weight=0.0,
     )
     t_ik = time.perf_counter() - t_ik_start
-    if err <= 0.02:
-        print(f"[motion-planner] IK ok: pos_err={err:.4f}m (position-only fallback, {t_ik:.2f}s)")
+    if err <= pos_threshold:
+        label = "position-only" if position_only else "adam-fallback"
+        print(f"[motion-planner] IK ok: pos_err={err:.4f}m ({label}, {t_ik:.2f}s)")
         return q
 
     print(f"[motion-planner] IK failed: pos_err={err:.4f}m (best of {num_seeds} seeds, {t_ik:.2f}s)")
@@ -617,6 +720,7 @@ def plan_grasp_from_pixels(
     table_plane=None,
     table_polygon=None,
     place_uv=None,
+    pin_ik=None,
 ):
     """Plan a grasp (or pick-and-place) trajectory from two jaw pixel positions.
 
@@ -666,13 +770,15 @@ def plan_grasp_from_pixels(
     )
 
     q_pregrasp = solve_ik(
-        ik_chain, pregrasp_xyzrpy, current_joints, joint_limits, device
+        ik_chain, pregrasp_xyzrpy, current_joints, joint_limits, device,
+        pin_ik=pin_ik,
     )
     if q_pregrasp is None:
         print("[motion-planner] grasp: IK failed for pre-grasp, skipping")
         return None
 
-    q_grasp = solve_ik(ik_chain, grasp_xyzrpy, q_pregrasp, joint_limits, device)
+    q_grasp = solve_ik(ik_chain, grasp_xyzrpy, q_pregrasp, joint_limits, device,
+                       pin_ik=pin_ik)
     if q_grasp is None:
         print("[motion-planner] grasp: IK failed for grasp, skipping")
         return None
@@ -681,7 +787,6 @@ def plan_grasp_from_pixels(
     q_place = None
     q_preplace = None
     place_xyzrpy = None
-    do_pick_place = False
 
     if place_uv is not None:
         place_u, place_v = place_uv
@@ -691,7 +796,7 @@ def plan_grasp_from_pixels(
             cam_t, cam_rot,
             grasp_rpy=grasp_xyzrpy[3:6],
             width=w, height=h,
-            place_depth_offset=0.05,
+            place_depth_offset=PLACE_DEPTH_OFFSET,
             floor_height=FLOOR_HEIGHT,
             approach_margin=APPROACH_MARGIN,
             jaw_contact_depth=JAW_CONTACT_DEPTH,
@@ -699,90 +804,44 @@ def plan_grasp_from_pixels(
         if place_result is not None:
             place_xyzrpy, preplace_xyzrpy = place_result
             q_preplace = solve_ik(
-                ik_chain, preplace_xyzrpy, q_grasp, joint_limits, device
+                ik_chain, preplace_xyzrpy, q_grasp, joint_limits, device,
+                pos_threshold=0.05, position_only=True, pin_ik=pin_ik,
             )
             if q_preplace is not None:
                 q_place = solve_ik(
-                    ik_chain, place_xyzrpy, q_preplace, joint_limits, device
+                    ik_chain, place_xyzrpy, q_preplace, joint_limits, device,
+                    pos_threshold=0.05, position_only=True, pin_ik=pin_ik,
                 )
             if q_place is not None:
-                do_pick_place = True
                 print("[motion-planner] Place IK solved, building pick-and-place trajectory")
             else:
                 print("[motion-planner] WARNING: Place IK failed, falling back to grasp-only")
+                node.send_output("trajectory_status", pa.array([json.dumps({
+                    "status": "phase",
+                    "label": "Place target unreachable, doing grasp-only",
+                    "time": 0,
+                })]))
         else:
             print("[motion-planner] WARNING: Place depth invalid, falling back to grasp-only")
+            node.send_output("trajectory_status", pa.array([json.dumps({
+                "status": "phase",
+                "label": "Place depth invalid, doing grasp-only",
+                "time": 0,
+            })]))
+
 
     q_start = current_joints.clone()
     t_plan_start = time.perf_counter()
 
-    if do_pick_place:
-        return _build_pick_place_trajectory(
-            node, optimizer, ik_chain, capsule_model,
-            q_start, q_pregrasp, q_grasp, q_preplace, q_place,
-            pc_tensor, num_joints, arm, object_width,
-            grasp_xyzrpy, place_xyzrpy,
-            table_plane=table_plane, table_polygon=table_polygon,
-        )
-
-    # --- Grasp-only (2-phase, backward compatible) ---
-    half_waypoints = NUM_WAYPOINTS // 2
-
-    print("[motion-planner] Phase 1: start -> pre-grasp")
-    traj1, cost1 = optimizer.optimize(
-        q_start=q_start,
-        q_goal=q_pregrasp,
-        point_cloud=pc_tensor,
-        T=half_waypoints,
-        num_seeds=NUM_SEEDS,
-        max_iters=MAX_ITERS,
+    return _build_pick_place_trajectory(
+        node, optimizer, ik_chain, capsule_model,
+        q_start, q_pregrasp, q_grasp, q_preplace, q_place,
+        pc_tensor, num_joints, arm, object_width,
+        grasp_xyzrpy, place_xyzrpy,
+        joint_limits=joint_limits, device=device,
+        table_plane=table_plane, table_polygon=table_polygon,
+        pin_ik=pin_ik,
     )
-
-    print("[motion-planner] Phase 2: pre-grasp -> grasp")
-    traj2, cost2 = optimizer.optimize(
-        q_start=q_pregrasp,
-        q_goal=q_grasp,
-        point_cloud=pc_tensor,
-        T=half_waypoints,
-        num_seeds=NUM_SEEDS,
-        max_iters=MAX_ITERS,
-    )
-    t_plan = time.perf_counter() - t_plan_start
-
-    full_traj = torch.cat([traj1, traj2[1:]], dim=0)
-    total_waypoints = full_traj.shape[0]
-    print(
-        f"[motion-planner] Combined: {total_waypoints} waypoints, "
-        f"cost={cost1 + cost2:.4f} (2-phase planning: {t_plan:.2f}s)"
-    )
-
-    # Post-optimization collision validation
-    if capsule_model is not None:
-        _log_collision_check(
-            validate_trajectory(
-                ik_chain, capsule_model, full_traj, pc_tensor, SAFETY_MARGIN,
-                table_plane=table_plane, table_polygon=table_polygon,
-            ),
-            total_waypoints,
-        )
-
-    traj_np = full_traj.numpy().astype(np.float32)
-    dt = 1.0 / 30.0
-    out_metadata = {
-        "num_waypoints": total_waypoints,
-        "num_joints": num_joints,
-        "dt": dt,
-        "encoding": "trajectory",
-        "arm": arm,
-        "grasp_pose": grasp_xyzrpy.tolist(),
-        "pregrasp_waypoint": half_waypoints - 1,
-    }
-    node.send_output(
-        "joint_trajectory",
-        pa.array(traj_np.ravel(), type=pa.float32()),
-        metadata=out_metadata,
-    )
-    return traj_np, out_metadata
 
 
 def _build_pick_place_trajectory(
@@ -790,7 +849,9 @@ def _build_pick_place_trajectory(
     q_start, q_pregrasp, q_grasp, q_preplace, q_place,
     pc_tensor, num_joints, arm, object_width,
     grasp_xyzrpy, place_xyzrpy,
+    joint_limits=None, device=None,
     table_plane=None, table_polygon=None,
+    pin_ik=None,
 ):
     """Build a full pick-and-place trajectory with dwell waypoints and gripper actions.
 
@@ -807,65 +868,344 @@ def _build_pick_place_trajectory(
     Returns ``(traj_np, metadata)`` on success, or ``None`` on failure.
     """
     t0 = time.perf_counter()
-    q_home = q_start.clone()
-
-    # Waypoint budget per phase
-    T_long = max(NUM_WAYPOINTS // 3, 10)
-    T_short = max(NUM_WAYPOINTS // 6, 5)
+    q_home = torch.zeros_like(q_start)
 
     segments = []
-    total_cost = 0.0
+    phase_count = [0]
 
-    def _optimize_segment(label, q_s, q_g, T):
-        nonlocal total_cost
-        print(f"[motion-planner] {label} ({T} waypoints)")
-        traj, cost = optimizer.optimize(
-            q_start=q_s, q_goal=q_g, point_cloud=pc_tensor,
-            T=T, num_seeds=NUM_SEEDS, max_iters=MAX_ITERS,
-        )
-        total_cost += cost
+    def _fk_pos(q):
+        return _fk_pos_chain(ik_chain, q)
+
+    # Staging XY to route around the center pole between arms
+    if arm == "left":
+        STAGING_XY = (-0.2, -0.3)
+    else:
+        STAGING_XY = (-0.3, 0.1)
+
+    def _cartesian_segment(label, q_s, q_g, safe_z=False, staging=False, target_rot=None, speed=None):
+        """Cartesian-space linear interpolation with IK at keypoints.
+
+        Interpolates EE position linearly in Cartesian space, solves IK at
+        each keypoint (seeded from previous solution for continuity), then
+        fills in waypoints with short joint-space lerps between adjacent
+        IK solutions.
+
+        T (waypoint count) is computed from path length and target speed
+        to ensure constant EE velocity.
+
+        When ``safe_z=True``, routes through clearance height:
+        start → (start_xy, z_clear) → (goal_xy, z_clear) → goal
+
+        When ``staging=True`` (implies safe_z), also routes through the
+        staging XY to avoid the center pole:
+        start → (start_xy, z_clear) → (staging_xy, z_clear) → (goal_xy, z_clear) → goal
+
+        When ``target_rot`` (3x3 matrix) is given, IK includes orientation.
+        """
+        if staging:
+            safe_z = True
+        phase_count[0] += 1
+        p_s = _fk_pos(q_s)
+        p_g = _fk_pos(q_g)
+        t_start = time.perf_counter()
+        ee_speed = speed if speed is not None else CARTESIAN_SPEED
+
+        # Build Cartesian via-points and compute path length
+        if safe_z:
+            z_clear = max(p_s[2], p_g[2]) + 0.08
+            if staging:
+                via_points = np.array([
+                    p_s,
+                    [p_s[0], p_s[1], z_clear],
+                    [STAGING_XY[0], STAGING_XY[1], z_clear],
+                    [p_g[0], p_g[1], z_clear],
+                    p_g,
+                ])
+            else:
+                via_points = np.array([
+                    p_s,
+                    [p_s[0], p_s[1], z_clear],
+                    [p_g[0], p_g[1], z_clear],
+                    p_g,
+                ])
+            seg_dists = np.linalg.norm(np.diff(via_points, axis=0), axis=1)
+            path_length = float(np.sum(seg_dists))
+        else:
+            via_points = None
+            path_length = float(np.linalg.norm(p_g - p_s))
+
+        # Compute T and keypoints from path length (constant EE velocity)
+        T = max(int(path_length / ee_speed * PLAYBACK_HZ), 10)
+        n_keypoints = max(int(path_length / 0.002), 5)  # 1 keypoint per 2mm
+        n_keypoints = min(n_keypoints, T // 3)  # at least 3 waypoints per keypoint for smoothing
+        mode = "cartesian-safe" if safe_z else "cartesian"
+        print(f"[motion-planner] {label} ({mode}, {T} wp, {n_keypoints} keys, "
+              f"path={path_length:.3f}m, speed={ee_speed:.2f}m/s) "
+              f"EE: [{p_s[0]:.3f},{p_s[1]:.3f},{p_s[2]:.3f}] -> "
+              f"[{p_g[0]:.3f},{p_g[1]:.3f},{p_g[2]:.3f}]")
+
+        if joint_limits is None or device is None:
+            print(f"  WARNING: no joint_limits/device, falling back to joint lerp")
+            alphas = torch.linspace(0, 1, T).unsqueeze(1)
+            traj = q_s.cpu() * (1 - alphas) + q_g.cpu() * alphas
+        else:
+            lower = torch.tensor(joint_limits[0], dtype=torch.float32, device=device)
+            upper = torch.tensor(joint_limits[1], dtype=torch.float32, device=device)
+
+            # Generate keypoints along the Cartesian path
+            if via_points is not None:
+                cum = np.concatenate([[0], np.cumsum(seg_dists)])
+                total_len = cum[-1]
+                cart_targets = []
+                for i in range(n_keypoints):
+                    s = i / (n_keypoints - 1) * total_len
+                    seg_idx = np.searchsorted(cum[1:], s, side='right')
+                    seg_idx = min(seg_idx, len(seg_dists) - 1)
+                    if seg_dists[seg_idx] > 0:
+                        t_local = (s - cum[seg_idx]) / seg_dists[seg_idx]
+                    else:
+                        t_local = 0.0
+                    pt = via_points[seg_idx] * (1 - t_local) + via_points[seg_idx + 1] * t_local
+                    cart_targets.append(pt)
+            else:
+                # Straight-line Cartesian interpolation
+                cart_targets = []
+                for i in range(n_keypoints):
+                    alpha = i / (n_keypoints - 1)
+                    cart_targets.append(p_s * (1 - alpha) + p_g * alpha)
+
+            # Solve IK at each Cartesian keypoint (pinocchio: ~0.1ms each)
+            # First and last keypoints are pinned to q_s/q_g exactly to
+            # avoid joint discontinuities at phase boundaries.
+            # If target_rot is set, slerp rotation from start to target.
+            start_rot = None
+            if target_rot is not None and pin_ik is not None:
+                q_full = pin.neutral(pin_ik.model)
+                q_s_np = q_s.cpu().numpy()
+                for ji_idx, ji in enumerate(pin_ik.joint_indices):
+                    q_full[ji] = float(q_s_np[ji_idx])
+                pin.forwardKinematics(pin_ik.model, pin_ik.data, q_full)
+                pin.updateFramePlacements(pin_ik.model, pin_ik.data)
+                start_rot = pin_ik.data.oMf[pin_ik.frame_id].rotation.copy()
+                rots = ScipyRotation.from_matrix(np.stack([start_rot, target_rot]))
+                rot_slerp = Slerp([0.0, 1.0], rots)
+
+            key_qs = [q_s.clone()]  # start is already known
+            q_prev_np = q_s.cpu().numpy()
+            failed = 0
+            for i in range(1, n_keypoints):
+                # Last keypoint → use q_g exactly (no IK solve)
+                if i == n_keypoints - 1:
+                    key_qs.append(q_g.clone())
+                    break
+                target_xyz = cart_targets[i]
+                # Interpolated rotation at this keypoint
+                kp_rot = None
+                if target_rot is not None and start_rot is not None:
+                    alpha_r = i / (n_keypoints - 1)
+                    kp_rot = rot_slerp(alpha_r).as_matrix()
+                if pin_ik is not None:
+                    q_np, err = pin_ik.solve(
+                        np.array(target_xyz, dtype=np.float64), q_init=q_prev_np,
+                        target_rot=kp_rot,
+                    )
+                    max_jump = float(np.max(np.abs(q_np - q_prev_np)))
+                    if err > 0.05 or max_jump > np.pi / 2:
+                        if max_jump > np.pi / 2:
+                            print(f"  keypoint {i}: joint jump {max_jump:.2f} rad, using lerp")
+                        failed += 1
+                        alpha_j = i / (n_keypoints - 1)
+                        q_fallback = q_s.cpu().numpy() * (1 - alpha_j) + q_g.cpu().numpy() * alpha_j
+                        key_qs.append(torch.tensor(q_fallback, dtype=torch.float32, device=device))
+                    else:
+                        q_t = torch.tensor(q_np, dtype=torch.float32, device=device)
+                        key_qs.append(q_t)
+                        q_prev_np = q_np
+                else:
+                    # Fallback to Adam if no pinocchio
+                    target_pos = torch.tensor(target_xyz, dtype=torch.float32, device=device)
+                    q_prev_dev = torch.tensor(q_prev_np, dtype=torch.float32, device=device)
+                    q_ik, err = _ik_batch_adam(
+                        ik_chain, target_pos, None, q_prev_dev,
+                        lower, upper, device,
+                        num_seeds=2, max_iters=150, rot_weight=0.0,
+                    )
+                    if err > 0.05:
+                        failed += 1
+                        alpha_j = torch.tensor(i / (n_keypoints - 1), dtype=torch.float32)
+                        q_fallback = q_s.to(device) * (1 - alpha_j) + q_g.to(device) * alpha_j
+                        key_qs.append(q_fallback)
+                    else:
+                        key_qs.append(q_ik)
+                        q_prev_np = q_ik.detach().cpu().numpy()
+
+            if failed > 0:
+                print(f"  WARNING: {failed}/{n_keypoints-1} keypoint IK failures (joint-lerp fallback)")
+
+            # Distribute T waypoints across keypoint intervals
+            n_intervals = len(key_qs) - 1
+            wp_per_interval = max(T // n_intervals, 2)
+            segments_inner = []
+            total_wp = 0
+            for i in range(n_intervals):
+                qs = key_qs[i].cpu()
+                qg = key_qs[i + 1].cpu()
+                if i < n_intervals - 1:
+                    n_wp = wp_per_interval
+                else:
+                    n_wp = max(T - total_wp, 2)
+                alphas = torch.linspace(0, 1, n_wp).unsqueeze(1)
+                seg = qs * (1 - alphas) + qg * alphas
+                if i > 0:
+                    seg = seg[1:]
+                segments_inner.append(seg)
+                total_wp += seg.shape[0]
+            traj = torch.cat(segments_inner, dim=0)
+
+        dt = time.perf_counter() - t_start
+        with torch.no_grad():
+            traj_dev = traj.to(ik_chain.device)
+            fk_all = ik_chain.forward_kinematics(traj_dev)
+            ee_all = fk_all.get_matrix()[:, :3, 3].cpu().numpy()
+            z_min, z_max = ee_all[:, 2].min(), ee_all[:, 2].max()
+            mid = len(ee_all) // 2
+            print(f"  actual EE: start=[{ee_all[0,0]:.3f},{ee_all[0,1]:.3f},{ee_all[0,2]:.3f}] "
+                  f"mid=[{ee_all[mid,0]:.3f},{ee_all[mid,1]:.3f},{ee_all[mid,2]:.3f}] "
+                  f"end=[{ee_all[-1,0]:.3f},{ee_all[-1,1]:.3f},{ee_all[-1,2]:.3f}] "
+                  f"z=[{z_min:.3f},{z_max:.3f}] ({dt:.1f}s)")
+
+        node.send_output("trajectory_status", pa.array([json.dumps({
+            "status": "phase",
+            "phase": phase_count[0],
+            "label": label,
+            "time": round(dt, 1),
+        })]))
         return traj
 
-    # Phase 1: start → pre-grasp
-    seg1 = _optimize_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, T_long)
-    segments.append(seg1)
+    # Helper: append segment, threading actual last waypoint for continuity
+    def _append(seg, skip_first=True):
+        if skip_first and len(segments) > 0:
+            segments.append(seg[1:])
+        else:
+            segments.append(seg)
+        return seg[-1]  # return actual last waypoint
 
-    # Phase 2: pre-grasp → grasp
-    seg2 = _optimize_segment("Phase 2: pre-grasp -> grasp", q_pregrasp, q_grasp, T_short)
-    segments.append(seg2[1:])  # skip duplicate start
+    # Phase 1: start → pre-grasp (via staging to avoid pole)
+    seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, staging=True)
+    q_prev = _append(seg1, skip_first=False)
+
+    # Phase 1b: rotate at pre-grasp to match grasp orientation
+    if pin_ik is not None:
+        p_pregrasp = _fk_pos(q_prev)
+        # Get grasp EE rotation via pinocchio FK
+        q_full_grasp = pin.neutral(pin_ik.model)
+        q_grasp_np = q_grasp.cpu().numpy()
+        for i, ji in enumerate(pin_ik.joint_indices):
+            q_full_grasp[ji] = float(q_grasp_np[i])
+        pin.forwardKinematics(pin_ik.model, pin_ik.data, q_full_grasp)
+        pin.updateFramePlacements(pin_ik.model, pin_ik.data)
+        grasp_rot = pin_ik.data.oMf[pin_ik.frame_id].rotation.copy()
+
+        q_pre_rot_np, rot_err = pin_ik.solve(
+            p_pregrasp, q_init=q_prev.cpu().numpy(),
+            target_rot=grasp_rot, rot_weight=0.5,
+        )
+        if rot_err < 0.05:
+            q_pre_rotated = torch.tensor(q_pre_rot_np, dtype=torch.float32, device=device)
+            seg1b = _cartesian_segment("Phase 1b: rotate at pre-grasp", q_prev, q_pre_rotated, target_rot=grasp_rot)
+            q_prev = _append(seg1b)
+
+    # Phase 2: pre-grasp → grasp (short descent)
+    seg2 = _cartesian_segment("Phase 2: pre-grasp -> grasp", q_prev, q_grasp)
+    q_prev = _append(seg2)
 
     # Dwell at grasp (hold for gripper close)
-    grasp_dwell = q_grasp.unsqueeze(0).expand(DWELL_STEPS, -1).to(seg2.device)
+    grasp_dwell_start = sum(s.shape[0] for s in segments)
+    grasp_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
     segments.append(grasp_dwell)
 
-    # Phase 3: grasp → pre-place
-    seg3 = _optimize_segment("Phase 3: grasp -> pre-place", q_grasp, q_preplace, T_long)
-    segments.append(seg3[1:])
+    # Phase 3a: grasp → pre-grasp (lift back up to approach height)
+    seg3a = _cartesian_segment("Phase 3a: grasp -> pre-grasp", q_prev, q_pregrasp)
+    q_prev = _append(seg3a)
 
-    # Phase 4: pre-place → place
-    seg4 = _optimize_segment("Phase 4: pre-place -> place", q_preplace, q_place, T_short)
-    segments.append(seg4[1:])
+    if q_place is not None:
+        # Phase 3b: pre-grasp → pre-place (transit at safe height)
+        seg3b = _cartesian_segment("Phase 3b: pre-grasp -> pre-place", q_prev, q_preplace, safe_z=True)
+        q_prev = _append(seg3b)
 
-    # Dwell at place (hold for gripper open)
-    place_dwell = q_place.unsqueeze(0).expand(DWELL_STEPS, -1).to(seg4.device)
-    segments.append(place_dwell)
+        # Phase 4: pre-place → place (descent)
+        seg4 = _cartesian_segment("Phase 4: pre-place -> place", q_prev, q_place)
+        q_prev = _append(seg4)
 
-    # Phase 5: place → pre-place (retreat)
-    seg5 = _optimize_segment("Phase 5: place -> pre-place", q_place, q_preplace, T_short)
-    segments.append(seg5[1:])
+        # Dwell at place (hold for gripper open)
+        place_dwell_start = sum(s.shape[0] for s in segments)
+        place_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
+        segments.append(place_dwell)
 
-    # Phase 6: pre-place → home
-    seg6 = _optimize_segment("Phase 6: pre-place -> home", q_preplace, q_home, T_long)
-    segments.append(seg6[1:])
+    # Phase 5: place → above-home (staging transit)
+    p_home = _fk_pos(q_home)
+    p_prev = _fk_pos(q_prev)
+    z_above = max(p_prev[2], p_home[2]) + 0.08
+
+    # IK for above-home: position-only from q_prev seed
+    above_home_pos = np.array([p_home[0], p_home[1], z_above])
+    q_ah_np, ah_err = pin_ik.solve(above_home_pos, q_init=q_prev.cpu().numpy())
+    if ah_err >= 0.05:
+        # Fallback: single staging phase to home
+        seg5 = _cartesian_segment("Phase 5: place -> home", q_prev, q_home, staging=True)
+        _append(seg5)
+    else:
+        q_above_home = torch.tensor(q_ah_np, dtype=torch.float32, device=device)
+        seg5 = _cartesian_segment("Phase 5: place -> above-home", q_prev, q_above_home, staging=True)
+        q_prev = _append(seg5)
+
+        # Phase 5b: rotate at above-home to match home orientation
+        q_full_home = pin.neutral(pin_ik.model)
+        q_home_np = q_home.cpu().numpy()
+        for i, ji in enumerate(pin_ik.joint_indices):
+            q_full_home[ji] = float(q_home_np[i])
+        pin.forwardKinematics(pin_ik.model, pin_ik.data, q_full_home)
+        pin.updateFramePlacements(pin_ik.model, pin_ik.data)
+        home_rot = pin_ik.data.oMf[pin_ik.frame_id].rotation.copy()
+
+        q_ah_rot_np, rot_err = pin_ik.solve(
+            above_home_pos, q_init=q_prev.cpu().numpy(),
+            target_rot=home_rot, rot_weight=0.5,
+        )
+        if rot_err < 0.05:
+            q_above_rotated = torch.tensor(q_ah_rot_np, dtype=torch.float32, device=device)
+            seg5b = _cartesian_segment("Phase 5b: rotate at above-home", q_prev, q_above_rotated, target_rot=home_rot)
+            q_prev = _append(seg5b)
+
+        # Phase 6: above-home → home (descent)
+        seg6 = _cartesian_segment("Phase 6: descend to home", q_prev, q_home)
+        _append(seg6)
 
     full_traj = torch.cat(segments, dim=0)
     total_waypoints = full_traj.shape[0]
     t_plan = time.perf_counter() - t0
 
     print(
-        f"[motion-planner] Pick-and-place: {total_waypoints} waypoints, "
-        f"cost={total_cost:.4f} ({t_plan:.2f}s)"
+        f"[motion-planner] Pick-and-place: {total_waypoints} waypoints "
+        f"({t_plan:.2f}s)"
     )
+
+    # Check for joint discontinuities
+    traj_np_check = full_traj.cpu().numpy()
+    diffs = np.abs(np.diff(traj_np_check, axis=0))
+    max_per_step = diffs.max(axis=1)
+    bad_steps = np.where(max_per_step > 0.1)[0]  # >0.1 rad jump
+    if len(bad_steps) > 0:
+        print(f"[motion-planner] WARNING: {len(bad_steps)} joint discontinuities (>0.1 rad):")
+        for idx in bad_steps[:20]:
+            joint = int(np.argmax(diffs[idx]))
+            print(f"  step {idx}->{idx+1}: joint {joint} jump={diffs[idx, joint]:.3f} rad")
+    else:
+        print("[motion-planner] No joint discontinuities detected")
+
+    # Dump trajectory for offline analysis
+    np.save("/tmp/latest_trajectory.npy", traj_np_check)
+    print(f"[motion-planner] Saved trajectory to /tmp/latest_trajectory.npy")
 
     # Post-optimization collision validation
     if capsule_model is not None:
@@ -877,25 +1217,15 @@ def _build_pick_place_trajectory(
             total_waypoints,
         )
 
-    # Compute gripper action waypoints
-    # grasp dwell starts after seg1 + seg2
-    grasp_dwell_start = seg1.shape[0] + (seg2.shape[0] - 1)
-    # place dwell starts after seg1 + seg2 + dwell + seg3 + seg4
-    place_dwell_start = (
-        grasp_dwell_start + DWELL_STEPS
-        + (seg3.shape[0] - 1) + (seg4.shape[0] - 1)
-    )
-
     close_rad = compute_gripper_close_rad(object_width)
     gripper_actions = [
         {"waypoint": grasp_dwell_start, "rad": float(close_rad)},
-        {"waypoint": place_dwell_start, "rad": float(GRIPPER_OPEN_RAD)},
     ]
-    print(
-        f"[motion-planner] Gripper actions: close@{grasp_dwell_start} "
-        f"(rad={close_rad:.3f}, width={object_width*1000:.1f}mm), "
-        f"open@{place_dwell_start}"
-    )
+    if q_place is not None:
+        gripper_actions.append(
+            {"waypoint": place_dwell_start, "rad": float(GRIPPER_OPEN_RAD)}
+        )
+    print(f"[motion-planner] Gripper: {gripper_actions}")
 
     traj_np = full_traj.numpy().astype(np.float32)
     dt = 1.0 / 30.0
@@ -906,7 +1236,7 @@ def _build_pick_place_trajectory(
         "encoding": "trajectory",
         "arm": arm,
         "grasp_pose": grasp_xyzrpy.tolist(),
-        "place_pose": place_xyzrpy.tolist(),
+        "place_pose": place_xyzrpy.tolist() if place_xyzrpy is not None else None,
         "gripper_actions": json.dumps(gripper_actions),
     }
     node.send_output(
@@ -981,8 +1311,35 @@ def _setup_table_plane(optimizer, pc_robot, cam_t, cam_rot, latest_intrinsics,
     return table_plane, table_polygon, pc_filtered, pc_tensor_filtered
 
 
-def _set_playback(state, traj_np, traj_meta):
-    """Store a newly planned trajectory for playback and optionally export."""
+def _gripper_actions_to_array(gripper_actions, num_waypoints):
+    """Convert discrete gripper actions to continuous (T,) array for trajectory JSON.
+
+    Values are normalized 0-1: 0 = fully open, 1 = fully closed.
+    """
+    if not gripper_actions:
+        return None
+    arr = np.zeros(num_waypoints, dtype=np.float32)
+    sorted_actions = sorted(gripper_actions, key=lambda a: a["waypoint"])
+    current = 0.0  # start fully open
+    action_idx = 0
+    for i in range(num_waypoints):
+        while action_idx < len(sorted_actions) and sorted_actions[action_idx]["waypoint"] <= i:
+            rad = float(sorted_actions[action_idx]["rad"])
+            current = (rad - GRIPPER_OPEN_RAD) / (GRIPPER_CLOSED_RAD - GRIPPER_OPEN_RAD)
+            current = max(0.0, min(1.0, current))
+            action_idx += 1
+        arr[i] = current
+    return arr
+
+
+def _set_playback(state, traj_np, traj_meta, node=None):
+    """Store a newly planned trajectory for playback and optionally export.
+
+    If *node* is provided and playback mode is not "confirm", sends the
+    trajectory as JSON on the ``trajectory_json`` output for external playback.
+    In confirm mode, the JSON is stored in ``state["trajectory_doc"]`` and
+    sent when the ``execute`` signal arrives.
+    """
     state["trajectory"] = traj_np                        # (T, J)
     state["step"] = 0
     state["playing"] = PLAYBACK_MODE != "confirm"        # confirm mode waits for execute
@@ -1001,19 +1358,31 @@ def _set_playback(state, traj_np, traj_meta):
         state["gripper_actions"] = []
     state["gripper_fired"] = set()
 
+    # Build trajectory JSON (v3) with gripper frames for external playback
+    extra = {}
+    for k in ("grasp_pose", "pregrasp_waypoint", "place_pose", "gripper_actions", "encoding"):
+        if k in traj_meta:
+            extra[k] = traj_meta[k]
+    gripper_array = _gripper_actions_to_array(state["gripper_actions"], traj_np.shape[0])
+    doc = build_trajectory_json(
+        traj_np,
+        arm=traj_meta.get("arm", "left"),
+        dt=state["play_dt"],
+        gripper=gripper_array,
+        extra_metadata=extra,
+    )
+    state["trajectory_doc"] = doc
+
     if EXPORT_PATH:
-        extra = {}
-        for k in ("grasp_pose", "pregrasp_waypoint", "place_pose", "gripper_actions", "encoding"):
-            if k in traj_meta:
-                extra[k] = traj_meta[k]
-        save_trajectory_json(
-            EXPORT_PATH,
-            traj_np,
-            arm=traj_meta.get("arm", "left"),
-            dt=state["play_dt"],
-            extra_metadata=extra,
-        )
+        with open(EXPORT_PATH, "w") as f:
+            json.dump(doc, f, indent=2)
         print(f"[motion-planner] Exported trajectory → {EXPORT_PATH}")
+
+    # Send trajectory JSON for external playback (non-confirm mode)
+    if node is not None and PLAYBACK_MODE != "confirm":
+        json_str = json.dumps(doc)
+        node.send_output("trajectory_json", pa.array([json_str]))
+        print(f"[motion-planner] Sent trajectory_json ({len(json_str)} bytes)")
 
 
 def main():
@@ -1120,19 +1489,28 @@ def main():
                     metadata=out_metadata,
                 )
 
-                # Fire gripper commands at the right waypoints
+                # Fire gripper commands — ramp over GRIPPER_RAMP_STEPS for smooth motion
+                GRIPPER_RAMP_STEPS = 30  # ~1s at 30Hz
                 for action in playback["gripper_actions"]:
                     wp = action["waypoint"]
-                    if step >= wp and wp not in playback["gripper_fired"]:
-                        playback["gripper_fired"].add(wp)
-                        rad = float(action["rad"])
-                        print(
-                            f"[motion-planner] Gripper command: rad={rad:.3f} "
-                            f"at step {step} (trigger wp={wp})"
-                        )
+                    target_rad = float(action["rad"])
+                    if step >= wp and step < wp + GRIPPER_RAMP_STEPS:
+                        # First step: log and record start rad
+                        if wp not in playback["gripper_fired"]:
+                            playback["gripper_fired"].add(wp)
+                            playback["gripper_ramp_start"] = playback.get("gripper_current_rad", GRIPPER_OPEN_RAD)
+                            print(
+                                f"[motion-planner] Gripper ramp: {playback['gripper_ramp_start']:.3f} -> "
+                                f"{target_rad:.3f} over {GRIPPER_RAMP_STEPS} steps at wp={wp}"
+                            )
+                        # Interpolate
+                        alpha = (step - wp + 1) / GRIPPER_RAMP_STEPS
+                        start_rad = playback.get("gripper_ramp_start", GRIPPER_OPEN_RAD)
+                        current_rad = start_rad + alpha * (target_rad - start_rad)
+                        playback["gripper_current_rad"] = current_rad
                         node.send_output(
                             "gripper_command",
-                            pa.array([rad], type=pa.float32()),
+                            pa.array([current_rad], type=pa.float32()),
                             metadata={"arm": playback["play_arm"]},
                         )
 
@@ -1258,6 +1636,7 @@ def main():
                         arm=arm_name,
                         table_plane=table_plane,
                         table_polygon=table_polygon,
+                        pin_ik=arm.pin_ik,
                     )
 
                 elif encoding == "jointstate":
@@ -1288,6 +1667,7 @@ def main():
                             arm.current_joints,
                             arm.joint_limits,
                             device,
+                            pin_ik=arm.pin_ik,
                         )
                     else:
                         pos = target_data[:3]
@@ -1340,7 +1720,7 @@ def main():
                     print(f"[motion-planner] Unknown encoding: {encoding}")
 
                 if result is not None:
-                    _set_playback(playback, result[0], result[1])
+                    _set_playback(playback, result[0], result[1], node=node)
                     traj_meta = result[1]
                     node.send_output("trajectory_status", pa.array([json.dumps({
                         "status": "ready",
@@ -1360,6 +1740,16 @@ def main():
                     print(
                         f"[motion-planner] grasp_result: failed to parse JSON: {raw_text}"
                     )
+                    continue
+
+                # Forward failure status from selector
+                if data.get("status") == "failed":
+                    reason = data.get("reason", "unknown error")
+                    print(f"[motion-planner] grasp_result: failed — {reason}")
+                    node.send_output("trajectory_status", pa.array([json.dumps({
+                        "status": "failed",
+                        "reason": reason,
+                    })]))
                     continue
 
                 p1 = data.get("p1")
@@ -1448,9 +1838,10 @@ def main():
                     table_plane=table_plane,
                     table_polygon=table_polygon,
                     place_uv=place_uv,
+                    pin_ik=arm.pin_ik,
                 )
                 if result is not None:
-                    _set_playback(playback, result[0], result[1])
+                    _set_playback(playback, result[0], result[1], node=node)
                     traj_meta = result[1]
                     node.send_output("trajectory_status", pa.array([json.dumps({
                         "status": "ready",
@@ -1467,6 +1858,12 @@ def main():
                     playback["playing"] = True
                     playback["play_start"] = None
                     print("[motion-planner] Execution triggered")
+                    # Send trajectory JSON for external playback (confirm mode)
+                    doc = playback.get("trajectory_doc")
+                    if doc is not None:
+                        json_str = json.dumps(doc)
+                        node.send_output("trajectory_json", pa.array([json_str]))
+                        print(f"[motion-planner] Sent trajectory_json ({len(json_str)} bytes)")
 
         elif event["type"] == "STOP":
             break

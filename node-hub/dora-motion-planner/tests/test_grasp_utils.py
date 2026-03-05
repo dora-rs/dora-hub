@@ -82,7 +82,7 @@ class TestGraspPoseFromJawPixels:
         )
 
         assert result is not None
-        grasp_xyzrpy, pregrasp_xyzrpy = result
+        grasp_xyzrpy, pregrasp_xyzrpy, object_top_z, object_width = result
 
         assert grasp_xyzrpy.shape == (6,)
         assert pregrasp_xyzrpy.shape == (6,)
@@ -112,7 +112,7 @@ class TestGraspPoseFromJawPixels:
             width=W,
             height=H,
         )
-        grasp_xyzrpy, _ = result
+        grasp_xyzrpy, _, _, _ = result
 
         # Midpoint pixel is (320, 240) = center → X should be near 0
         assert abs(grasp_xyzrpy[0]) < 0.05
@@ -144,13 +144,19 @@ class TestGraspPoseFromJawPixels:
             floor_height=0.01,
         )
         assert result is not None
-        grasp_xyzrpy, _ = result
+        grasp_xyzrpy, _, _, _ = result
         assert grasp_xyzrpy[2] >= 0.01 - 1e-6  # clamped to floor (float32 tolerance)
 
     def test_invalid_depth_returns_none(self):
-        """If jaw pixels have no valid depth, returns None."""
+        """If jaw pixels have no valid depth and table fallback is below camera, returns None."""
         depth = np.zeros(640 * 480, dtype=np.uint16)
-        cam_t = np.zeros(3, dtype=np.float32)
+        # Camera at origin looking along +Z (identity rotation).
+        # Table plane at z=0.04 is *in front* of the camera, so the ray
+        # hits it and the fallback succeeds.  To truly get None we need
+        # the table plane *behind* the camera (t_param < 0): place the
+        # camera at z=1.0 with table at z=0.04 → ray goes forward (+Z)
+        # but table is behind at z=0.04 → t_param = (0.04-1.0)/1.0 < 0.
+        cam_t = np.array([0, 0, 1.0], dtype=np.float32)
         cam_rot = Rotation.identity()
 
         result = grasp_pose_from_jaw_pixels(

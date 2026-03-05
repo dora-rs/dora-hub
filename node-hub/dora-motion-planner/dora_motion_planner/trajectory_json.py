@@ -86,7 +86,7 @@ GRIPPER_CLOSED_RAD = 0.0     # fully closed
 
 # Per-motor gains (motors 1-8), matching openarm_playback.rs
 MOTOR_KP = [300.0, 300.0, 150.0, 150.0, 40.0, 40.0, 30.0, 30.0]
-MOTOR_KD = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+MOTOR_KD = [15.0, 15.0, 7.5, 7.5, 2.0, 2.0, 1.5, 1.5]
 
 
 def _float_to_uint(x: float, x_min: float, x_max: float, bits: int) -> int:
@@ -158,8 +158,7 @@ def _decode_wire_frame(wire: bytes) -> tuple[int, bytes]:
 
 # ---- Save / Load ----
 
-def save(
-    path: str | Path,
+def build(
     trajectory: np.ndarray,
     *,
     arm: str = "left",
@@ -168,13 +167,12 @@ def save(
     gripper: np.ndarray | None = None,
     extra_metadata: dict | None = None,
 ) -> dict:
-    """Write a (T, J) radian trajectory as CAN-frame JSON.
+    """Build a (T, J) radian trajectory as a CAN-frame JSON dict (v3).
 
     Each waypoint is converted to J MIT protocol CAN frames with per-motor
     kp/kd gains from MOTOR_KP/MOTOR_KD, ready to replay on the bus.
 
     Args:
-        path: Output file path.
         trajectory: Joint trajectory in radians, shape ``(T, J)``.
         arm: ``"left"`` or ``"right"``.
         dt: Time step between waypoints in seconds.
@@ -184,7 +182,7 @@ def save(
         extra_metadata: Optional extra fields.
 
     Returns:
-        The JSON-serialisable dict that was written.
+        The JSON-serialisable dict (v3 format).
     """
     traj = np.asarray(trajectory, dtype=np.float32)
     if traj.ndim != 2:
@@ -248,7 +246,34 @@ def save(
             if k not in meta:
                 meta[k] = v
 
-    doc = {"version": 3, "metadata": meta, "commands": commands}
+    return {"version": 3, "metadata": meta, "commands": commands}
+
+
+def save(
+    path: str | Path,
+    trajectory: np.ndarray,
+    *,
+    arm: str = "left",
+    dt: float = 0.1,
+    motor_ids: list[int] | None = None,
+    gripper: np.ndarray | None = None,
+    extra_metadata: dict | None = None,
+) -> dict:
+    """Write a (T, J) radian trajectory as CAN-frame JSON.
+
+    Calls :func:`build` and writes the result to ``path``.
+
+    Returns:
+        The JSON-serialisable dict that was written.
+    """
+    doc = build(
+        trajectory,
+        arm=arm,
+        dt=dt,
+        motor_ids=motor_ids,
+        gripper=gripper,
+        extra_metadata=extra_metadata,
+    )
 
     with open(path, "w") as f:
         json.dump(doc, f, indent=2)

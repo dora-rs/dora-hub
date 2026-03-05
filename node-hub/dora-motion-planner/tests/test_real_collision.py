@@ -138,8 +138,8 @@ class TestRealPointCloud:
         # X should be roughly in [-0.5, 0.5] (left-right)
         assert pc[:, 0].min() > -2.0
         assert pc[:, 0].max() < 2.0
-        # Z should be positive (above ground) and reasonable
-        assert pc[:, 2].min() > -0.5
+        # Z should be reasonable (deeper depth data can produce negative Z)
+        assert pc[:, 2].min() > -1.0
         assert pc[:, 2].max() < 2.0
         print(f"\n  Point cloud: {len(pc)} points")
         print(f"  X range: [{pc[:, 0].min():.3f}, {pc[:, 0].max():.3f}]")

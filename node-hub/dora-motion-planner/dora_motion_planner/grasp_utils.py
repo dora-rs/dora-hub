@@ -271,13 +271,14 @@ def grasp_pose_from_jaw_pixels(
     rpy = Rotation.from_matrix(rot_matrix).as_euler("XYZ")
 
     # Shift TCP along approach so jaw contact zone (not fingertips) aligns
-    # with the object center.  TCP is at fingertips; contact surface is
-    # jaw_contact_depth behind.  Moving TCP forward along Z_ee pushes tips
-    # past the object, centering the jaw grip zone on it.
+    # with the object center.  Only shift along Z so the gripper stays
+    # centered over the pixel in XY — the angled approach means a full 3D
+    # shift would pull the gripper sideways.
     if jaw_contact_depth > 0:
-        center = center + approach * jaw_contact_depth
+        z_shift = approach[2] * jaw_contact_depth  # Z component only
+        center[2] += z_shift
         print(f"[grasp] jaw_contact_depth={jaw_contact_depth*1000:.0f}mm, "
-              f"TCP shifted to {np.round(center, 4)}")
+              f"Z shift={z_shift*1000:.1f}mm, TCP at {np.round(center, 4)}")
 
     grasp_xyzrpy = np.concatenate([center, rpy]).astype(np.float32)
 

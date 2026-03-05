@@ -23,13 +23,11 @@
         "roll": 0,
         "pitch": 0,
         "yaw": 0
-      },
-      "queryRate": 1,
-      "autoQuery": true
+      }
     },
     {
       "id": "pair3",
-      "enabled": true,
+      "enabled": false,
       "label": "champagne-arm",
       "tags": [],
       "leftPath": "anon/a13af1d39199/xoq-can-can0",
@@ -43,9 +41,7 @@
         "roll": 0,
         "pitch": 0,
         "yaw": 0
-      },
-      "queryRate": 1,
-      "autoQuery": true
+      }
     }
   ],
   "cameras": [],
@@ -66,21 +62,21 @@
       "tags": [],
       "path": "anon/7e58263812ba/realsense-243222073892",
       "position": {
-        "x": 0.79,
-        "y": 0.81,
-        "z": 1.23
+        "x": 0.73,
+        "y": 0.78,
+        "z": 1.25
       },
       "rotation": {
-        "roll": 90,
-        "pitch": -45,
-        "yaw": 0
+        "roll": 94.8,
+        "pitch": 0.3,
+        "yaw": -54
       },
       "showColor": true,
       "pointSize": 2
     },
     {
       "id": "rs2",
-      "enabled": true,
+      "enabled": false,
       "label": "champagne-realsense",
       "tags": [],
       "path": "anon/a13af1d39199/realsense-233522074606",
@@ -92,7 +88,7 @@
       "rotation": {
         "roll": 90,
         "pitch": -45,
-        "yaw": 0
+        "yaw": 1
       },
       "showColor": true,
       "pointSize": 2

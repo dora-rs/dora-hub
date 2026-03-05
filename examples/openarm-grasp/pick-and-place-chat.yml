@@ -7,6 +7,7 @@ nodes:
       tick: dora/timer/millis/200
       vlm_response: vlm/text
       trajectory_status: motion_planner/trajectory_status
+      selector_status: selector/status
     outputs:
       - vlm_request
       - command
@@ -30,8 +31,12 @@ nodes:
       IMAGE_WIDTH: "1280"
       IMAGE_HEIGHT: "720"
       ENCODING: "rgb8"
+      CAMERA_INTRINSICS: "905.6,904.5,648.8,387.8"
 
   # --- SAM3 text-prompted segmentation ---
+  # NOTE: LD_LIBRARY_PATH must include PyTorch's bundled NVRTC (12.8) to override
+  # baguette's system NVRTC (12.0), which can't compile for sm_120 (RTX 5090).
+  # Set this at coordinator startup: export LD_LIBRARY_PATH=~/.local/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:$LD_LIBRARY_PATH
   - id: sam3
     build: pip install --break-system-packages -e ../../node-hub/dora-sam3
     path: dora-sam3
@@ -66,6 +71,7 @@ nodes:
       - grasp_result
       - sam3_text
       - sam3_points
+      - status
     env:
       IMAGE_WIDTH: "1280"
       IMAGE_HEIGHT: "720"
@@ -75,6 +81,7 @@ nodes:
       OUTPUT_DIR: "."
       USE_SAM2: "false"
       USE_SAM3: "true"
+      SKIP_VLM_RATING: "true"
 
   # --- VLM (serves both chat parsing and selector rating) ---
   - id: vlm
@@ -109,11 +116,12 @@ nodes:
       - joint_command
       - gripper_command
       - trajectory_status
+      - trajectory_json
     env:
       URDF_PATH: "../openarm/openarm_v10.urdf"
       LEFT_END_EFFECTOR_LINK: "openarm_left_hand_tcp"
       RIGHT_END_EFFECTOR_LINK: "openarm_right_hand_tcp"
-      CAMERA_TRANSFORM: "-0.23 0.81 0.25 95 -45 0"
+      CAMERA_TRANSFORM: "-0.27 0.78 0.25 94.8 0.3 -54"
       IMAGE_WIDTH: "1280"
       IMAGE_HEIGHT: "720"
       DOWNSAMPLE_STRIDE: "8"
@@ -122,52 +130,39 @@ nodes:
       NUM_SEEDS: "8"
       MAX_ITERS: "500"
       DEVICE: "cuda"
-      GRASP_DEPTH_OFFSET: "-0.01"
+      GRASP_DEPTH_OFFSET: "0.0"
+      PLACE_DEPTH_OFFSET: "0.10"
       FLOOR_HEIGHT: "0.005"
       APPROACH_MARGIN: "0.03"
       PLAYBACK: "confirm"
       DWELL_STEPS: "15"
 
-  # --- Left Arm (fake-can-server on can0) ---
+  # --- Left Arm (fake CAN) ---
   - id: left_arm
-    build: pip install --break-system-packages -e ../../node-hub/dora-openarm
-    path: dora-openarm
+    path: ../../target/release/dora-openarm-playback
     inputs:
       tick: dora/timer/millis/100
-      joint_command:
-        source: motion_planner/joint_command
-        queue_size: 1
-      gripper_command:
-        source: motion_planner/gripper_command
-        queue_size: 1
+      trajectory: motion_planner/trajectory_json
     outputs:
       - joint_state
+      - trajectory_status
     env:
-      CAN_INTERFACE: "can0"
+      CAN_INTERFACE: "c0586060974c638dc9db92f2bc44b59264f305387e62250b1a1bfc986bfe8fc0"
       ARM_SIDE: "left"
-      KP: "30"
-      KD: "1"
       AUTO_ENABLE: "true"
 
-  # --- Right Arm (fake-can-server on can1) ---
+  # --- Right Arm (fake CAN) ---
   - id: right_arm
-    build: pip install --break-system-packages -e ../../node-hub/dora-openarm
-    path: dora-openarm
+    path: ../../target/release/dora-openarm-playback
     inputs:
       tick: dora/timer/millis/100
-      joint_command:
-        source: motion_planner/joint_command
-        queue_size: 1
-      gripper_command:
-        source: motion_planner/gripper_command
-        queue_size: 1
+      trajectory: motion_planner/trajectory_json
     outputs:
       - joint_state
+      - trajectory_status
     env:
-      CAN_INTERFACE: "can1"
+      CAN_INTERFACE: "28f34b9e8c51de7876c042874bb635ebb4f8008fee90c930f2756ca25e7c3d6b"
       ARM_SIDE: "right"
-      KP: "30"
-      KD: "1"
       AUTO_ENABLE: "true"
 
   # --- Visualizer (draws grasp points) ---

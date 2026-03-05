@@ -11,6 +11,7 @@ State machine: Idle → Parsing → Planning → AwaitingConfirm → Executing
 import json
 import os
 import queue
+import random
 import re
 import sys
 import threading
@@ -27,7 +28,8 @@ if hasattr(sys.stderr, "reconfigure"):
 
 CHAT_CHANNEL = os.getenv("CHAT_CHANNEL", "anon/openarm-chat")
 CHAT_RELAY = os.getenv("CHAT_RELAY", "https://cdn.1ms.ai")
-CHAT_USERNAME = os.getenv("CHAT_USERNAME", "robot")
+_base = os.getenv("CHAT_USERNAME", "robot")
+CHAT_USERNAME = f"{_base}-{random.randint(0, 0xFFFF):04x}"
 
 STATE_IDLE = "idle"
 STATE_PARSING = "parsing"
@@ -37,7 +39,7 @@ STATE_EXECUTING = "executing"
 
 VLM_PARSE_PROMPT = (
     "Extract the pick and place targets from this robot command. "
-    'Output ONLY JSON: {"pick": "object description", "place": "target description"}. '
+    'Output ONLY JSON: {{"pick": "object description", "place": "target description"}}. '
     "If no place target, omit the place key.\n"
     "Command: {command}"
 )
@@ -106,9 +108,11 @@ def main():
                     except queue.Empty:
                         break
 
-                    # Ignore our own messages
+                    # Ignore our own messages and other robot instances
                     sender = getattr(msg, "name", "") or ""
                     if sender == CHAT_USERNAME:
+                        continue
+                    if sender.startswith("robot-"):
                         continue
 
                     text = str(msg.text if hasattr(msg, "text") else msg).strip()
@@ -116,10 +120,21 @@ def main():
                         continue
 
                     text_lower = text.lower()
+
+                    # Only respond to messages mentioning @robot (or cancel/ok commands while active)
+                    has_mention = "@robot" in text_lower
+                    is_control = text_lower in ("cancel", "abort", "stop", "ok")
+                    if not has_mention and not is_control:
+                        continue
+                    # Strip the @robot mention from the command text
+                    if has_mention:
+                        text = re.sub(r"@robot\s*", "", text, flags=re.IGNORECASE).strip()
+                        text_lower = text.lower()
+
                     print(f"[chat] Received from {sender}: {text}")
 
                     # --- Cancel (any state except idle) ---
-                    if text_lower == "cancel" and state != STATE_IDLE:
+                    if text_lower in ("cancel", "abort", "stop") and state != STATE_IDLE:
                         print(f"[chat] Cancel requested (was {state})")
                         chat.send("Cancelled.")
                         state = STATE_IDLE
@@ -171,6 +186,13 @@ def main():
                     chat.send("I didn't understand that. Try: pick the <object> and put it in the <container>")
                     state = STATE_IDLE
 
+            # --- Selector status (SAM3/VLM progress) ---
+            elif event_id == "selector_status":
+                text = event["value"][0].as_py()
+                print(f"[chat] selector_status: {text} (state={state})")
+                if state == STATE_PLANNING:
+                    chat.send(text)
+
             # --- Trajectory status from motion planner ---
             elif event_id == "trajectory_status":
                 raw = event["value"][0].as_py()
@@ -180,7 +202,12 @@ def main():
                     continue
 
                 s = status.get("status", "")
-                if s == "ready" and state == STATE_PLANNING:
+                print(f"[chat] trajectory_status: {s} (state={state})")
+                if s == "phase" and state == STATE_PLANNING:
+                    label = status.get("label", "?")
+                    t = status.get("time", "?")
+                    chat.send(f"{label} ({t}s)")
+                elif s == "ready" and state == STATE_PLANNING:
                     wp = status.get("waypoints", "?")
                     dur = status.get("duration", "?")
                     arm = status.get("arm", "?")
@@ -188,7 +215,9 @@ def main():
                               "Reply 'ok' to execute or 'cancel'.")
                     state = STATE_AWAITING_CONFIRM
                 elif s == "failed":
-                    chat.send("Planning failed. Try a different command.")
+                    reason = status.get("reason", "")
+                    msg = f"Failed: {reason}" if reason else "Planning failed."
+                    chat.send(f"{msg} Try a different command.")
                     state = STATE_IDLE
                 elif s == "done":
                     chat.send("Done!")
