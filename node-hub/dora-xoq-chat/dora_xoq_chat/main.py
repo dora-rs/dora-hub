@@ -94,6 +94,7 @@ def main():
 
     state = STATE_IDLE
     node = Node()
+    greeted = False
 
     for event in node:
         if event["type"] == "INPUT":
@@ -101,6 +102,9 @@ def main():
 
             # --- Tick: drain chat messages ---
             if event_id == "tick":
+                if not greeted:
+                    greeted = True
+                    chat.send("At your service!")
                 while not msg_queue.empty():
                     try:
                         msg = msg_queue.get_nowait()
@@ -182,7 +186,7 @@ def main():
                     node.send_output("command", pa.array([json.dumps(cmd)]))
                     state = STATE_PLANNING
                 else:
-                    chat.send("I didn't understand that. Try: pick the <object> and put it in the <container>")
+                    chat.send("I didn't understand that. Try: @robot pick the <object> and put it in the <container>")
                     state = STATE_IDLE
 
             # --- Selector status (SAM3/VLM progress) ---
@@ -213,6 +217,9 @@ def main():
                     reason = status.get("reason", "")
                     msg = f"Failed: {reason}" if reason else "Planning failed."
                     chat.send(f"{msg} Try a different command.")
+                    state = STATE_IDLE
+                elif s == "busy":
+                    chat.send("Busy with previous command. Wait for it to finish.")
                     state = STATE_IDLE
                 elif s == "done":
                     chat.send("Done!")
