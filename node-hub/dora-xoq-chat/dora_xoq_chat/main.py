@@ -32,6 +32,7 @@ CHAT_USERNAME = os.getenv("CHAT_USERNAME", "robot")
 
 STATE_IDLE = "idle"
 STATE_PARSING = "parsing"
+STATE_CHATTING = "chatting"
 STATE_PLANNING = "planning"
 STATE_AWAITING_CONFIRM = "awaiting_confirm"
 STATE_EXECUTING = "executing"
@@ -39,8 +40,17 @@ STATE_EXECUTING = "executing"
 VLM_PARSE_PROMPT = (
     "Extract the pick and place targets from this robot command. "
     'Output ONLY JSON: {{"pick": "object description", "place": "target description"}}. '
-    "If no place target, omit the place key.\n"
+    "If no place target, omit the place key. "
+    'If this is NOT a pick/place command, output exactly: {{"chat": true}}\n'
     "Command: {command}"
+)
+
+VLM_CHAT_PROMPT = (
+    "You are OpenArm, a friendly open-source robot arm. You can do simple pick and place tasks. "
+    "You run on the dora robotics framework and use xoq as backend for real-time communication and video streaming. "
+    "Keep your reply short and friendly (1-2 sentences). "
+    "If the user wants you to pick or move something, remind them to say: @robot pick the <object> and put it in the <container>\n"
+    "User message: {message}"
 )
 
 
@@ -93,6 +103,7 @@ def main():
     recv_thread.start()
 
     state = STATE_IDLE
+    last_user_message = ""
     node = Node()
     greeted = False
 
@@ -104,7 +115,9 @@ def main():
             if event_id == "tick":
                 if not greeted:
                     greeted = True
+                    print("[chat] Sending greeting...")
                     chat.send("At your service!")
+                    print("[chat] Greeting sent")
                 while not msg_queue.empty():
                     try:
                         msg = msg_queue.get_nowait()
@@ -169,7 +182,7 @@ def main():
 
                     # Free-text: send to VLM for parsing
                     print(f"[chat] Sending to VLM for parsing: {text}")
-                    chat.send("Understanding your command...")
+                    last_user_message = text
                     prompt = VLM_PARSE_PROMPT.format(command=text)
                     _send_vlm_text(node, prompt)
                     state = STATE_PARSING
@@ -186,8 +199,18 @@ def main():
                     node.send_output("command", pa.array([json.dumps(cmd)]))
                     state = STATE_PLANNING
                 else:
-                    chat.send("I didn't understand that. Try: @robot pick the <object> and put it in the <container>")
-                    state = STATE_IDLE
+                    # Not a pick/place command — ask VLM for a natural response
+                    print(f"[chat] Not a command, sending to VLM for chat response")
+                    prompt = VLM_CHAT_PROMPT.format(message=last_user_message)
+                    _send_vlm_text(node, prompt)
+                    state = STATE_CHATTING
+
+            # --- VLM response (conversational chat) ---
+            elif event_id == "vlm_response" and state == STATE_CHATTING:
+                text = event["value"][0].as_py().strip()
+                print(f"[chat] VLM chat response: {text[:200]}")
+                chat.send(text)
+                state = STATE_IDLE
 
             # --- Selector status (SAM3/VLM progress) ---
             elif event_id == "selector_status":
