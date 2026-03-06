@@ -203,11 +203,7 @@ def main():
 
                 s = status.get("status", "")
                 print(f"[chat] trajectory_status: {s} (state={state})")
-                if s == "phase" and state == STATE_PLANNING:
-                    label = status.get("label", "?")
-                    t = status.get("time", "?")
-                    chat.send(f"{label} ({t}s)")
-                elif s == "ready" and state == STATE_PLANNING:
+                if s == "ready" and state == STATE_PLANNING:
                     wp = status.get("waypoints", "?")
                     dur = status.get("duration", "?")
                     arm = status.get("arm", "?")

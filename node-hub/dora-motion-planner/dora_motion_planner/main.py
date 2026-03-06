@@ -287,15 +287,7 @@ def _init_arm(name, urdf_path, ee_link, capsules, device, boxes=None):
             torch.zeros(1, num_joints, device=device)
         )
         home_pos = home_fk.get_matrix()[0, :3, 3].cpu().numpy()
-        print(f"[motion-planner] {name} arm: {num_joints} joints, EE={ee_link}")
-        print(
-            f"[motion-planner] {name} home EE: "
-            f"[{home_pos[0]:.4f}, {home_pos[1]:.4f}, {home_pos[2]:.4f}]"
-        )
-        print(
-            f"[motion-planner] {name} joint limits: "
-            f"{[[f'{v:.2f}' for v in lim] for lim in joint_limits]}"
-        )
+        print(f"[motion-planner] {name} arm: {num_joints}J, EE={ee_link}")
 
         # Verify collision primitive link names match FK transform keys
         all_transforms = ik_chain.forward_kinematics(
@@ -312,22 +304,11 @@ def _init_arm(name, urdf_path, ee_link, capsules, device, boxes=None):
         missing = all_prim_keys - fk_keys
         if missing:
             print(
-                f"[motion-planner] WARNING: {name} collision links NOT in FK transforms: "
-                f"{missing} — collision avoidance will be DISABLED for these links"
-            )
-            print(f"[motion-planner] FK transform keys: {sorted(fk_keys)}")
-        else:
-            n_boxes = len(boxes) if boxes else 0
-            print(
-                f"[motion-planner] {name} collision model: "
-                f"{len(capsule_keys)} capsules + {n_boxes} boxes, "
-                f"all {len(matched)} FK links matched"
+                f"[motion-planner] WARNING: {name} collision links NOT in FK: {missing}"
             )
 
     # Build pinocchio-based fast IK solver
     pin_solver = _build_pin_ik(urdf_path, ee_link, name)
-    print(f"[motion-planner] {name} pinocchio IK: frame={pin_solver.frame_id}, "
-          f"joints={pin_solver.joint_indices}")
 
     return ArmConfig(name, ik_chain, optimizer, joint_limits, num_joints, current_joints,
                      pin_ik=pin_solver)
@@ -463,8 +444,6 @@ def solve_ik(
         q_init = current_joints.cpu().numpy() if torch.is_tensor(current_joints) else current_joints
         q_np, err = pin_ik.solve(np.array(target_xyz, dtype=np.float64), q_init=q_init)
         if err <= pos_threshold:
-            t_ik = time.perf_counter() - t_ik_start
-            print(f"[motion-planner] IK ok: pos_err={err:.4f}m (pinocchio, {t_ik*1000:.1f}ms)")
             return torch.tensor(q_np, dtype=torch.float32, device=device)
 
     # Fallback: batched Adam (GPU)
@@ -482,8 +461,6 @@ def solve_ik(
             lower, upper, device, num_seeds, max_iters, rot_weight=0.1,
         )
         if err <= pos_threshold:
-            t_ik = time.perf_counter() - t_ik_start
-            print(f"[motion-planner] IK ok: pos_err={err:.4f}m (adam+orient, {t_ik:.2f}s)")
             return q
 
     q, err = _ik_batch_adam(
@@ -492,8 +469,6 @@ def solve_ik(
     )
     t_ik = time.perf_counter() - t_ik_start
     if err <= pos_threshold:
-        label = "position-only" if position_only else "adam-fallback"
-        print(f"[motion-planner] IK ok: pos_err={err:.4f}m ({label}, {t_ik:.2f}s)")
         return q
 
     print(f"[motion-planner] IK failed: pos_err={err:.4f}m (best of {num_seeds} seeds, {t_ik:.2f}s)")
@@ -627,22 +602,13 @@ def validate_trajectory(ik_chain, capsule_model, trajectory, point_cloud, margin
 
 def _log_collision_check(collisions, total_waypoints):
     """Log collision validation results."""
-    if not collisions:
-        print("[motion-planner] Collision check: trajectory clear")
-        return
-    colliding_waypoints = len(set(c[0] for c in collisions))
-    worst = min(collisions, key=lambda c: c[2])
-    print(
-        f"[motion-planner] Collision check: {colliding_waypoints}/{total_waypoints} "
-        f"waypoints in collision"
-    )
-    for t_idx, link_name, dist in collisions[:10]:
-        print(f"[motion-planner]   t={t_idx} link={link_name} dist={dist:.4f}m")
-    if len(collisions) > 10:
-        print(f"[motion-planner]   ... and {len(collisions) - 10} more")
-    print(
-        f"[motion-planner]   worst: t={worst[0]} penetration={-worst[2]*1000:.1f}mm"
-    )
+    if collisions:
+        colliding_waypoints = len(set(c[0] for c in collisions))
+        worst = min(collisions, key=lambda c: c[2])
+        print(
+            f"[motion-planner] Collision: {colliding_waypoints}/{total_waypoints} wp, "
+            f"worst penetration={-worst[2]*1000:.1f}mm"
+        )
 
 
 def plan_and_send(node, optimizer, q_start, q_goal, pc_tensor, num_joints,
@@ -654,11 +620,6 @@ def plan_and_send(node, optimizer, q_start, q_goal, pc_tensor, num_joints,
     metadata dict, so the caller can store it for playback / export.
     """
     pc_info = f"{len(pc_tensor)} pts" if pc_tensor is not None else "no pc"
-    print(
-        f"[motion-planner] Planning: {NUM_WAYPOINTS} waypoints, "
-        f"{NUM_SEEDS} seeds, {MAX_ITERS} iters, {pc_info}"
-    )
-
     t0 = time.perf_counter()
     best_traj, best_cost = optimizer.optimize(
         q_start=q_start,
@@ -669,8 +630,7 @@ def plan_and_send(node, optimizer, q_start, q_goal, pc_tensor, num_joints,
         max_iters=MAX_ITERS,
     )
     t_plan = time.perf_counter() - t0
-
-    print(f"[motion-planner] Best cost: {best_cost:.4f} (planned in {t_plan:.2f}s)")
+    print(f"[motion-planner] Planned: cost={best_cost:.4f} ({t_plan:.1f}s)")
 
     # Post-optimization collision validation
     if ik_chain is not None and capsule_model is not None:
@@ -765,11 +725,6 @@ def plan_grasp_from_pixels(
         return None
 
     grasp_xyzrpy, pregrasp_xyzrpy, object_top_z, object_width = result
-    print(
-        f"[motion-planner] grasp: center={np.round(grasp_xyzrpy[:3], 4)}, "
-        f"pregrasp_z={pregrasp_xyzrpy[2]:.4f}, "
-        f"object_width={object_width*1000:.1f}mm"
-    )
 
     q_pregrasp = solve_ik(
         ik_chain, pregrasp_xyzrpy, current_joints, joint_limits, device,
@@ -815,7 +770,6 @@ def plan_grasp_from_pixels(
                     pos_threshold=0.05, position_only=True, pin_ik=pin_ik,
                 )
             if q_place is not None:
-                print("[motion-planner] Place IK solved, building pick-and-place trajectory")
             else:
                 print("[motion-planner] WARNING: Place IK failed, falling back to grasp-only")
                 node.send_output("trajectory_status", pa.array([json.dumps({
@@ -938,13 +892,9 @@ def _build_pick_place_trajectory(
 
         # Compute T and keypoints from path length (constant EE velocity)
         T = max(int(path_length / ee_speed * PLAYBACK_HZ), 10)
-        n_keypoints = max(int(path_length / 0.002), 5)  # 1 keypoint per 2mm
+        n_keypoints = max(int(path_length / 0.001), 5)  # 1 keypoint per 1mm
         n_keypoints = min(n_keypoints, T // 3)  # at least 3 waypoints per keypoint for smoothing
         mode = "cartesian-safe" if safe_z else "cartesian"
-        print(f"[motion-planner] {label} ({mode}, {T} wp, {n_keypoints} keys, "
-              f"path={path_length:.3f}m, speed={ee_speed:.2f}m/s) "
-              f"EE: [{p_s[0]:.3f},{p_s[1]:.3f},{p_s[2]:.3f}] -> "
-              f"[{p_g[0]:.3f},{p_g[1]:.3f},{p_g[2]:.3f}]")
 
         if joint_limits is None or device is None:
             print(f"  WARNING: no joint_limits/device, falling back to joint lerp")
@@ -1013,8 +963,6 @@ def _build_pick_place_trajectory(
                     )
                     max_jump = float(np.max(np.abs(q_np - q_prev_np)))
                     if err > 0.05 or max_jump > np.pi / 2:
-                        if max_jump > np.pi / 2:
-                            print(f"  keypoint {i}: joint jump {max_jump:.2f} rad, using lerp")
                         failed += 1
                         alpha_j = i / (n_keypoints - 1)
                         q_fallback = q_s.cpu().numpy() * (1 - alpha_j) + q_g.cpu().numpy() * alpha_j
@@ -1042,7 +990,7 @@ def _build_pick_place_trajectory(
                         q_prev_np = q_ik.detach().cpu().numpy()
 
             if failed > 0:
-                print(f"  WARNING: {failed}/{n_keypoints-1} keypoint IK failures (joint-lerp fallback)")
+                print(f"[motion-planner] {label}: {failed}/{n_keypoints-1} keypoint IK failures")
 
             # Distribute T waypoints across keypoint intervals
             n_intervals = len(key_qs) - 1
@@ -1064,24 +1012,6 @@ def _build_pick_place_trajectory(
                 total_wp += seg.shape[0]
             traj = torch.cat(segments_inner, dim=0)
 
-        dt = time.perf_counter() - t_start
-        with torch.no_grad():
-            traj_dev = traj.to(ik_chain.device)
-            fk_all = ik_chain.forward_kinematics(traj_dev)
-            ee_all = fk_all.get_matrix()[:, :3, 3].cpu().numpy()
-            z_min, z_max = ee_all[:, 2].min(), ee_all[:, 2].max()
-            mid = len(ee_all) // 2
-            print(f"  actual EE: start=[{ee_all[0,0]:.3f},{ee_all[0,1]:.3f},{ee_all[0,2]:.3f}] "
-                  f"mid=[{ee_all[mid,0]:.3f},{ee_all[mid,1]:.3f},{ee_all[mid,2]:.3f}] "
-                  f"end=[{ee_all[-1,0]:.3f},{ee_all[-1,1]:.3f},{ee_all[-1,2]:.3f}] "
-                  f"z=[{z_min:.3f},{z_max:.3f}] ({dt:.1f}s)")
-
-        node.send_output("trajectory_status", pa.array([json.dumps({
-            "status": "phase",
-            "phase": phase_count[0],
-            "label": label,
-            "time": round(dt, 1),
-        })]))
         return traj
 
     # Helper: append segment, threading actual last waypoint for continuity
@@ -1187,27 +1117,7 @@ def _build_pick_place_trajectory(
     total_waypoints = full_traj.shape[0]
     t_plan = time.perf_counter() - t0
 
-    print(
-        f"[motion-planner] Pick-and-place: {total_waypoints} waypoints "
-        f"({t_plan:.2f}s)"
-    )
-
-    # Check for joint discontinuities
-    traj_np_check = full_traj.cpu().numpy()
-    diffs = np.abs(np.diff(traj_np_check, axis=0))
-    max_per_step = diffs.max(axis=1)
-    bad_steps = np.where(max_per_step > 0.1)[0]  # >0.1 rad jump
-    if len(bad_steps) > 0:
-        print(f"[motion-planner] WARNING: {len(bad_steps)} joint discontinuities (>0.1 rad):")
-        for idx in bad_steps[:20]:
-            joint = int(np.argmax(diffs[idx]))
-            print(f"  step {idx}->{idx+1}: joint {joint} jump={diffs[idx, joint]:.3f} rad")
-    else:
-        print("[motion-planner] No joint discontinuities detected")
-
-    # Dump trajectory for offline analysis
-    np.save("/tmp/latest_trajectory.npy", traj_np_check)
-    print(f"[motion-planner] Saved trajectory to /tmp/latest_trajectory.npy")
+    print(f"[motion-planner] Trajectory: {total_waypoints} wp ({t_plan:.1f}s)")
 
     # Post-optimization collision validation
     if capsule_model is not None:
@@ -1228,7 +1138,6 @@ def _build_pick_place_trajectory(
         gripper_actions.append(
             {"waypoint": place_dwell_start, "rad": float(GRIPPER_OPEN_RAD)}
         )
-    print(f"[motion-planner] Gripper: {gripper_actions}")
 
     traj_np = full_traj.numpy().astype(np.float32)
     dt = 1.0 / 30.0
@@ -1278,7 +1187,6 @@ def build_pointcloud(
     pc_robot = transform_points(pc_cam, cam_t, cam_rot)
     pc_tensor = pointcloud_to_tensor(pc_robot, device)
     t_pc = time.perf_counter() - t0
-    print(f"[motion-planner] Point cloud: {len(pc_robot)} pts ({t_pc:.3f}s)")
     return pc_tensor, pc_robot
 
 
@@ -1299,18 +1207,9 @@ def _setup_table_plane(optimizer, pc_robot, cam_t, cam_rot, latest_intrinsics,
     )
     optimizer.set_table(table_plane, table_polygon)
     plane_z, bounds = table_plane
-    print(
-        f"[motion-planner] Table plane: z={plane_z:.3f}, "
-        f"bounds=({bounds[0]:.2f}, {bounds[1]:.2f}, {bounds[2]:.2f}, {bounds[3]:.2f})"
-    )
-
     # Filter below-table points (floor, arm reflections, table surface)
     pc_filtered, _mask = filter_below_table(pc_robot, plane_z)
     pc_tensor_filtered = pointcloud_to_tensor(pc_filtered, device) if len(pc_filtered) > 0 else None
-    print(
-        f"[motion-planner] Point cloud after table filter: "
-        f"{len(pc_filtered)} pts (removed {len(pc_robot) - len(pc_filtered)} below z={plane_z + 0.02:.3f})"
-    )
     return table_plane, table_polygon, pc_filtered, pc_tensor_filtered
 
 
@@ -1401,7 +1300,6 @@ def _set_playback(state, traj_np, traj_meta, node=None):
     if node is not None and PLAYBACK_MODE != "confirm":
         json_str = json.dumps(doc)
         node.send_output("trajectory_json", pa.array([json_str]))
-        print(f"[motion-planner] Sent trajectory_json ({len(json_str)} bytes)")
 
 
 def main():
@@ -1492,7 +1390,6 @@ def main():
                 if playback["play_start"] is None:
                     playback["play_start"] = time.monotonic()
                     playback["step"] = 0
-                    print("[motion-planner] Playback started")
 
                 # Advance based on wall-clock time
                 elapsed = time.monotonic() - playback["play_start"]
@@ -1519,10 +1416,6 @@ def main():
                         if wp not in playback["gripper_fired"]:
                             playback["gripper_fired"].add(wp)
                             playback["gripper_ramp_start"] = playback.get("gripper_current_rad", GRIPPER_OPEN_RAD)
-                            print(
-                                f"[motion-planner] Gripper ramp: {playback['gripper_ramp_start']:.3f} -> "
-                                f"{target_rad:.3f} over {GRIPPER_RAMP_STEPS} steps at wp={wp}"
-                            )
                         # Interpolate
                         alpha = (step - wp + 1) / GRIPPER_RAMP_STEPS
                         start_rad = playback.get("gripper_ramp_start", GRIPPER_OPEN_RAD)
@@ -1536,7 +1429,6 @@ def main():
 
                 if step >= T - 1 and not playback.get("internal_done"):
                     playback["internal_done"] = True
-                    print("[motion-planner] Internal playback complete, waiting for arm")
 
             # --- Arm trajectory status (external playback done) ---
             elif event_id in ("left_trajectory_status", "right_trajectory_status"):
@@ -1547,7 +1439,6 @@ def main():
                 if status_data.get("status") == "done" and playback["playing"]:
                     playback["playing"] = False
                     arm_side = "left" if event_id == "left_trajectory_status" else "right"
-                    print(f"[motion-planner] {arm_side} arm playback done")
                     node.send_output("trajectory_status", pa.array([json.dumps({"status": "done"})]))
 
             # --- Depth / intrinsics (shared across arms) ---
@@ -1905,8 +1796,7 @@ def main():
                     if doc is not None:
                         json_str = json.dumps(doc)
                         node.send_output("trajectory_json", pa.array([json_str]))
-                        print(f"[motion-planner] Sent trajectory_json ({len(json_str)} bytes)")
-
+                
         elif event["type"] == "STOP":
             break
 

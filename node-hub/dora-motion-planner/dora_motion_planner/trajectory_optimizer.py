@@ -348,14 +348,6 @@ class TrajectoryOptimizer:
             best_traj = q_traj[best_idx].cpu()
             best_cost = final_costs[best_idx].item()
 
-        elapsed = time.perf_counter() - t0
-        print(
-            f"[trajectory-opt] {S} seeds × {it + 1} iters in "
-            f"{elapsed:.2f}s (best cost={best_cost:.4f})"
-        )
-        for s in range(S):
-            print(f"  seed {s}: cost={final_costs[s].item():.4f}")
-
         return best_traj, best_cost
 
     @staticmethod
