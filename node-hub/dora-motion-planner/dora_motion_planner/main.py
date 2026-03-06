@@ -1437,14 +1437,18 @@ def main():
 
             # --- Arm trajectory status (external playback done) ---
             elif event_id in ("left_trajectory_status", "right_trajectory_status"):
-                try:
-                    status_data = json.loads(event["value"][0].as_py())
-                except (json.JSONDecodeError, TypeError, IndexError):
-                    continue
-                if status_data.get("status") == "done" and playback["playing"]:
+                raw = event["value"][0].as_py()
+                # Arm sends plain string "done" or JSON {"status": "done"}
+                is_done = False
+                if raw == "done":
+                    is_done = True
+                else:
+                    try:
+                        is_done = json.loads(raw).get("status") == "done"
+                    except (json.JSONDecodeError, TypeError, IndexError):
+                        pass
+                if is_done and playback["playing"]:
                     playback["playing"] = False
-                    arm_side = "left" if event_id == "left_trajectory_status" else "right"
-                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "done"})]))
 
             # --- Depth / intrinsics (shared across arms) ---
             elif event_id == "depth":
@@ -1732,14 +1736,12 @@ def main():
                     cam_t,
                     cam_rot,
                 )
-                arm_name = select_arm(metadata, target_y)
-                arm = arms.get(arm_name)
-                if arm is None:
-                    print(
-                        f"[motion-planner] {arm_name} arm not available, skipping"
-                    )
-                    continue
-                print(f"[motion-planner] Selected {arm_name} arm for grasp")
+                preferred_arm = select_arm(metadata, target_y)
+                # Try preferred arm first, then the other
+                arm_order = [preferred_arm]
+                other_arm = "right" if preferred_arm == "left" else "left"
+                if other_arm in arms:
+                    arm_order.append(other_arm)
 
                 pc_tensor, pc_robot = build_pointcloud(
                     latest_depth,
@@ -1750,37 +1752,49 @@ def main():
                     device,
                 )
 
-                # Compute table plane from camera frustum and filter
-                table_plane, table_polygon, pc_robot, pc_tensor = _setup_table_plane(
-                    arm.optimizer, pc_robot, cam_t, cam_rot,
-                    latest_intrinsics, latest_image_size, device,
-                )
+                result = None
+                fail_reason = None
+                for arm_name in arm_order:
+                    arm = arms.get(arm_name)
+                    if arm is None:
+                        continue
+                    print(f"[motion-planner] Trying {arm_name} arm for grasp")
 
-                result, fail_reason = plan_grasp_from_pixels(
-                    u1,
-                    v1,
-                    u2,
-                    v2,
-                    node,
-                    arm.optimizer,
-                    arm.ik_chain,
-                    arm.optimizer.capsules,
-                    arm.joint_limits,
-                    device,
-                    arm.current_joints,
-                    latest_depth,
-                    latest_intrinsics,
-                    latest_image_size,
-                    cam_t,
-                    cam_rot,
-                    pc_tensor,
-                    arm.num_joints,
-                    arm=arm_name,
-                    table_plane=table_plane,
-                    table_polygon=table_polygon,
-                    place_uv=place_uv,
-                    pin_ik=arm.pin_ik,
-                )
+                    # Compute table plane (may differ per arm optimizer)
+                    table_plane, table_polygon, pc_robot_filtered, pc_tensor_filtered = _setup_table_plane(
+                        arm.optimizer, pc_robot, cam_t, cam_rot,
+                        latest_intrinsics, latest_image_size, device,
+                    )
+
+                    result, fail_reason = plan_grasp_from_pixels(
+                        u1,
+                        v1,
+                        u2,
+                        v2,
+                        node,
+                        arm.optimizer,
+                        arm.ik_chain,
+                        arm.optimizer.capsules,
+                        arm.joint_limits,
+                        device,
+                        arm.current_joints,
+                        latest_depth,
+                        latest_intrinsics,
+                        latest_image_size,
+                        cam_t,
+                        cam_rot,
+                        pc_tensor_filtered,
+                        arm.num_joints,
+                        arm=arm_name,
+                        table_plane=table_plane,
+                        table_polygon=table_polygon,
+                        place_uv=place_uv,
+                        pin_ik=arm.pin_ik,
+                    )
+                    if result is not None:
+                        break
+                    print(f"[motion-planner] {arm_name} arm failed: {fail_reason}")
+
                 if result is not None:
                     _set_playback(playback, result[0], result[1], node=node)
                     traj_meta = result[1]
@@ -1793,7 +1807,7 @@ def main():
                 else:
                     node.send_output("trajectory_status", pa.array([json.dumps({
                         "status": "failed",
-                        "reason": fail_reason or "Unknown error",
+                        "reason": fail_reason or "Both arms failed",
                     })]))
 
             # --- Execute: start playback (confirm mode) ---
