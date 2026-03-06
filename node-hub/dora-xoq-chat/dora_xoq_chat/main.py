@@ -211,9 +211,9 @@ def main():
                     wp = status.get("waypoints", "?")
                     dur = status.get("duration", "?")
                     arm = status.get("arm", "?")
-                    chat.send(f"Trajectory planned: {wp} waypoints, ~{dur}s on {arm} arm. "
-                              "Reply 'ok' to execute or 'cancel'.")
-                    state = STATE_AWAITING_CONFIRM
+                    chat.send(f"Executing: {wp} waypoints, ~{dur}s on {arm} arm.")
+                    node.send_output("execute", pa.array(["go"]))
+                    state = STATE_EXECUTING
                 elif s == "failed":
                     reason = status.get("reason", "")
                     msg = f"Failed: {reason}" if reason else "Planning failed."

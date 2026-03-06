@@ -132,11 +132,13 @@ GRIPPER_TRAVEL_MM = 44.0      # jaw travel range in mm
 def compute_gripper_close_rad(object_width_m):
     """Compute gripper close angle based on object width.
 
-    Instead of fully closing, close just enough to grip the object
-    with a 15mm squeeze margin for a firm hold.
+    Starts from fully closed and opens just enough to leave a gap
+    slightly smaller than the object (5mm squeeze) for a firm hold.
     """
-    target_gap_mm = max(0, object_width_m * 1000 - 25)  # 25mm squeeze margin
-    return GRIPPER_OPEN_RAD * min(1.0, target_gap_mm / GRIPPER_TRAVEL_MM)
+    gap_mm = max(0, object_width_m * 1000 - 5)  # 5mm squeeze margin
+    # Fraction of travel to open from closed: 0 = fully closed, 1 = fully open
+    open_frac = min(1.0, gap_mm / GRIPPER_TRAVEL_MM)
+    return GRIPPER_CLOSED_RAD + open_frac * (GRIPPER_OPEN_RAD - GRIPPER_CLOSED_RAD)
 
 # Parse place target at module level
 _place_target = None
@@ -1219,6 +1221,7 @@ def _build_pick_place_trajectory(
 
     close_rad = compute_gripper_close_rad(object_width)
     gripper_actions = [
+        {"waypoint": 0, "rad": float(GRIPPER_OPEN_RAD)},  # open before descent
         {"waypoint": grasp_dwell_start, "rad": float(close_rad)},
     ]
     if q_place is not None:
@@ -1311,23 +1314,38 @@ def _setup_table_plane(optimizer, pc_robot, cam_t, cam_rot, latest_intrinsics,
     return table_plane, table_polygon, pc_filtered, pc_tensor_filtered
 
 
-def _gripper_actions_to_array(gripper_actions, num_waypoints):
+def _gripper_actions_to_array(gripper_actions, num_waypoints, ramp_steps=30):
     """Convert discrete gripper actions to continuous (T,) array for trajectory JSON.
 
     Values are normalized 0-1: 0 = fully open, 1 = fully closed.
+    Ramps linearly over ``ramp_steps`` waypoints (~1s at 30Hz) between actions.
     """
     if not gripper_actions:
         return None
     arr = np.zeros(num_waypoints, dtype=np.float32)
     sorted_actions = sorted(gripper_actions, key=lambda a: a["waypoint"])
+
+    def _rad_to_norm(rad):
+        v = (rad - GRIPPER_OPEN_RAD) / (GRIPPER_CLOSED_RAD - GRIPPER_OPEN_RAD)
+        return max(0.0, min(1.0, v))
+
     current = 0.0  # start fully open
     action_idx = 0
+    ramp_start_val = 0.0
+    ramp_target_val = 0.0
+    ramp_start_wp = -ramp_steps  # no active ramp initially
     for i in range(num_waypoints):
         while action_idx < len(sorted_actions) and sorted_actions[action_idx]["waypoint"] <= i:
-            rad = float(sorted_actions[action_idx]["rad"])
-            current = (rad - GRIPPER_OPEN_RAD) / (GRIPPER_CLOSED_RAD - GRIPPER_OPEN_RAD)
-            current = max(0.0, min(1.0, current))
+            ramp_start_val = current
+            ramp_target_val = _rad_to_norm(float(sorted_actions[action_idx]["rad"]))
+            ramp_start_wp = sorted_actions[action_idx]["waypoint"]
             action_idx += 1
+        steps_in = i - ramp_start_wp
+        if steps_in < ramp_steps:
+            alpha = (steps_in + 1) / ramp_steps
+            current = ramp_start_val + alpha * (ramp_target_val - ramp_start_val)
+        else:
+            current = ramp_target_val
         arr[i] = current
     return arr
 
@@ -1343,6 +1361,7 @@ def _set_playback(state, traj_np, traj_meta, node=None):
     state["trajectory"] = traj_np                        # (T, J)
     state["step"] = 0
     state["playing"] = PLAYBACK_MODE != "confirm"        # confirm mode waits for execute
+    state["internal_done"] = False                       # internal tick playback finished
     state["play_arm"] = traj_meta.get("arm", "left")
     state["play_start"] = None                           # set on first tick
     state["play_dt"] = float(traj_meta.get("dt", 0.1))
@@ -1448,6 +1467,7 @@ def main():
         "gripper_fired": set(),
     }
 
+
     node = Node()
     print(
         f"[motion-planner] Ready ({', '.join(arms.keys())} arm(s)), "
@@ -1514,11 +1534,21 @@ def main():
                             metadata={"arm": playback["play_arm"]},
                         )
 
-                if step >= T - 1 and playback["playing"]:
-                    playback["playing"] = False
-                    print("[motion-planner] Playback complete, holding final position")
-                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "done"})]))
+                if step >= T - 1 and not playback.get("internal_done"):
+                    playback["internal_done"] = True
+                    print("[motion-planner] Internal playback complete, waiting for arm")
 
+            # --- Arm trajectory status (external playback done) ---
+            elif event_id in ("left_trajectory_status", "right_trajectory_status"):
+                try:
+                    status_data = json.loads(event["value"][0].as_py())
+                except (json.JSONDecodeError, TypeError, IndexError):
+                    continue
+                if status_data.get("status") == "done" and playback["playing"]:
+                    playback["playing"] = False
+                    arm_side = "left" if event_id == "left_trajectory_status" else "right"
+                    print(f"[motion-planner] {arm_side} arm playback done")
+                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "done"})]))
 
             # --- Depth / intrinsics (shared across arms) ---
             elif event_id == "depth":
@@ -1563,6 +1593,12 @@ def main():
 
             # --- Target pose ---
             elif event_id == "target_pose":
+                if playback["playing"]:
+                    print("[motion-planner] Busy playing trajectory, ignoring target_pose")
+                    node.send_output("trajectory_status", pa.array([json.dumps({
+                        "status": "busy",
+                    })]))
+                    continue
                 encoding = metadata.get("encoding", "jointstate")
                 target_data = event["value"].to_numpy().astype(np.float32)
 
@@ -1733,6 +1769,12 @@ def main():
 
             # --- Grasp result ---
             elif event_id == "grasp_result":
+                if playback["playing"]:
+                    print("[motion-planner] Busy playing trajectory, ignoring grasp_result")
+                    node.send_output("trajectory_status", pa.array([json.dumps({
+                        "status": "busy",
+                    })]))
+                    continue
                 raw_text = event["value"][0].as_py()
                 try:
                     data = json.loads(raw_text)
