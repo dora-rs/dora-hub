@@ -28,8 +28,7 @@ if hasattr(sys.stderr, "reconfigure"):
 
 CHAT_CHANNEL = os.getenv("CHAT_CHANNEL", "anon/openarm-chat")
 CHAT_RELAY = os.getenv("CHAT_RELAY", "https://cdn.1ms.ai")
-_base = os.getenv("CHAT_USERNAME", "robot")
-CHAT_USERNAME = f"{_base}-{random.randint(0, 0xFFFF):04x}"
+CHAT_USERNAME = os.getenv("CHAT_USERNAME", "robot")
 
 STATE_IDLE = "idle"
 STATE_PARSING = "parsing"
