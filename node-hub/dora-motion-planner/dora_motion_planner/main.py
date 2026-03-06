@@ -770,6 +770,7 @@ def plan_grasp_from_pixels(
                     pos_threshold=0.05, position_only=True, pin_ik=pin_ik,
                 )
             if q_place is not None:
+                pass
             else:
                 print("[motion-planner] WARNING: Place IK failed, falling back to grasp-only")
                 node.send_output("trajectory_status", pa.array([json.dumps({
@@ -1429,6 +1430,8 @@ def main():
 
                 if step >= T - 1 and not playback.get("internal_done"):
                     playback["internal_done"] = True
+                    playback["playing"] = False
+                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "done"})]))
 
             # --- Arm trajectory status (external playback done) ---
             elif event_id in ("left_trajectory_status", "right_trajectory_status"):
