@@ -695,7 +695,7 @@ def plan_grasp_from_pixels(
     """
     if latest_depth is None or latest_intrinsics is None:
         print("[motion-planner] grasp: no depth/intrinsics yet, skipping")
-        return None
+        return None, "No depth/intrinsics data"
 
     w, h = latest_image_size
     fx, fy, cx, cy = latest_intrinsics
@@ -722,7 +722,7 @@ def plan_grasp_from_pixels(
     )
     if result is None:
         print("[motion-planner] grasp: invalid depth at jaw points, skipping")
-        return None
+        return None, "Invalid depth at grasp point"
 
     grasp_xyzrpy, pregrasp_xyzrpy, object_top_z, object_width = result
 
@@ -732,13 +732,13 @@ def plan_grasp_from_pixels(
     )
     if q_pregrasp is None:
         print("[motion-planner] grasp: IK failed for pre-grasp, skipping")
-        return None
+        return None, "IK failed for pre-grasp pose (unreachable)"
 
     q_grasp = solve_ik(ik_chain, grasp_xyzrpy, q_pregrasp, joint_limits, device,
                        pin_ik=pin_ik)
     if q_grasp is None:
         print("[motion-planner] grasp: IK failed for grasp, skipping")
-        return None
+        return None, "IK failed for grasp pose (unreachable)"
 
     # --- Pick-and-place: solve IK for place/preplace poses ---
     q_place = None
@@ -790,7 +790,7 @@ def plan_grasp_from_pixels(
     q_start = current_joints.clone()
     t_plan_start = time.perf_counter()
 
-    return _build_pick_place_trajectory(
+    result = _build_pick_place_trajectory(
         node, optimizer, ik_chain, capsule_model,
         q_start, q_pregrasp, q_grasp, q_preplace, q_place,
         pc_tensor, num_joints, arm, object_width,
@@ -799,6 +799,9 @@ def plan_grasp_from_pixels(
         table_plane=table_plane, table_polygon=table_polygon,
         pin_ik=pin_ik,
     )
+    if result is None:
+        return None, "Trajectory planning failed"
+    return result, None
 
 
 def _build_pick_place_trajectory(
@@ -1430,7 +1433,6 @@ def main():
 
                 if step >= T - 1 and not playback.get("internal_done"):
                     playback["internal_done"] = True
-                    playback["playing"] = False
                     node.send_output("trajectory_status", pa.array([json.dumps({"status": "done"})]))
 
             # --- Arm trajectory status (external playback done) ---
@@ -1659,7 +1661,10 @@ def main():
                         "arm": traj_meta.get("arm", "left"),
                     })]))
                 elif encoding is not None:
-                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "failed"})]))
+                    node.send_output("trajectory_status", pa.array([json.dumps({
+                        "status": "failed",
+                        "reason": "Trajectory optimization failed",
+                    })]))
 
             # --- Grasp result ---
             elif event_id == "grasp_result":
@@ -1751,7 +1756,7 @@ def main():
                     latest_intrinsics, latest_image_size, device,
                 )
 
-                result = plan_grasp_from_pixels(
+                result, fail_reason = plan_grasp_from_pixels(
                     u1,
                     v1,
                     u2,
@@ -1786,7 +1791,10 @@ def main():
                         "arm": traj_meta.get("arm", "left"),
                     })]))
                 else:
-                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "failed"})]))
+                    node.send_output("trajectory_status", pa.array([json.dumps({
+                        "status": "failed",
+                        "reason": fail_reason or "Unknown error",
+                    })]))
 
             # --- Execute: start playback (confirm mode) ---
             elif event_id == "execute":
