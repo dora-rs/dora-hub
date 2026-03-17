@@ -85,7 +85,7 @@ GRIPPER_OPEN_RAD = -1.0472   # -60° = fully open (44mm finger travel)
 GRIPPER_CLOSED_RAD = 0.0     # fully closed
 
 # Per-motor gains (motors 1-8), matching openarm_playback.rs
-MOTOR_KP = [300.0, 300.0, 150.0, 150.0, 40.0, 40.0, 30.0, 30.0]
+MOTOR_KP = [300.0, 300.0, 150.0, 150.0, 40.0, 40.0, 30.0, 10.0]
 MOTOR_KD = [15.0, 15.0, 7.5, 7.5, 2.0, 2.0, 1.5, 1.5]
 
 

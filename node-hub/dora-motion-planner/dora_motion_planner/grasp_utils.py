@@ -251,7 +251,7 @@ def grasp_pose_from_jaw_pixels(
     # 0° = straight down, 90° = fully horizontal facing the object.
     if approach_angle_deg > 0.1:
         # Fixed approach heading: -135° from X axis = (-1, -1) direction in XY
-        approach_heading_deg = -135.0
+        approach_heading_deg = 135.0
         heading_rad = np.radians(approach_heading_deg)
         horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
         angle_rad = np.radians(approach_angle_deg)

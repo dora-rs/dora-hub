@@ -107,13 +107,14 @@ DEVICE = os.getenv("DEVICE", "cuda")
 GRASP_DEPTH_OFFSET = float(os.getenv("GRASP_DEPTH_OFFSET", "-0.01"))
 PLACE_DEPTH_OFFSET = float(os.getenv("PLACE_DEPTH_OFFSET", "0.05"))
 FLOOR_HEIGHT = float(os.getenv("FLOOR_HEIGHT", "0.005"))
-APPROACH_MARGIN = float(os.getenv("APPROACH_MARGIN", "0.10"))
+APPROACH_MARGIN = float(os.getenv("APPROACH_MARGIN", "0.15"))
 JAW_CONTACT_DEPTH = float(os.getenv("JAW_CONTACT_DEPTH", "0.0"))
 APPROACH_ANGLE_DEG = float(os.getenv("APPROACH_ANGLE_DEG", "70.0"))
 IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "640"))
 IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "480"))
 MAX_JOINT_STEP = float(os.getenv("MAX_JOINT_STEP", "0.1"))
 EXPORT_PATH = os.getenv("EXPORT_PATH", "")
+EXPORT_DIR = os.getenv("EXPORT_DIR", "")
 PLAYBACK_MODE = os.getenv("PLAYBACK", "true").lower()  # "true", "false", "confirm"
 PLAYBACK = PLAYBACK_MODE in ("1", "true", "yes", "confirm")
 
@@ -134,7 +135,7 @@ def compute_gripper_close_rad(object_width_m):
     Starts from fully closed and opens just enough to leave a gap
     slightly smaller than the object (5mm squeeze) for a firm hold.
     """
-    gap_mm = max(0, object_width_m * 1000 - 20)  # 20mm squeeze margin
+    gap_mm = max(0, object_width_m * 1000 - 30)  # 30mm squeeze margin
     # Fraction of travel to open from closed: 0 = fully closed, 1 = fully open
     open_frac = min(1.0, gap_mm / GRIPPER_TRAVEL_MM)
     return GRIPPER_CLOSED_RAD + open_frac * (GRIPPER_OPEN_RAD - GRIPPER_CLOSED_RAD)
@@ -306,13 +307,15 @@ def _init_arm(name, urdf_path, ee_link, capsules, device, boxes=None):
                      pin_ik=pin_solver)
 
 
-def select_arm(metadata, target_y=None):
-    """Select arm: metadata ``arm`` field > Y-position sign > default left."""
+def select_arm(metadata, target_y=None, target_x=None):
+    """Select arm closest to target. Robot is 45deg angled: dividing line is Y = -X."""
     arm = metadata.get("arm", "")
     if arm in ("left", "right"):
         return arm
+    if target_x is not None and target_y is not None:
+        return "right" if (target_x + target_y) < 0 else "left"
     if target_y is not None:
-        return "left" if target_y > 0 else "right"
+        return "left" if target_y < 0 else "right"
     return "left"
 
 
@@ -334,7 +337,7 @@ def _estimate_target_y(u1, v1, u2, v2, depth, intrinsics, image_size, cam_t, cam
     x_cam = (mid_u - cx) * z / fx
     y_cam = (mid_v - cy) * z / fy
     pt_robot = cam_rot.as_matrix() @ np.array([x_cam, y_cam, z]) + cam_t
-    return float(pt_robot[1])
+    return float(pt_robot[0]), float(pt_robot[1])
 
 
 def _fk_pos_chain(ik_chain, q):
@@ -366,8 +369,22 @@ def _ik_batch_adam(
         current_joints = current_joints.to(device)
     else:
         current_joints = torch.tensor(current_joints, dtype=torch.float32, device=device)
-    q_batch = lower + (upper - lower) * torch.rand(num_seeds, nj, device=device)
-    q_batch[0] = current_joints.clone()
+    if target_rot is not None and rot_weight > 0:
+        # Mixed seeding: half from current_joints (good position), half from home (good rotation)
+        q_batch = lower + (upper - lower) * torch.rand(num_seeds, nj, device=device)
+        q_batch[0] = current_joints.clone()
+        # Seeds 1..half: perturbations of current_joints
+        half = num_seeds // 2
+        for si in range(1, half):
+            q_batch[si] = current_joints + 0.3 * torch.randn(nj, device=device)
+        # Seeds half..end: perturbations of home (zero joints = good wrist orientation)
+        q_home = torch.zeros(nj, device=device)
+        for si in range(half, num_seeds):
+            q_batch[si] = q_home + 0.3 * torch.randn(nj, device=device)
+        q_batch = torch.clamp(q_batch, lower, upper)
+    else:
+        q_batch = lower + (upper - lower) * torch.rand(num_seeds, nj, device=device)
+        q_batch[0] = current_joints.clone()
     q_batch = q_batch.clone().detach().requires_grad_(True)
 
     opt = torch.optim.Adam([q_batch], lr=0.02)
@@ -379,17 +396,22 @@ def _ik_batch_adam(
         fk = ik_chain.forward_kinematics(q_c)
         fk_pos = fk.get_matrix()[:, :3, 3]
         pos_loss = ((fk_pos - target_pos_b) ** 2).sum(dim=1)
-        loss = pos_loss.sum()
 
-        if rot_weight > 0 and target_rot is not None and it >= max_iters // 2:
+        if rot_weight > 0 and target_rot is not None:
             fk_rot = fk.get_matrix()[:, :3, :3]
             eye = torch.eye(3, device=device).unsqueeze(0)
             rot_diff = eye - torch.bmm(
                 fk_rot.transpose(1, 2),
                 target_rot.unsqueeze(0).expand(num_seeds, -1, -1),
             )
-            ramp = min(1.0, (it - max_iters // 2) / (max_iters // 4))
-            loss = loss + rot_weight * ramp * (rot_diff**2).sum()
+            rot_loss = (rot_diff**2).sum()
+            # Two-phase: first half emphasizes rotation, second half balances both
+            if it < max_iters // 3:
+                loss = pos_loss.sum() + rot_weight * 5.0 * rot_loss
+            else:
+                loss = pos_loss.sum() + rot_weight * rot_loss
+        else:
+            loss = pos_loss.sum()
 
         loss.backward()
         opt.step()
@@ -399,12 +421,25 @@ def _ik_batch_adam(
     with torch.no_grad():
         q_c = torch.clamp(q_batch, lower, upper)
         fk = ik_chain.forward_kinematics(q_c)
-        fk_pos = fk.get_matrix()[:, :3, 3]
+        fk_mat = fk.get_matrix()
+        fk_pos = fk_mat[:, :3, 3]
         pos_errs = (fk_pos - target_pos_b).norm(dim=1)
-        # Among seeds with similar accuracy (within 5mm of best),
-        # prefer the one closest to current_joints to avoid unnecessary rotation.
-        best_err = pos_errs.min()
-        good_mask = pos_errs < best_err + 0.005
+        # Compute rotation error if target_rot is given
+        if target_rot is not None and rot_weight > 0:
+            fk_rot = fk_mat[:, :3, :3]
+            eye = torch.eye(3, device=device).unsqueeze(0)
+            rot_diff = eye - torch.bmm(
+                fk_rot.transpose(1, 2),
+                target_rot.unsqueeze(0).expand(num_seeds, -1, -1),
+            )
+            rot_errs = (rot_diff**2).sum(dim=(1, 2)).sqrt()
+            # Combined score: position + weighted rotation
+            combined = pos_errs + 0.1 * rot_errs
+            best_combined = combined.min()
+            good_mask = combined < best_combined + 0.01
+        else:
+            best_err = pos_errs.min()
+            good_mask = pos_errs < best_err + 0.005
         joint_dists = (q_c - current_joints.unsqueeze(0)).norm(dim=1)
         joint_dists[~good_mask] = float("inf")
         best_idx = int(joint_dists.argmin())
@@ -435,8 +470,8 @@ def solve_ik(
     t_ik_start = time.perf_counter()
     target_xyz = target_xyzrpy[:3]
 
-    # Try pinocchio first (position-only, ~0.1ms)
-    if pin_ik is not None:
+    # Try pinocchio first (position-only, ~0.1ms) — skip if orientation matters
+    if pin_ik is not None and position_only:
         q_init = current_joints.cpu().numpy() if torch.is_tensor(current_joints) else current_joints
         q_np, err = pin_ik.solve(np.array(target_xyz, dtype=np.float64), q_init=q_init)
         if err <= pos_threshold:
@@ -461,10 +496,34 @@ def solve_ik(
     if not position_only:
         q, err = _ik_batch_adam(
             ik_chain, target_pos, target_rot, current_joints,
-            lower, upper, device, num_seeds, max_iters, rot_weight=0.1,
+            lower, upper, device, num_seeds, max_iters, rot_weight=20.0,
         )
         if err <= pos_threshold:
+            # Verify full rotation matches (not just position)
+            with torch.no_grad():
+                fk_mat = ik_chain.forward_kinematics(q.unsqueeze(0)).get_matrix()[0]
+                rot_err_mat = torch.eye(3, device=device) - fk_mat[:3,:3].T @ target_rot
+                rot_frob = float((rot_err_mat ** 2).sum().sqrt())
+            if rot_frob > 1.0:
+                # Rotation mismatch (wrist flip) - retry with very high rot_weight
+                q2, err2 = _ik_batch_adam(
+                    ik_chain, target_pos, target_rot, current_joints,
+                    lower, upper, device, num_seeds=32, max_iters=2000, rot_weight=100.0,
+                )
+                if err2 <= pos_threshold * 3:
+                    fk2 = ik_chain.forward_kinematics(q2.unsqueeze(0)).get_matrix()[0]
+                    rot_frob2 = float((torch.eye(3, device=device) - fk2[:3,:3].T @ target_rot).pow(2).sum().sqrt())
+                    if rot_frob2 < rot_frob:
+                        return q2
             return q
+        # Retry with more seeds and relaxed threshold
+        q2, err2 = _ik_batch_adam(
+            ik_chain, target_pos, target_rot, current_joints,
+            lower, upper, device, num_seeds=16, max_iters=1000, rot_weight=20.0,
+        )
+        if err2 <= pos_threshold * 2:
+            print(f"[IK] Orientation IK: relaxed pass (err={err2*1000:.1f}mm, 16 seeds)")
+            return q2
 
     q, err = _ik_batch_adam(
         ik_chain, target_pos, None, current_joints,
@@ -731,7 +790,7 @@ def plan_grasp_from_pixels(
 
     # Per-arm calibration offset (metres)
     # URDF frame: X=forward, Y=left/right, Z=up
-    cal_offset = np.array([0.03, -0.03, 0.0, 0.0, 0.0, 0.0])
+    cal_offset = np.array([0.03, -0.05, 0.0, 0.0, 0.0, 0.0])
     grasp_xyzrpy = grasp_xyzrpy + cal_offset
     pregrasp_xyzrpy = pregrasp_xyzrpy + cal_offset
 
@@ -773,12 +832,12 @@ def plan_grasp_from_pixels(
             preplace_xyzrpy = preplace_xyzrpy + cal_offset
             q_preplace = solve_ik(
                 ik_chain, preplace_xyzrpy, q_grasp, joint_limits, device,
-                position_only=True, pin_ik=pin_ik, num_seeds=NUM_SEEDS,
+                num_seeds=NUM_SEEDS,
             )
             if q_preplace is not None:
                 q_place = solve_ik(
                     ik_chain, place_xyzrpy, q_preplace, joint_limits, device,
-                    position_only=True, pin_ik=pin_ik, num_seeds=NUM_SEEDS,
+                    num_seeds=NUM_SEEDS,
                 )
             if q_place is None:
                 print("[motion-planner] grasp: Place IK failed, rejecting")
@@ -1087,7 +1146,7 @@ def _build_pick_place_trajectory(
 
     if q_place is not None:
         # Phase 3: grasp -> pre-place (direct transit via staging)
-        seg3 = _cartesian_segment("Phase 3: grasp -> pre-place", q_prev, q_preplace, staging=True)
+        seg3 = _cartesian_segment("Phase 3: grasp -> pre-place", q_prev, q_preplace, safe_z=True)
         q_prev = _append(seg3)
     else:
         # Grasp-only: lift back to pre-grasp
@@ -1096,8 +1155,42 @@ def _build_pick_place_trajectory(
 
     if q_place is not None:
 
+        # Phase 3b: rotate at pre-place to match grasp orientation
+        if pin_ik is None:
+            print("[motion-planner] Skipping pre-place rotation (no pin_ik)")
+        if pin_ik is not None:
+            p_preplace = _fk_pos(q_prev)
+            q_full_grasp = pin.neutral(pin_ik.model)
+            q_grasp_np = q_grasp.cpu().numpy()
+            for i, ji in enumerate(pin_ik.joint_indices):
+                q_full_grasp[ji] = float(q_grasp_np[i])
+            pin.forwardKinematics(pin_ik.model, pin_ik.data, q_full_grasp)
+            pin.updateFramePlacements(pin_ik.model, pin_ik.data)
+            grasp_rot_place = pin_ik.data.oMf[pin_ik.frame_id].rotation.copy()
+
+            q_preplace_rot_np, rot_err = pin_ik.solve(
+                p_preplace, q_init=q_prev.cpu().numpy(),
+                target_rot=grasp_rot_place, rot_weight=0.5,
+            )
+            print(f"[motion-planner] Pre-place rotation IK: err={rot_err:.4f} (threshold=0.05)")
+            if rot_err < 0.05:
+                q_preplace_rotated = torch.tensor(q_preplace_rot_np, dtype=torch.float32, device=device)
+                seg3b = _cartesian_segment("Phase 3b: rotate at pre-place", q_prev, q_preplace_rotated, target_rot=grasp_rot_place)
+                q_prev = _append(seg3b)
+            else:
+                print(f"[motion-planner] Skipping pre-place rotation (err too high)")
+
+        # Recompute q_place seeded from current q_prev (which has correct orientation after 3b)
+        if place_xyzrpy is not None:
+            q_place_new = solve_ik(
+                ik_chain, place_xyzrpy, q_prev, joint_limits, device,
+                num_seeds=NUM_SEEDS,
+            )
+            if q_place_new is not None:
+                q_place = q_place_new
+
         # Phase 4: pre-place → place (descent)
-        seg4 = _cartesian_segment("Phase 4: pre-place -> place", q_prev, q_place)
+        seg4 = _cartesian_segment("Phase 4: pre-place -> place", q_prev, q_place, target_rot=grasp_rot_place if pin_ik is not None else None)
         q_prev = _append(seg4)
 
         # Dwell at place (hold for gripper open)
@@ -1284,7 +1377,7 @@ def _gripper_actions_to_array(gripper_actions, num_waypoints, ramp_steps=30):
     return arr
 
 
-def _set_playback(state, traj_np, traj_meta, node=None):
+def _set_playback(state, traj_np, traj_meta, node=None, pc_tensor=None):
     """Store a newly planned trajectory for playback and optionally export.
 
     If *node* is provided and playback mode is not "confirm", sends the
@@ -1326,9 +1419,20 @@ def _set_playback(state, traj_np, traj_meta, node=None):
     )
     state["trajectory_doc"] = doc
 
-    if EXPORT_PATH:
-        with open(EXPORT_PATH, "w") as f:
+    export_path = EXPORT_PATH
+    if not export_path and EXPORT_DIR:
+        os.makedirs(EXPORT_DIR, exist_ok=True)
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        arm_name = traj_meta.get("arm", "unknown")
+        export_path = os.path.join(EXPORT_DIR, f"{ts}_{arm_name}_trajectory.json")
+    if export_path:
+        with open(export_path, "w") as f:
             json.dump(doc, f, indent=2)
+        # Save point cloud for offline collision analysis
+        if pc_tensor is not None:
+            pc_path = export_path.replace('_trajectory.json', '_pointcloud.npy')
+            np.save(pc_path, pc_tensor.cpu().numpy() if hasattr(pc_tensor, 'cpu') else pc_tensor)
+            print(f'[motion-planner] Saved point cloud ({len(pc_tensor)} pts) -> {pc_path}')
         print(f"[motion-planner] Exported trajectory → {EXPORT_PATH}")
 
     # Send trajectory JSON for external playback (non-confirm mode)
@@ -1405,7 +1509,7 @@ def main():
     print(
         f"[motion-planner] Ready ({', '.join(arms.keys())} arm(s)), "
         f"playback={PLAYBACK_MODE}, "
-        f"export={'on → ' + EXPORT_PATH if EXPORT_PATH else 'off'}"
+        f"export={'on → ' + (EXPORT_PATH or EXPORT_DIR) if (EXPORT_PATH or EXPORT_DIR) else 'off'}"
     )
 
     for event in node:
@@ -1533,12 +1637,13 @@ def main():
                 encoding = metadata.get("encoding", "jointstate")
                 target_data = event["value"].to_numpy().astype(np.float32)
 
-                # Determine target Y for automatic arm selection
-                target_y = None
+                # Determine target XY for automatic arm selection
+                target_x, target_y = None, None
                 if encoding in ("xyzrpy", "xyzquat"):
+                    target_x = float(target_data[0])
                     target_y = float(target_data[1])
                 elif encoding == "jaw_pixels":
-                    target_y = _estimate_target_y(
+                    result = _estimate_target_y(
                         target_data[0],
                         target_data[1],
                         target_data[2],
@@ -1549,8 +1654,10 @@ def main():
                         cam_t,
                         cam_rot,
                     )
+                    if result is not None:
+                        target_x, target_y = result
 
-                arm_name = select_arm(metadata, target_y)
+                arm_name = select_arm(metadata, target_y, target_x)
                 arm = arms.get(arm_name)
                 if arm is None:
                     print(
@@ -1687,7 +1794,8 @@ def main():
                     print(f"[motion-planner] Unknown encoding: {encoding}")
 
                 if result is not None:
-                    _set_playback(playback, result[0], result[1], node=node)
+                    _set_playback(playback, result[0], result[1], node=node, pc_tensor=pc_tensor)
+
                     traj_meta = result[1]
                     node.send_output("trajectory_status", pa.array([json.dumps({
                         "status": "ready",
@@ -1754,19 +1862,13 @@ def main():
                         f"[motion-planner] grasp_result: place=({place_u:.0f},{place_v:.0f})"
                     )
 
-                # Arm selection from metadata or deprojected Y
-                target_y = _estimate_target_y(
-                    u1,
-                    v1,
-                    u2,
-                    v2,
-                    latest_depth,
-                    latest_intrinsics,
-                    latest_image_size,
-                    cam_t,
-                    cam_rot,
-                )
-                preferred_arm = select_arm(metadata, target_y)
+                # Arm selection: left side of image = left arm, right = right arm
+                mid_u = (u1 + u2) / 2
+                w, _ = latest_image_size
+                preferred_arm = metadata.get("arm", "")
+                if preferred_arm not in ("left", "right"):
+                    preferred_arm = "left" if mid_u < w / 2 else "right"
+                print(f"[motion-planner] Arm selection: pixel u={mid_u:.0f}/{w}, choosing {preferred_arm}")
                 # Try preferred arm first, then the other
                 arm_order = [preferred_arm]
                 other_arm = "right" if preferred_arm == "left" else "left"
@@ -1826,7 +1928,8 @@ def main():
                     print(f"[motion-planner] {arm_name} arm failed: {fail_reason}")
 
                 if result is not None:
-                    _set_playback(playback, result[0], result[1], node=node)
+                    _set_playback(playback, result[0], result[1], node=node, pc_tensor=pc_tensor)
+
                     traj_meta = result[1]
                     node.send_output("trajectory_status", pa.array([json.dumps({
                         "status": "ready",

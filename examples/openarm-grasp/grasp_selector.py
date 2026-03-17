@@ -1034,11 +1034,11 @@ for event in node:
                     continue
 
                 ys, xs = np.where(mask > 0)
-                # Use bounding box center (more resilient than centroid for irregular shapes)
-                place_cx = float((xs.min() + xs.max()) / 2.0)
-                place_cy = float((ys.min() + ys.max()) / 2.0)
+                # Use mask centroid (mean of all mask pixels)
+                place_cx = float(np.mean(xs))
+                place_cy = float(np.mean(ys))
                 place_center = (place_cx, place_cy)
-                print(f"  [Place] Container bbox center from mask: ({place_cx:.0f}, {place_cy:.0f})"
+                print(f"  [Place] Container centroid from mask: ({place_cx:.0f}, {place_cy:.0f})"
                       f"  (bbox: x=[{xs.min()},{xs.max()}] y=[{ys.min()},{ys.max()}])")
 
                 # Save place mask debug image
