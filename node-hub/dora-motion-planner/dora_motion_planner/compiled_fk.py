@@ -40,7 +40,7 @@ _RAW_OFFSETS = [
     # Frame 4: L_J2 revolute (offset includes Ry(-90°) style transform)
     [[1., 0., 0., -0.0301], [0., 0., 1., 0.], [0., -1., 0., 0.06], [0., 0., 0., 1.]],
     # Frame 5: L_J3 revolute
-    [[1., 0., 0., 0.0301], [0., 1., 0., 0.], [0., 0., 1., 0.06625], [0., 0., 0., 1.]],
+    [[1., 0., 0., 0.0301], [0., 1., 0., 0.], [0., 0., 1., 0.11625], [0., 0., 0., 1.]],
     # Frame 6: L_J4 revolute
     [[1., 0., 0., 0.], [0., 1., 0., 0.0315], [0., 0., 1., 0.15375], [0., 0., 0., 1.]],
     # Frame 7: L_J5 revolute
@@ -268,6 +268,7 @@ class CompiledFKAdapter:
     def __init__(self, compiled_fk: CompiledFK):
         self._fk = compiled_fk
         self._link_names = LINK_NAMES
+        self.device = compiled_fk.device
 
     def forward_kinematics(
         self, q: torch.Tensor, end_only: bool = True

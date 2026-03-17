@@ -44,6 +44,36 @@ dora stop <dataflow-id>
 dora destroy
 ```
 
+### Stop / sync / restart workflow (baguette)
+
+The dora coordinator runs inside a **tmux session** named `dora` on baguette. All dora commands must be sent through tmux since the coordinator socket is only accessible from that session's environment.
+
+To redeploy code changes to a running dataflow on baguette:
+
+```bash
+# 1. Find the running dataflow name (via tmux)
+ssh baguette@172.18.128.205 "tmux send-keys -t dora 'dora list' Enter" && sleep 2 && \
+ssh baguette@172.18.128.205 "tmux capture-pane -t dora -p | grep -E 'Running|Stopped'"
+
+# 2. Stop it (via tmux, use the name from step 1)
+ssh baguette@172.18.128.205 "tmux send-keys -t dora 'dora stop --name <name>' Enter"
+# Wait for stop to complete (check tmux output)
+sleep 5 && ssh baguette@172.18.128.205 "tmux capture-pane -t dora -p | tail -5"
+
+# 3. Sync code
+rsync -az --exclude='.git' --exclude='target' --exclude='__pycache__' --exclude='.xoq_fake_can_server_key' ./ baguette@172.18.128.205:~/dora-hub/
+
+# 4. Start (via tmux)
+ssh baguette@172.18.128.205 "tmux send-keys -t dora 'cd ~/dora-hub/examples/openarm-grasp && dora start pick-and-place-chat.yml' Enter"
+```
+
+To check logs or output, capture the tmux pane:
+```bash
+ssh baguette@172.18.128.205 "tmux capture-pane -t dora -p -S -50"  # last 50 lines
+```
+
+If `dora stop` times out, send `dora destroy` via tmux, then `dora up` to restart the coordinator.
+
 ### Qwen3.5-35B-A3B Model
 
 - Model path (champagne): `/home/champagne/models/qwen3.5-35b-a3b/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf`

@@ -180,16 +180,22 @@ def main():
                 img = frames[image_id]
                 img_w, img_h = img.size
 
-                print(f"[dora-sam3] Point prompt: {len(points)} points on {image_id}")
+                # Optional text hint from metadata to guide SAM3 segmentation
+                text_hint = event["metadata"].get("text", "")
+                print(f"[dora-sam3] Point prompt: {len(points)} points on {image_id}" +
+                      (f" text='{text_hint}'" if text_hint else ""))
                 with torch.inference_mode():
                     processor.reset_all_prompts(state)
+                    # Set text prompt if provided — gives SAM3 semantic context
+                    if text_hint:
+                        state = processor.set_text_prompt(prompt=text_hint, state=state)
                     # Add each point as a positive box (small box around point)
                     for px, py in points:
                         # Normalize to [0,1] and create small box
                         cx = float(px) / img_w
                         cy = float(py) / img_h
-                        bw = 0.01  # tiny box
-                        bh = 0.01
+                        bw = 0.02  # small box around point
+                        bh = 0.02
                         state = processor.add_geometric_prompt(
                             box=[cx, cy, bw, bh], label=True, state=state
                         )

@@ -95,6 +95,7 @@ def grasp_pose_from_jaw_pixels(
     approach_margin: float = 0.03,
     jaw_contact_depth: float = 0.02,
     approach_angle_deg: float = 0.0,
+    mask_bbox: tuple[float, float, float, float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Compute a grasp pose from two jaw pixel positions.
 
@@ -153,32 +154,60 @@ def grasp_pose_from_jaw_pixels(
     p2_rob = R_cam @ p2_cam + cam_translation
     print(f"[grasp] robot-frame: p1={np.round(p1_rob, 4)} p2={np.round(p2_rob, 4)}")
 
-    # Scan all pixels along the jaw line to find the object's highest point.
-    # This is more robust than just using the two jaw endpoints, which may
-    # land on the table surface or a noisy depth pixel.
-    n_samples = max(20, int(np.hypot(u2 - u1, v2 - v1)))
-    us = np.linspace(u1, u2, n_samples)
-    vs = np.linspace(v1, v2, n_samples)
+    # Find the object's highest point by scanning depth pixels.
+    # If a mask bounding box is provided, scan all pixels in it (most robust).
+    # Otherwise, fall back to scanning along the jaw line.
     depth_2d = depth_map.reshape(height, width)
     best_z_robot = -np.inf
-    for u_s, v_s in zip(us, vs):
-        ui, vi = int(round(u_s)), int(round(v_s))
-        if 0 <= vi < height and 0 <= ui < width:
-            d_mm = float(depth_2d[vi, ui])
-            if 100 < d_mm < 5000:
-                z_m = d_mm * 0.001
-                pt_cam = np.array([
-                    (u_s - cx) * z_m / fx,
-                    (v_s - cy) * z_m / fy,
-                    z_m,
-                ], dtype=np.float32)
-                pt_rob = R_cam @ pt_cam + cam_translation
-                if pt_rob[2] > best_z_robot:
-                    best_z_robot = pt_rob[2]
+    n_scanned = 0
 
-    # object_top_z = highest point along jaw line in robot frame
+    if mask_bbox is not None:
+        # Scan all pixels within the mask bounding box
+        x_min = max(0, int(mask_bbox[0]))
+        y_min = max(0, int(mask_bbox[1]))
+        x_max = min(width - 1, int(mask_bbox[2]))
+        y_max = min(height - 1, int(mask_bbox[3]))
+        # Vectorized: extract depth block, deproject, transform
+        ys_grid, xs_grid = np.mgrid[y_min:y_max+1, x_min:x_max+1]
+        d_block = depth_2d[y_min:y_max+1, x_min:x_max+1].astype(np.float32)
+        valid = (d_block > 100) & (d_block < 5000)
+        if np.any(valid):
+            d_valid = d_block[valid] * 0.001  # mm to m
+            xs_valid = xs_grid[valid].astype(np.float32)
+            ys_valid = ys_grid[valid].astype(np.float32)
+            pts_cam = np.stack([
+                (xs_valid - cx) * d_valid / fx,
+                (ys_valid - cy) * d_valid / fy,
+                d_valid,
+            ], axis=1)  # (N, 3)
+            pts_rob = (R_cam @ pts_cam.T).T + cam_translation  # (N, 3)
+            best_z_robot = float(pts_rob[:, 2].max())
+            n_scanned = int(np.count_nonzero(valid))
+    else:
+        # Fallback: scan along the jaw line
+        n_samples = max(20, int(np.hypot(u2 - u1, v2 - v1)))
+        us = np.linspace(u1, u2, n_samples)
+        vs = np.linspace(v1, v2, n_samples)
+        for u_s, v_s in zip(us, vs):
+            ui, vi = int(round(u_s)), int(round(v_s))
+            if 0 <= vi < height and 0 <= ui < width:
+                d_mm = float(depth_2d[vi, ui])
+                if 100 < d_mm < 5000:
+                    z_m = d_mm * 0.001
+                    pt_cam = np.array([
+                        (u_s - cx) * z_m / fx,
+                        (v_s - cy) * z_m / fy,
+                        z_m,
+                    ], dtype=np.float32)
+                    pt_rob = R_cam @ pt_cam + cam_translation
+                    if pt_rob[2] > best_z_robot:
+                        best_z_robot = pt_rob[2]
+                    n_scanned += 1
+
+    # object_top_z = highest point in scanned region in robot frame
     object_top_z = best_z_robot if best_z_robot > -np.inf else max(p1_rob[2], p2_rob[2])
-    print(f"[grasp] object top z={object_top_z:.4f}m (scanned {n_samples} pixels between jaws)")
+    scan_src = "mask bbox" if mask_bbox is not None else "jaw line"
+    print(f"[grasp] object top z={object_top_z:.4f}m (scanned {n_scanned} pixels from {scan_src})")
 
     # Grasp center = deproject the center pixel (midpoint of jaw pixels in
     # image space).  This is more robust than averaging the 3D jaw endpoints,
@@ -194,8 +223,9 @@ def grasp_pose_from_jaw_pixels(
     )
     if p_center_cam is not None:
         center = R_cam @ p_center_cam + cam_translation
+        center_scene = np.array([center[0], center[2], -center[1]])
         print(f"[grasp] center from pixel ({u_center:.0f},{v_center:.0f}): "
-              f"{np.round(center, 4)}")
+              f"robot={np.round(center, 4)}, scene(Y-up)={np.round(center_scene, 4)}")
     else:
         center = (p1_rob + p2_rob) / 2.0
         print(f"[grasp] center from jaw midpoint (fallback): "
@@ -220,12 +250,10 @@ def grasp_pose_from_jaw_pixels(
     # object.  horiz points from the arm base toward the object in XY.
     # 0° = straight down, 90° = fully horizontal facing the object.
     if approach_angle_deg > 0.1:
-        horiz = np.array([center[0], center[1], 0.0])
-        horiz_norm = np.linalg.norm(horiz)
-        if horiz_norm > 1e-6:
-            horiz = horiz / horiz_norm
-        else:
-            horiz = np.array([1.0, 0.0, 0.0])
+        # Fixed approach heading: -135° from X axis = (-1, -1) direction in XY
+        approach_heading_deg = -135.0
+        heading_rad = np.radians(approach_heading_deg)
+        horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
         angle_rad = np.radians(approach_angle_deg)
         approach = np.sin(angle_rad) * horiz + np.cos(angle_rad) * np.array([0.0, 0.0, -1.0])
         approach = approach / np.linalg.norm(approach)
@@ -270,15 +298,15 @@ def grasp_pose_from_jaw_pixels(
     rot_matrix = np.stack([x_ee, y_ee, z_ee], axis=1)  # (3, 3) columns are axes
     rpy = Rotation.from_matrix(rot_matrix).as_euler("XYZ")
 
-    # Shift TCP along approach so jaw contact zone (not fingertips) aligns
-    # with the object center.  Only shift along Z so the gripper stays
-    # centered over the pixel in XY — the angled approach means a full 3D
-    # shift would pull the gripper sideways.
+    # Shift TCP along approach direction so the jaw contact zone (not
+    # fingertips) aligns with the object center.  Full 3D shift: the
+    # angled approach means the TCP must be offset in XY too.
     if jaw_contact_depth > 0:
-        z_shift = approach[2] * jaw_contact_depth  # Z component only
-        center[2] += z_shift
+        tcp_offset = jaw_contact_depth * approach  # full XYZ shift
+        center += tcp_offset
         print(f"[grasp] jaw_contact_depth={jaw_contact_depth*1000:.0f}mm, "
-              f"Z shift={z_shift*1000:.1f}mm, TCP at {np.round(center, 4)}")
+              f"TCP offset=[{tcp_offset[0]*1000:.1f},{tcp_offset[1]*1000:.1f},{tcp_offset[2]*1000:.1f}]mm, "
+              f"TCP at {np.round(center, 4)}")
 
     grasp_xyzrpy = np.concatenate([center, rpy]).astype(np.float32)
 
@@ -343,14 +371,23 @@ def place_pose_from_pixel(
 
     R_cam = cam_rotation.as_matrix()
     pt_rob = R_cam @ pt_cam + cam_translation
-    print(f"[place] pixel=({u:.0f},{v:.0f}) -> robot={np.round(pt_rob, 4)}")
+    # Inverse: robot → scene (for viewer comparison) and robot → pixel (round-trip check)
+    # Scene = Rx(-90°) @ URDF: scene.x=urdf.x, scene.y=urdf.z, scene.z=-urdf.y
+    pt_scene = np.array([pt_rob[0], pt_rob[2], -pt_rob[1]])
+    # Round-trip: robot → camera → pixel
+    R_inv = R_cam.T
+    pt_cam_rt = R_inv @ (pt_rob - cam_translation)
+    u_rt = pt_cam_rt[0] * fx / pt_cam_rt[2] + cx
+    v_rt = pt_cam_rt[1] * fy / pt_cam_rt[2] + cy
+    print(f"[place] pixel=({u:.0f},{v:.0f}) -> cam={np.round(pt_cam, 4)} -> robot={np.round(pt_rob, 4)}")
+    print(f"[place] scene(Y-up)={np.round(pt_scene, 4)}, round-trip pixel=({u_rt:.1f},{v_rt:.1f})")
 
     # Offset TCP so the jaw center (not fingertips) aligns with the target.
     # The jaw center is jaw_contact_depth behind the TCP along the approach
     # direction (Z_ee).  Move the TCP forward along Z_ee to compensate.
     z_ee = Rotation.from_euler("XYZ", grasp_rpy).as_matrix()[:, 2]
     tcp_offset = jaw_contact_depth * z_ee  # XY + Z offset
-    place_xy = pt_rob[:2] + tcp_offset[:2]  # apply XY correction only
+    place_xy = pt_rob[:2]  # no jaw offset — TCP goes directly to target
     print(f"[place] jaw offset: {np.round(tcp_offset[:2]*1000, 1)}mm "
           f"(jaw_contact_depth={jaw_contact_depth*1000:.0f}mm)")
 

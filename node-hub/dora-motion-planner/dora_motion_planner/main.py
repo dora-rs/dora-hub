@@ -86,7 +86,6 @@ from .trajectory_json import (
     GRIPPER_OPEN_RAD,
     GRIPPER_CLOSED_RAD,
 )
-from .compiled_fk import CompiledFK, CompiledFKAdapter, LINK_NAMES as _LEFT_FK_LINKS
 from .trajectory_optimizer import TrajectoryOptimizer
 
 # Configuration from env vars
@@ -108,9 +107,9 @@ DEVICE = os.getenv("DEVICE", "cuda")
 GRASP_DEPTH_OFFSET = float(os.getenv("GRASP_DEPTH_OFFSET", "-0.01"))
 PLACE_DEPTH_OFFSET = float(os.getenv("PLACE_DEPTH_OFFSET", "0.05"))
 FLOOR_HEIGHT = float(os.getenv("FLOOR_HEIGHT", "0.005"))
-APPROACH_MARGIN = float(os.getenv("APPROACH_MARGIN", "0.03"))
-JAW_CONTACT_DEPTH = float(os.getenv("JAW_CONTACT_DEPTH", "0.02"))
-APPROACH_ANGLE_DEG = float(os.getenv("APPROACH_ANGLE_DEG", "45.0"))
+APPROACH_MARGIN = float(os.getenv("APPROACH_MARGIN", "0.10"))
+JAW_CONTACT_DEPTH = float(os.getenv("JAW_CONTACT_DEPTH", "0.0"))
+APPROACH_ANGLE_DEG = float(os.getenv("APPROACH_ANGLE_DEG", "70.0"))
 IMAGE_WIDTH = int(os.getenv("IMAGE_WIDTH", "640"))
 IMAGE_HEIGHT = int(os.getenv("IMAGE_HEIGHT", "480"))
 MAX_JOINT_STEP = float(os.getenv("MAX_JOINT_STEP", "0.1"))
@@ -135,7 +134,7 @@ def compute_gripper_close_rad(object_width_m):
     Starts from fully closed and opens just enough to leave a gap
     slightly smaller than the object (5mm squeeze) for a firm hold.
     """
-    gap_mm = max(0, object_width_m * 1000 - 5)  # 5mm squeeze margin
+    gap_mm = max(0, object_width_m * 1000 - 20)  # 20mm squeeze margin
     # Fraction of travel to open from closed: 0 = fully closed, 1 = fully open
     open_frac = min(1.0, gap_mm / GRIPPER_TRAVEL_MM)
     return GRIPPER_CLOSED_RAD + open_frac * (GRIPPER_OPEN_RAD - GRIPPER_CLOSED_RAD)
@@ -262,24 +261,17 @@ def _init_arm(name, urdf_path, ee_link, capsules, device, boxes=None):
     joint_limits = chain.get_joint_limits()
     num_joints = len(chain.get_joint_parameter_names(exclude_fixed=True))
 
-    # Use compiled FK for the left arm — pre-baked offsets with pure
-    # tensor ops, ~8% faster on CPU and much faster on CUDA.
-    if ee_link == "openarm_left_hand_tcp":
-        opt_chain = CompiledFKAdapter(CompiledFK(device))
-    else:
-        opt_chain = chain
+    ik_chain = chain.to(dtype=torch.float32, device=str(device))
 
     capsule_model = CapsuleCollisionModel(capsules, device, boxes=boxes)
     optimizer = TrajectoryOptimizer(
-        chain=opt_chain,
+        chain=ik_chain,
         capsule_model=capsule_model,
         joint_limits=joint_limits,
         device=device,
         collision_alpha=50.0,
         max_joint_step=MAX_JOINT_STEP,
     )
-    ik_chain = (opt_chain if ee_link == "openarm_left_hand_tcp"
-                else chain.to(dtype=torch.float32, device=str(device)))
     current_joints = torch.zeros(num_joints, dtype=torch.float32, device=device)
 
     with torch.no_grad():
@@ -370,6 +362,10 @@ def _ik_batch_adam(
     Returns (best_q, best_pos_err) or (None, err) if no seed converges.
     """
     nj = len(lower)
+    if torch.is_tensor(current_joints):
+        current_joints = current_joints.to(device)
+    else:
+        current_joints = torch.tensor(current_joints, dtype=torch.float32, device=device)
     q_batch = lower + (upper - lower) * torch.rand(num_seeds, nj, device=device)
     q_batch[0] = current_joints.clone()
     q_batch = q_batch.clone().detach().requires_grad_(True)
@@ -423,7 +419,7 @@ def solve_ik(
     device,
     num_seeds=4,
     max_iters=500,
-    pos_threshold=0.02,
+    pos_threshold=0.005,
     position_only=False,
     pin_ik=None,
 ):
@@ -444,7 +440,14 @@ def solve_ik(
         q_init = current_joints.cpu().numpy() if torch.is_tensor(current_joints) else current_joints
         q_np, err = pin_ik.solve(np.array(target_xyz, dtype=np.float64), q_init=q_init)
         if err <= pos_threshold:
-            return torch.tensor(q_np, dtype=torch.float32, device=device)
+            q_t = torch.tensor(q_np, dtype=torch.float32, device=device)
+            ee_check = _fk_pos_chain(ik_chain, q_t)
+            cross_err = float(np.linalg.norm(ee_check - target_xyz))
+            if cross_err <= pos_threshold:
+                return q_t
+            else:
+                print(f"[IK] PinIK cross-check failed: pin_err={err*1000:.1f}mm, "
+                      f"pk_err={cross_err*1000:.1f}mm — falling back to Adam")
 
     # Fallback: batched Adam (GPU)
     target_pos = torch.tensor(target_xyz, dtype=torch.float32, device=device)
@@ -726,16 +729,22 @@ def plan_grasp_from_pixels(
 
     grasp_xyzrpy, pregrasp_xyzrpy, object_top_z, object_width = result
 
+    # Per-arm calibration offset (metres)
+    # URDF frame: X=forward, Y=left/right, Z=up
+    cal_offset = np.array([0.03, -0.03, 0.0, 0.0, 0.0, 0.0])
+    grasp_xyzrpy = grasp_xyzrpy + cal_offset
+    pregrasp_xyzrpy = pregrasp_xyzrpy + cal_offset
+
     q_pregrasp = solve_ik(
         ik_chain, pregrasp_xyzrpy, current_joints, joint_limits, device,
-        pin_ik=pin_ik,
+        num_seeds=NUM_SEEDS,
     )
     if q_pregrasp is None:
         print("[motion-planner] grasp: IK failed for pre-grasp, skipping")
         return None, "IK failed for pre-grasp pose (unreachable)"
 
     q_grasp = solve_ik(ik_chain, grasp_xyzrpy, q_pregrasp, joint_limits, device,
-                       pin_ik=pin_ik)
+                       num_seeds=NUM_SEEDS)
     if q_grasp is None:
         print("[motion-planner] grasp: IK failed for grasp, skipping")
         return None, "IK failed for grasp pose (unreachable)"
@@ -760,31 +769,23 @@ def plan_grasp_from_pixels(
         )
         if place_result is not None:
             place_xyzrpy, preplace_xyzrpy = place_result
+            place_xyzrpy = place_xyzrpy + cal_offset
+            preplace_xyzrpy = preplace_xyzrpy + cal_offset
             q_preplace = solve_ik(
                 ik_chain, preplace_xyzrpy, q_grasp, joint_limits, device,
-                pos_threshold=0.05, position_only=True, pin_ik=pin_ik,
+                position_only=True, pin_ik=pin_ik, num_seeds=NUM_SEEDS,
             )
             if q_preplace is not None:
                 q_place = solve_ik(
                     ik_chain, place_xyzrpy, q_preplace, joint_limits, device,
-                    pos_threshold=0.05, position_only=True, pin_ik=pin_ik,
+                    position_only=True, pin_ik=pin_ik, num_seeds=NUM_SEEDS,
                 )
-            if q_place is not None:
-                pass
-            else:
-                print("[motion-planner] WARNING: Place IK failed, falling back to grasp-only")
-                node.send_output("trajectory_status", pa.array([json.dumps({
-                    "status": "phase",
-                    "label": "Place target unreachable, doing grasp-only",
-                    "time": 0,
-                })]))
+            if q_place is None:
+                print("[motion-planner] grasp: Place IK failed, rejecting")
+                return None, "Place target unreachable (IK failed)"
         else:
-            print("[motion-planner] WARNING: Place depth invalid, falling back to grasp-only")
-            node.send_output("trajectory_status", pa.array([json.dumps({
-                "status": "phase",
-                "label": "Place depth invalid, doing grasp-only",
-                "time": 0,
-            })]))
+            print("[motion-planner] grasp: Place depth invalid, rejecting")
+            return None, "Place target has invalid depth"
 
 
     q_start = current_joints.clone()
@@ -831,6 +832,7 @@ def _build_pick_place_trajectory(
     q_home = torch.zeros_like(q_start)
 
     segments = []
+    phase_labels = []  # (start_wp, label) for each segment
     phase_count = [0]
 
     def _fk_pos(q):
@@ -966,13 +968,34 @@ def _build_pick_place_trajectory(
                         target_rot=kp_rot,
                     )
                     max_jump = float(np.max(np.abs(q_np - q_prev_np)))
-                    if err > 0.05 or max_jump > np.pi / 2:
-                        failed += 1
-                        alpha_j = i / (n_keypoints - 1)
-                        q_fallback = q_s.cpu().numpy() * (1 - alpha_j) + q_g.cpu().numpy() * alpha_j
-                        key_qs.append(torch.tensor(q_fallback, dtype=torch.float32, device=device))
-                    else:
+                    # Cross-validate with pytorch-kinematics FK
+                    cross_ok = True
+                    if err <= 0.05 and max_jump <= np.pi / 2:
                         q_t = torch.tensor(q_np, dtype=torch.float32, device=device)
+                        ee_check = _fk_pos(q_t)
+                        cross_err = float(np.linalg.norm(ee_check - target_xyz))
+                        if cross_err > 0.01:
+                            cross_ok = False
+                    else:
+                        cross_ok = False
+                    if not cross_ok:
+                        # Fallback: Adam IK for this keypoint (safe, no table collision)
+                        target_pos = torch.tensor(target_xyz, dtype=torch.float32, device=device)
+                        q_prev_dev = torch.tensor(q_prev_np, dtype=torch.float32, device=device)
+                        q_adam, adam_err = _ik_batch_adam(
+                            ik_chain, target_pos, None, q_prev_dev,
+                            lower, upper, device,
+                            num_seeds=2, max_iters=150, rot_weight=0.0,
+                        )
+                        if adam_err <= 0.01:
+                            key_qs.append(q_adam)
+                            q_prev_np = q_adam.detach().cpu().numpy()
+                        else:
+                            failed += 1
+                            alpha_j = i / (n_keypoints - 1)
+                            q_fallback = q_s.cpu().numpy() * (1 - alpha_j) + q_g.cpu().numpy() * alpha_j
+                            key_qs.append(torch.tensor(q_fallback, dtype=torch.float32, device=device))
+                    else:
                         key_qs.append(q_t)
                         q_prev_np = q_np
                 else:
@@ -1016,6 +1039,7 @@ def _build_pick_place_trajectory(
                 total_wp += seg.shape[0]
             traj = torch.cat(segments_inner, dim=0)
 
+            phase_labels.append((sum(s.shape[0] for s in segments), label, traj.shape[0]))
         return traj
 
     # Helper: append segment, threading actual last waypoint for continuity
@@ -1058,16 +1082,19 @@ def _build_pick_place_trajectory(
     # Dwell at grasp (hold for gripper close)
     grasp_dwell_start = sum(s.shape[0] for s in segments)
     grasp_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
+    phase_labels.append((sum(s.shape[0] for s in segments), "Dwell: grasp (gripper close)", DWELL_STEPS))
     segments.append(grasp_dwell)
 
-    # Phase 3a: grasp → pre-grasp (lift back up to approach height)
-    seg3a = _cartesian_segment("Phase 3a: grasp -> pre-grasp", q_prev, q_pregrasp)
-    q_prev = _append(seg3a)
+    if q_place is not None:
+        # Phase 3: grasp -> pre-place (direct transit via staging)
+        seg3 = _cartesian_segment("Phase 3: grasp -> pre-place", q_prev, q_preplace, staging=True)
+        q_prev = _append(seg3)
+    else:
+        # Grasp-only: lift back to pre-grasp
+        seg3 = _cartesian_segment("Phase 3: grasp -> pre-grasp", q_prev, q_pregrasp, safe_z=True)
+        q_prev = _append(seg3)
 
     if q_place is not None:
-        # Phase 3b: pre-grasp → pre-place (transit at safe height)
-        seg3b = _cartesian_segment("Phase 3b: pre-grasp -> pre-place", q_prev, q_preplace, safe_z=True)
-        q_prev = _append(seg3b)
 
         # Phase 4: pre-place → place (descent)
         seg4 = _cartesian_segment("Phase 4: pre-place -> place", q_prev, q_place)
@@ -1076,6 +1103,7 @@ def _build_pick_place_trajectory(
         # Dwell at place (hold for gripper open)
         place_dwell_start = sum(s.shape[0] for s in segments)
         place_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
+        phase_labels.append((sum(s.shape[0] for s in segments), "Dwell: place (gripper open)", DWELL_STEPS))
         segments.append(place_dwell)
 
     # Phase 5: place → above-home (staging transit)
@@ -1122,6 +1150,8 @@ def _build_pick_place_trajectory(
     t_plan = time.perf_counter() - t0
 
     print(f"[motion-planner] Trajectory: {total_waypoints} wp ({t_plan:.1f}s)")
+    for ps, plbl, pn in phase_labels:
+        print(f"[motion-planner]   wp {ps:4d}-{ps+pn:4d}: {plbl}")
 
     # Post-optimization collision validation
     if capsule_model is not None:
@@ -1154,6 +1184,7 @@ def _build_pick_place_trajectory(
         "grasp_pose": grasp_xyzrpy.tolist(),
         "place_pose": place_xyzrpy.tolist() if place_xyzrpy is not None else None,
         "gripper_actions": json.dumps(gripper_actions),
+        "phases": json.dumps([(s, lbl, n) for s, lbl, n in phase_labels]),
     }
     node.send_output(
         "joint_trajectory",
@@ -1703,11 +1734,10 @@ def main():
                     print(f"[motion-planner] grasp_result: missing p1/p2: {data}")
                     continue
 
-                w, h = latest_image_size
-                u1 = float(p1[0]) * w / 1000.0
-                v1 = float(p1[1]) * h / 1000.0
-                u2 = float(p2[0]) * w / 1000.0
-                v2 = float(p2[1]) * h / 1000.0
+                u1 = float(p1[0])
+                v1 = float(p1[1])
+                u2 = float(p2[0])
+                v2 = float(p2[1])
                 print(
                     f"[motion-planner] grasp_result: jaw1=({u1:.0f},{v1:.0f}) "
                     f"jaw2=({u2:.0f},{v2:.0f})"
@@ -1715,10 +1745,10 @@ def main():
 
                 # Parse optional place target
                 place_uv = None
-                place_data = data.get("place")
+                place_data = data.get("place_px")
                 if place_data and len(place_data) >= 2:
-                    place_u = float(place_data[0]) * w / 1000.0
-                    place_v = float(place_data[1]) * h / 1000.0
+                    place_u = float(place_data[0])
+                    place_v = float(place_data[1])
                     place_uv = (place_u, place_v)
                     print(
                         f"[motion-planner] grasp_result: place=({place_u:.0f},{place_v:.0f})"

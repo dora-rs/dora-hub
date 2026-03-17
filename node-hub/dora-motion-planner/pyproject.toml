@@ -21,3 +21,4 @@ dev = ["pytest >=8.1.1"]
 
 [project.scripts]
 dora-motion-planner = "dora_motion_planner.main:main"
+analyze-trajectory = "dora_motion_planner.analyze_trajectory:main"

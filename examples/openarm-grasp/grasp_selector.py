@@ -83,6 +83,15 @@ PLACE_LOCATE_PROMPT_TEMPLATE = (
     'If it is NOT in the image, output ONLY JSON: {{"cx": -1, "cy": -1}}'
 )
 
+LOCATE_BOTH_PROMPT_TEMPLATE = (
+    "You are a robot vision system. Find the geometric centers of two objects:\n"
+    "1. {pick_name} (the object to pick up)\n"
+    "2. {place_name} (the place target)\n"
+    "Use normalized coordinates from 0 to 1000 where (0,0) is top-left "
+    "and (1000,1000) is bottom-right.\n"
+    'Output ONLY JSON: {{"pick": {{"cx": 500, "cy": 500}}, "place": {{"cx": 500, "cy": 500}}}}'
+)
+
 
 @dataclass
 class GraspCandidate:
@@ -172,6 +181,61 @@ def parse_locate_response(text):
         return cx_px, cy_px
     except (json.JSONDecodeError, KeyError, TypeError, ValueError, IndexError):
         return None
+
+
+def parse_locate_both_response(text):
+    """Parse VLM response with both pick and place coordinates.
+
+    Expected format: {"pick": {"cx": N, "cy": N}, "place": {"cx": N, "cy": N}}
+    Returns (pick_px, place_px) where each is (cx_px, cy_px), or None on failure.
+    place_px may be None if only pick was found.
+    """
+    text = strip_think_tags(text)
+    start = text.find("{")
+    end = text.rfind("}") + 1
+    if start == -1 or end == 0:
+        return None
+    try:
+        data = json.loads(text[start:end])
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    def _to_float(v):
+        """Convert value to float, handling lists like [500]."""
+        if isinstance(v, (list, tuple)):
+            return float(v[0]) if v else None
+        return float(v)
+
+    def _extract(obj):
+        if not isinstance(obj, dict):
+            return None
+        try:
+            if "cx" in obj and "cy" in obj:
+                return _to_float(obj["cx"]), _to_float(obj["cy"])
+            if "x" in obj and "y" in obj:
+                return _to_float(obj["x"]), _to_float(obj["y"])
+            if "center" in obj and isinstance(obj["center"], list) and len(obj["center"]) >= 2:
+                return float(obj["center"][0]), float(obj["center"][1])
+        except (TypeError, ValueError, IndexError):
+            return None
+        return None
+
+    def _to_px(cx_norm, cy_norm):
+        if cx_norm < 0 or cy_norm < 0:
+            return cx_norm, cy_norm
+        cx_px = max(0.0, min(cx_norm * WIDTH / 1000.0, WIDTH - 1))
+        cy_px = max(0.0, min(cy_norm * HEIGHT / 1000.0, HEIGHT - 1))
+        return cx_px, cy_px
+
+    pick_raw = _extract(data.get("pick")) if isinstance(data.get("pick"), dict) else None
+    if pick_raw is None:
+        return None
+    pick_px = _to_px(*pick_raw)
+
+    place_raw = _extract(data.get("place")) if isinstance(data.get("place"), dict) else None
+    place_px = _to_px(*place_raw) if place_raw else None
+
+    return pick_px, place_px
 
 
 def parse_rate_response(text):
@@ -740,20 +804,29 @@ def render_place_target(image_rgb, cx, cy, radius=30):
 
 
 def format_grasp_result(candidate):
-    """Convert candidate to {"p1":[x,y],"p2":[x,y]} in 0-1000 normalized coords."""
-    return {
-        "p1": [int(round(candidate.jaw1_cx * 1000.0 / WIDTH)),
-               int(round(candidate.jaw1_cy * 1000.0 / HEIGHT))],
-        "p2": [int(round(candidate.jaw2_cx * 1000.0 / WIDTH)),
-               int(round(candidate.jaw2_cy * 1000.0 / HEIGHT))],
+    """Convert candidate to {"p1":[x,y],"p2":[x,y]} in raw pixel coords."""
+    result = {
+        "p1": [int(round(candidate.jaw1_cx)),
+               int(round(candidate.jaw1_cy))],
+        "p2": [int(round(candidate.jaw2_cx)),
+               int(round(candidate.jaw2_cy))],
     }
+    if mask_bbox is not None:
+        result["mask_bbox"] = [
+            int(round(mask_bbox[0])),
+            int(round(mask_bbox[1])),
+            int(round(mask_bbox[2])),
+            int(round(mask_bbox[3])),
+        ]
+    return result
 
 
 # --- State machine ---
 STATE_IDLE = "IDLE"
 STATE_LOCATE_PENDING = "LOCATE_PENDING"
 STATE_MASK_PENDING = "MASK_PENDING"       # waiting for SAM2 mask (after VLM locate)
-STATE_SAM3_MASK_PENDING = "SAM3_MASK_PENDING"  # waiting for SAM3 mask (text-prompted)
+STATE_SAM3_VLM_LOCATE = "SAM3_VLM_LOCATE"    # waiting for VLM to locate object for SAM3 point prompt
+STATE_SAM3_MASK_PENDING = "SAM3_MASK_PENDING"  # waiting for SAM3 mask
 STATE_RATING_PENDING = "RATING_PENDING"
 STATE_PLACE_VLM_LOCATE = "PLACE_VLM_LOCATE"      # waiting for VLM to locate container center
 STATE_PLACE_SAM3_PENDING = "PLACE_SAM3_PENDING"  # waiting for SAM3 point-based mask of container
@@ -771,6 +844,9 @@ reasons = []
 # Place detection state
 best_grasp_result = None  # stored grasp result dict while place detection runs
 place_center = None       # (cx_px, cy_px) of the container centroid
+mask_bbox = None          # (x_min, y_min, x_max, y_max) pixel bbox of segmented object
+retries_left = 0          # retry counter for segmentation/locate failures
+MAX_RETRIES = 1           # how many times to retry before giving up
 
 node = Node()
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -792,13 +868,21 @@ def _emit_best_geo(node, img, cands, fc):
 
     if PLACE_CONTAINER:
         best_grasp_result = grasp
-        print(f"\n[Place] Asking VLM to locate '{PLACE_CONTAINER}'...")
-        node.send_output("status", pa.array([f"Locating '{PLACE_CONTAINER}'..."]))
-        prompt = PLACE_LOCATE_PROMPT_TEMPLATE.format(
-            container_name=PLACE_CONTAINER,
-        )
-        send_vlm_request(node, img, prompt)
-        state = STATE_PLACE_VLM_LOCATE
+        if place_center is not None:
+            # Have VLM-estimated place coords — refine with SAM3 point prompt
+            place_cx, place_cy = place_center
+            print(f"[Place] Refining '{PLACE_CONTAINER}' at ({place_cx:.0f},{place_cy:.0f}) with SAM3...")
+            node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
+            node.send_output("sam3_points", pa.array([place_cx, place_cy]),
+                             {"image_id": "image", "text": PLACE_CONTAINER})
+            place_center = None
+            state = STATE_PLACE_SAM3_PENDING
+        else:
+            # No pre-located coords — use SAM3 text prompt directly
+            print(f"\n[Place] Segmenting '{PLACE_CONTAINER}' with SAM3 text prompt...")
+            node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
+            node.send_output("sam3_text", pa.array([PLACE_CONTAINER]), {"image_id": "image"})
+            state = STATE_PLACE_SAM3_PENDING
     else:
         grasp_json = json.dumps(grasp)
         print(f"  Grasp result: {grasp_json}")
@@ -879,23 +963,40 @@ for event in node:
                 pending_trigger = True
                 continue
 
+            retries_left = MAX_RETRIES
+
             if USE_SAM3:
-                # SAM3 mode: skip VLM locate, send text prompt to SAM3 directly
-                print(f"[SAM3] Sending text prompt: '{TARGET_OBJECT}'")
-                node.send_output("status", pa.array([f"Segmenting '{TARGET_OBJECT}'..."]))
-                node.send_output(
-                    "sam3_text",
-                    pa.array([TARGET_OBJECT]),
-                    {"image_id": "image"},
+                # SAM3 mode: ask VLM to locate first, then send point to SAM3
+                img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
+                    (HEIGHT, WIDTH, 3)
                 )
-                state = STATE_SAM3_MASK_PENDING
+                place_center = None
+                locate_center = None
+                if PLACE_CONTAINER:
+                    print(f"[SAM3] Asking VLM to locate '{TARGET_OBJECT}' + '{PLACE_CONTAINER}'...")
+                    node.send_output("status", pa.array([f"Locating '{TARGET_OBJECT}' + '{PLACE_CONTAINER}'..."]))
+                    prompt = LOCATE_BOTH_PROMPT_TEMPLATE.format(
+                        pick_name=TARGET_OBJECT, place_name=PLACE_CONTAINER)
+                else:
+                    print(f"[SAM3] Asking VLM to locate '{TARGET_OBJECT}'...")
+                    node.send_output("status", pa.array([f"Locating '{TARGET_OBJECT}'..."]))
+                    prompt = LOCATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
+                send_vlm_request(node, img, prompt)
+                state = STATE_SAM3_VLM_LOCATE
             else:
                 img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
                     (HEIGHT, WIDTH, 3)
                 )
-                print(f"[Pass 1] Asking VLM to locate {TARGET_OBJECT}...")
-                node.send_output("status", pa.array([f"VLM locating '{TARGET_OBJECT}'..."]))
-                prompt = LOCATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
+                place_center = None
+                if PLACE_CONTAINER:
+                    print(f"[Pass 1] Asking VLM to locate '{TARGET_OBJECT}' + '{PLACE_CONTAINER}'...")
+                    node.send_output("status", pa.array([f"VLM locating '{TARGET_OBJECT}' + '{PLACE_CONTAINER}'..."]))
+                    prompt = LOCATE_BOTH_PROMPT_TEMPLATE.format(
+                        pick_name=TARGET_OBJECT, place_name=PLACE_CONTAINER)
+                else:
+                    print(f"[Pass 1] Asking VLM to locate {TARGET_OBJECT}...")
+                    node.send_output("status", pa.array([f"VLM locating '{TARGET_OBJECT}'..."]))
+                    prompt = LOCATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
                 send_vlm_request(node, img, prompt)
                 state = STATE_LOCATE_PENDING
 
@@ -933,10 +1034,12 @@ for event in node:
                     continue
 
                 ys, xs = np.where(mask > 0)
-                place_cx = float(np.mean(xs))
-                place_cy = float(np.mean(ys))
+                # Use bounding box center (more resilient than centroid for irregular shapes)
+                place_cx = float((xs.min() + xs.max()) / 2.0)
+                place_cy = float((ys.min() + ys.max()) / 2.0)
                 place_center = (place_cx, place_cy)
-                print(f"  [Place] Container centroid from mask: ({place_cx:.0f}, {place_cy:.0f})")
+                print(f"  [Place] Container bbox center from mask: ({place_cx:.0f}, {place_cy:.0f})"
+                      f"  (bbox: x=[{xs.min()},{xs.max()}] y=[{ys.min()},{ys.max()}])")
 
                 # Save place mask debug image
                 mask_path = os.path.join(OUTPUT_DIR, f"critic_place_mask_{frame_count:03d}.png")
@@ -953,9 +1056,9 @@ for event in node:
 
                 # Add place target to grasp result and send
                 grasp = best_grasp_result.copy() if best_grasp_result else {}
-                grasp["place"] = [
-                    int(round(place_cx * 1000.0 / WIDTH)),
-                    int(round(place_cy * 1000.0 / HEIGHT)),
+                grasp["place_px"] = [
+                    round(place_cx, 1),
+                    round(place_cy, 1),
                 ]
                 grasp_json = json.dumps(grasp)
                 print(f"  Grasp result: {grasp_json}")
@@ -980,11 +1083,29 @@ for event in node:
             mask_raw = event["value"].to_numpy(zero_copy_only=False)
             if mask_raw.size == 0 or mask_raw.size < mask_h * mask_w:
                 print(f"  {source_name} returned empty mask for '{TARGET_OBJECT}'")
-                node.send_output("grasp_result", pa.array([json.dumps({
-                    "status": "failed",
-                    "reason": f"Could not segment '{TARGET_OBJECT}'",
-                })]))
-                state = STATE_IDLE
+                if retries_left > 0:
+                    retries_left -= 1
+                    print(f"  Retrying segmentation ({retries_left} retries left)...")
+                    node.send_output("status", pa.array([f"Retrying segmentation..."]))
+                    # Re-trigger: send VLM locate request again
+                    img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
+                        (HEIGHT, WIDTH, 3)
+                    )
+                    place_center = None
+                    locate_center = None
+                    if PLACE_CONTAINER:
+                        prompt = LOCATE_BOTH_PROMPT_TEMPLATE.format(
+                            pick_name=TARGET_OBJECT, place_name=PLACE_CONTAINER)
+                    else:
+                        prompt = LOCATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
+                    send_vlm_request(node, img, prompt)
+                    state = STATE_SAM3_VLM_LOCATE
+                else:
+                    node.send_output("grasp_result", pa.array([json.dumps({
+                        "status": "failed",
+                        "reason": f"Could not segment '{TARGET_OBJECT}'",
+                    })]))
+                    state = STATE_IDLE
                 continue
             mask = (mask_raw.reshape((mask_h, mask_w)) > 0).astype(np.uint8) * 255
             n_mask = np.count_nonzero(mask)
@@ -992,16 +1113,30 @@ for event in node:
             mask_ratio = n_mask / total_px
             print(f"  {source_name} mask received: {n_mask} pixels ({mask_ratio:.1%} of image)")
 
+            # Compute mask bounding box for object-top-Z estimation in motion planner
+            if n_mask > 0:
+                ys_m, xs_m = np.where(mask > 0)
+                mask_bbox = (float(xs_m.min()), float(ys_m.min()),
+                             float(xs_m.max()), float(ys_m.max()))
+                print(f"  Mask bbox: x=[{mask_bbox[0]:.0f},{mask_bbox[2]:.0f}] "
+                      f"y=[{mask_bbox[1]:.0f},{mask_bbox[3]:.0f}]")
+            else:
+                mask_bbox = None
+
             if is_sam3:
-                # SAM3 text-prompted: compute center from mask centroid
-                if n_mask > 0:
-                    ys, xs = np.where(mask > 0)
-                    cx_px = float(np.mean(xs))
-                    cy_px = float(np.mean(ys))
+                if locate_center is not None:
+                    # VLM-located point was used for SAM3 segmentation
+                    print(f"  {source_name} using VLM locate center: ({locate_center[0]:.0f}, {locate_center[1]:.0f})")
                 else:
-                    cx_px, cy_px = WIDTH / 2.0, HEIGHT / 2.0
-                locate_center = (cx_px, cy_px)
-                print(f"  {source_name} mask centroid: ({cx_px:.0f}, {cy_px:.0f})")
+                    # Text-prompt fallback: compute center from mask centroid
+                    if n_mask > 0:
+                        ys, xs = np.where(mask > 0)
+                        cx_px = float(np.mean(xs))
+                        cy_px = float(np.mean(ys))
+                    else:
+                        cx_px, cy_px = WIDTH / 2.0, HEIGHT / 2.0
+                    locate_center = (cx_px, cy_px)
+                    print(f"  {source_name} mask centroid: ({cx_px:.0f}, {cy_px:.0f})")
             else:
                 # SAM2: use VLM-located center
                 # If mask covers >30% of image, SAM2 likely segmented the background
@@ -1051,14 +1186,56 @@ for event in node:
         elif event_id == "vlm_response":
             text = event["value"][0].as_py()
 
-            if state == STATE_LOCATE_PENDING:
-                result = parse_locate_response(text)
-                if result is None:
+            if state == STATE_SAM3_VLM_LOCATE:
+                pick_coords = None
+                if PLACE_CONTAINER:
+                    both = parse_locate_both_response(text)
+                    if both is not None:
+                        pick_px, place_px = both
+                        if pick_px[0] >= 0 and pick_px[1] >= 0:
+                            pick_coords = pick_px
+                        if place_px is not None and place_px[0] >= 0 and place_px[1] >= 0:
+                            place_center = place_px
+                            print(f"[SAM3] Place '{PLACE_CONTAINER}' at ({place_px[0]:.0f}, {place_px[1]:.0f})")
+                if pick_coords is None:
+                    # Try single-object parse as fallback
+                    single = parse_locate_response(text)
+                    if single is not None and single[0] >= 0:
+                        pick_coords = single
+
+                if pick_coords is None:
+                    print(f"[SAM3] VLM locate failed, falling back to text prompt")
+                    node.send_output("sam3_text", pa.array([TARGET_OBJECT]), {"image_id": "image"})
+                    state = STATE_SAM3_MASK_PENDING
+                else:
+                    cx_px, cy_px = pick_coords
+                    locate_center = (cx_px, cy_px)
+                    print(f"[SAM3] VLM located at ({cx_px:.0f}, {cy_px:.0f}), sending point to SAM3")
+                    node.send_output("status", pa.array([f"Segmenting at ({cx_px:.0f},{cy_px:.0f})..."]))
+                    node.send_output("sam3_points", pa.array([cx_px, cy_px]), {"image_id": "image", "text": TARGET_OBJECT})
+                    state = STATE_SAM3_MASK_PENDING
+
+            elif state == STATE_LOCATE_PENDING:
+                pick_coords = None
+                if PLACE_CONTAINER:
+                    both = parse_locate_both_response(text)
+                    if both is not None:
+                        pick_px, place_px = both
+                        if pick_px[0] >= 0 and pick_px[1] >= 0:
+                            pick_coords = pick_px
+                        if place_px is not None and place_px[0] >= 0 and place_px[1] >= 0:
+                            place_center = place_px
+                            print(f"[Pass 1] Place '{PLACE_CONTAINER}' at ({place_px[0]:.0f}, {place_px[1]:.0f})")
+                if pick_coords is None:
+                    result = parse_locate_response(text)
+                    if result is not None and result[0] >= 0:
+                        pick_coords = result
+                if pick_coords is None:
                     print(f"[Pass 1] Failed to parse locate response: {text}")
                     state = STATE_IDLE
                     continue
 
-                cx_px, cy_px = result
+                cx_px, cy_px = pick_coords
                 locate_center = (cx_px, cy_px)
                 print(f"[Pass 1] Located {TARGET_OBJECT} at pixel ({cx_px:.0f}, {cy_px:.0f})")
 
@@ -1167,17 +1344,22 @@ for event in node:
                     grasp = format_grasp_result(winner)
 
                     if PLACE_CONTAINER:
-                        # Place detection: store grasp result, ask VLM to locate container
                         best_grasp_result = grasp
-                        print(f"\n[Place] Asking VLM to locate '{PLACE_CONTAINER}'...")
-                        img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
-                            (HEIGHT, WIDTH, 3)
-                        )
-                        prompt = PLACE_LOCATE_PROMPT_TEMPLATE.format(
-                            container_name=PLACE_CONTAINER,
-                        )
-                        send_vlm_request(node, img, prompt)
-                        state = STATE_PLACE_VLM_LOCATE
+                        if place_center is not None:
+                            # Have VLM-estimated place coords — refine with SAM3 point prompt
+                            place_cx, place_cy = place_center
+                            print(f"[Place] Refining '{PLACE_CONTAINER}' at ({place_cx:.0f},{place_cy:.0f}) with SAM3...")
+                            node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
+                            node.send_output("sam3_points", pa.array([place_cx, place_cy]),
+                                             {"image_id": "image", "text": PLACE_CONTAINER})
+                            place_center = None
+                            state = STATE_PLACE_SAM3_PENDING
+                        else:
+                            # No pre-located coords — use SAM3 text prompt directly
+                            print(f"\n[Place] Segmenting '{PLACE_CONTAINER}' with SAM3 text prompt...")
+                            node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
+                            node.send_output("sam3_text", pa.array([PLACE_CONTAINER]), {"image_id": "image"})
+                            state = STATE_PLACE_SAM3_PENDING
                     else:
                         grasp_json = json.dumps(grasp)
                         print(f"  Grasp result: {grasp_json}")
@@ -1186,13 +1368,12 @@ for event in node:
                         state = STATE_IDLE
 
             elif state == STATE_PLACE_VLM_LOCATE:
-                # VLM returns 0-1000 normalized coords; parse_locate_response converts to pixel
+                # VLM returns 0-1000 normalized coords — refine via SAM3
                 print(f"  [Place] Raw VLM response: {text[:500]}")
                 result = parse_locate_response(text)
                 if result is not None:
                     place_cx, place_cy = result
                     if place_cx < 0 or place_cy < 0:
-                        # VLM explicitly says object not found
                         print(f"  [Place] VLM says '{PLACE_CONTAINER}' not found, falling back to grasp-only")
                         node.send_output("status", pa.array([f"Place target '{PLACE_CONTAINER}' not found, grasp-only"]))
                         grasp_json = json.dumps(best_grasp_result)
@@ -1202,39 +1383,18 @@ for event in node:
                         frame_count += 1
                         state = STATE_IDLE
                         continue
-                    print(f"  [Place] VLM located '{PLACE_CONTAINER}' at pixel ({place_cx:.0f},{place_cy:.0f})")
-
-                    # Save place target visualization
-                    img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
-                        (HEIGHT, WIDTH, 3)
-                    )
-                    place_img = render_place_target(img, place_cx, place_cy)
-                    place_path = os.path.join(OUTPUT_DIR, f"critic_place_{frame_count:03d}.png")
-                    cv2.imwrite(place_path, cv2.cvtColor(place_img, cv2.COLOR_RGB2BGR))
-                    print(f"  Saved place target: {place_path}")
-
-                    # Add place target to grasp result and send
-                    grasp = best_grasp_result.copy() if best_grasp_result else {}
-                    grasp["place"] = [
-                        int(round(place_cx * 1000.0 / WIDTH)),
-                        int(round(place_cy * 1000.0 / HEIGHT)),
-                    ]
-                    grasp_json = json.dumps(grasp)
-                    print(f"  Grasp result: {grasp_json}")
-                    node.send_output("grasp_result", pa.array([grasp_json]))
-                    best_grasp_result = None
-                    frame_count += 1
-                    state = STATE_IDLE
+                    # Refine VLM point with SAM3 segmentation → bbox center
+                    print(f"  [Place] VLM located '{PLACE_CONTAINER}' at ({place_cx:.0f},{place_cy:.0f}), refining with SAM3...")
+                    node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
+                    node.send_output("sam3_points", pa.array([place_cx, place_cy]),
+                                     {"image_id": "image", "text": PLACE_CONTAINER})
+                    state = STATE_PLACE_SAM3_PENDING
                 else:
-                    print(f"  [Place] Failed to parse VLM location: {text}")
-                    print("  [Place] Falling back to grasp-only")
-                    node.send_output("status", pa.array([f"Place target '{PLACE_CONTAINER}' not found, grasp-only"]))
-                    grasp_json = json.dumps(best_grasp_result)
-                    print(f"  Grasp result: {grasp_json}")
-                    node.send_output("grasp_result", pa.array([grasp_json]))
-                    best_grasp_result = None
-                    frame_count += 1
-                    state = STATE_IDLE
+                    # VLM failed — try SAM3 text prompt as last resort
+                    print(f"  [Place] Failed to parse VLM location, trying SAM3 text prompt...")
+                    node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
+                    node.send_output("sam3_text", pa.array([PLACE_CONTAINER]), {"image_id": "image"})
+                    state = STATE_PLACE_SAM3_PENDING
 
             else:
                 print(f"VLM response in unexpected state {state}, ignoring")
