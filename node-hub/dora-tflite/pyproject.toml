@@ -4,31 +4,20 @@ version = "0.0.1"
 authors = [
   { name = "Hari L", email = "harilogesh2019@gmail.com" },
 ]
-description = "Dora Node for edge inference using TensorFlow Lite — optimised for constrained devices (Raspberry Pi, microcontrollers)"
+description = "Dora Node for edge inference using TensorFlow Lite for constrained devices"
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 dependencies = [
   "dora-rs >= 0.4.0",
-  "numpy>=1.24.4,<2; python_version == "3.8"",
-  "numpy>=2.0.0; python_version >= "3.9"",
-  "tflite-runtime >= 2.14.0",
+  "numpy>=1.24.4",
 ]
+
+[project.optional-dependencies]
+tflite = ["tflite-runtime >= 2.14.0"]
 
 [dependency-groups]
 dev = ["pytest >=8.1.1", "ruff >=0.9.1"]
 
 [project.scripts]
 dora-tflite = "dora_tflite.main:main"
-
-[tool.ruff.lint]
-extend-select = [
-  "D",
-  "UP",
-  "PERF",
-  "RET",
-  "RSE",
-  "NPY",
-  "N",
-  "I",
-]
