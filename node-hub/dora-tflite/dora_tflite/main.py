@@ -35,8 +35,14 @@ def main():
         import tflite_runtime.interpreter as tflite
         interpreter = tflite.Interpreter(model_path=model_path)
     except ImportError:
-        import tensorflow as tf
-        interpreter = tf.lite.Interpreter(model_path=model_path)
+        try:
+            import tensorflow as tf
+            interpreter = tf.lite.Interpreter(model_path=model_path)
+        except ImportError as exc:
+            raise RuntimeError(
+                "Failed to import both tflite_runtime and tensorflow. "
+                "Please install either the tflite extra or tensorflow."
+            ) from exc
 
     interpreter.allocate_tensors()
     input_details = interpreter.get_input_details()
@@ -61,7 +67,7 @@ def main():
                 interpreter.invoke()
 
                 output_data = interpreter.get_tensor(output_details[0]["index"])
-                result = pa.array(output_data.ravel().tolist())
+                result = pa.array(output_data.ravel())
 
                 node.send_output("inference", result, event["metadata"])
 

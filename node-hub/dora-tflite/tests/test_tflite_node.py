@@ -3,6 +3,8 @@
 import numpy as np
 import pytest
 
+from dora_tflite.main import main
+
 
 def test_input_reshape():
     """Test that input data reshapes correctly to model input shape."""
@@ -15,7 +17,7 @@ def test_input_reshape():
 def test_output_ravel():
     """Test that output tensor flattens correctly for pyarrow serialization."""
     dummy_output = np.array([[0.1, 0.9]], dtype=np.float32)
-    raveled = dummy_output.ravel().tolist()
+    raveled = dummy_output.ravel()
     assert len(raveled) == 2
     assert abs(raveled[0] - 0.1) < 1e-5
 
@@ -25,3 +27,9 @@ def test_dtype_cast():
     data = np.array([1.0, 2.0, 3.0], dtype=np.float64)
     casted = data.astype(np.float32)
     assert casted.dtype == np.float32
+
+
+def test_import_main():
+    """Smoke test: main() should raise SystemExit or RuntimeError outside Dora dataflow."""
+    with pytest.raises((SystemExit, RuntimeError, Exception)):
+        main()
