@@ -15,9 +15,9 @@
       "leftPath": "anon/7e58263812ba/xoq-can-can0",
       "rightPath": "anon/7e58263812ba/xoq-can-can1",
       "position": {
-        "x": 1,
+        "x": 0,
         "y": 0,
-        "z": 1
+        "z": 0
       },
       "rotation": {
         "roll": 0,
@@ -47,12 +47,12 @@
   "cameras": [],
   "audio": {
     "path": "anon/openarm-audio",
-    "enabled": false
+    "enabled": true
   },
   "chat": {
     "path": "anon/openarm-chat",
     "username": "anon",
-    "enabled": false
+    "enabled": true
   },
   "realsense": [
     {
@@ -62,14 +62,14 @@
       "tags": [],
       "path": "anon/7e58263812ba/realsense-243222073892",
       "position": {
-        "x": 0.73,
+        "x": -0.26,
         "y": 0.78,
-        "z": 1.25
+        "z": 0.25
       },
       "rotation": {
-        "roll": 94.8,
-        "pitch": 0.3,
-        "yaw": -54
+        "roll": 94.9,
+        "pitch": -2.2,
+        "yaw": -47
       },
       "showColor": true,
       "pointSize": 2

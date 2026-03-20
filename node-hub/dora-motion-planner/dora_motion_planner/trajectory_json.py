@@ -86,7 +86,7 @@ GRIPPER_CLOSED_RAD = 0.0     # fully closed
 
 # Per-motor gains (motors 1-8), matching openarm_playback.rs
 MOTOR_KP = [300.0, 300.0, 150.0, 150.0, 40.0, 40.0, 30.0, 30.0]
-MOTOR_KD = [15.0, 15.0, 7.5, 7.5, 2.0, 2.0, 1.5, 1.5]
+MOTOR_KD = [7.5, 7.5, 3.75, 3.75, 1.0, 1.0, 0.75, 0.75]
 
 
 def _float_to_uint(x: float, x_min: float, x_max: float, bits: int) -> int:

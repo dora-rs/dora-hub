@@ -115,9 +115,20 @@ def main():
             if event_id == "tick":
                 if not greeted:
                     greeted = True
+                    # Drain any replayed messages from previous sessions
+                    drained = 0
+                    while not msg_queue.empty():
+                        try:
+                            msg_queue.get_nowait()
+                            drained += 1
+                        except queue.Empty:
+                            break
+                    if drained:
+                        print(f"[chat] Drained {drained} old message(s)")
                     print("[chat] Sending greeting...")
                     chat.send("At your service!")
                     print("[chat] Greeting sent")
+                    continue
                 while not msg_queue.empty():
                     try:
                         msg = msg_queue.get_nowait()

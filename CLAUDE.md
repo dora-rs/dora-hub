@@ -26,22 +26,35 @@ Required conda packages: `cmake`, `cuda-toolkit` (nvidia channel), `cuda-librari
 
 ### Running dora dataflows
 
-**Use `dora up` / `dora start` / `dora stop` instead of `dora run`** for proper lifecycle management:
-- `dora run` + Ctrl+C can leave orphaned GPU processes
-- `dora stop` sends proper Stop events and nodes exit gracefully
-
-The coordinator must be started with the correct environment so spawned nodes inherit it:
+Use `dora run` to build and run a dataflow in one step:
 
 ```bash
 export PATH=$HOME/.cargo/bin:$HOME/miniconda3/bin:$PATH
 source $HOME/miniconda3/etc/profile.d/conda.sh && conda activate base
 export LD_LIBRARY_PATH=$HOME/miniconda3/lib:$LD_LIBRARY_PATH
-dora up
-dora build <dataflow.yml>
-dora start <dataflow.yml>
-# ... later ...
-dora stop <dataflow-id>
-dora destroy
+dora run <dataflow.yml>
+```
+
+### Stop / sync / restart workflow (baguette)
+
+Dora runs inside a **tmux session** named `dora` on baguette. All dora commands must be sent through tmux.
+
+To redeploy code changes on baguette:
+
+```bash
+# 1. Stop the running dataflow (Ctrl+C via tmux)
+ssh baguette@172.18.128.205 "tmux send-keys -t dora C-c"
+
+# 2. Sync code
+rsync -az --exclude='.git' --exclude='target' --exclude='__pycache__' --exclude='.xoq_fake_can_server_key' ./ baguette@172.18.128.205:~/dora-hub/
+
+# 3. Run (via tmux)
+ssh baguette@172.18.128.205 "tmux send-keys -t dora 'cd ~/dora-hub/examples/openarm-grasp && dora run pick-and-place-chat.yml' Enter"
+```
+
+To check logs or output, capture the tmux pane:
+```bash
+ssh baguette@172.18.128.205 "tmux capture-pane -t dora -p -S -50"  # last 50 lines
 ```
 
 ### Qwen3.5-35B-A3B Model

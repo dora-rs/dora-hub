@@ -65,7 +65,6 @@ from dora_motion_planner.pointcloud import (
     transform_points,
     pointcloud_to_tensor,
 )
-from dora_motion_planner.compiled_fk import CompiledFK, CompiledFKAdapter
 from dora_motion_planner.trajectory_optimizer import TrajectoryOptimizer
 from dora_motion_planner.trajectory_json import save as save_trajectory
 
@@ -701,12 +700,7 @@ def plan_single_target(
                 continue
         print(f"  Grasp IK: err={grasp_err:.4f}m, {time.time()-t0:.1f}s")
 
-        # Use compiled FK for left arm — pre-baked offsets, ~8% faster
-        if ee_link == "openarm_left_hand_tcp":
-            opt_chain = CompiledFKAdapter(CompiledFK(device))
-        else:
-            opt_chain = chain
-        optimizer = TrajectoryOptimizer(chain=opt_chain, capsule_model=capsule_model,
+        optimizer = TrajectoryOptimizer(chain=chain, capsule_model=capsule_model,
                                         joint_limits=joint_limits, device=device)
         clearance_z = (table_plane[0] + 0.15) if table_plane is not None else None
         if table_plane is not None:
