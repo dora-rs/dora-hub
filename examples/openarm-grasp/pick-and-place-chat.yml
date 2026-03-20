@@ -158,12 +158,12 @@ nodes:
       - joint_state
       - trajectory_status
     env:
-      CAN_INTERFACE: "d3cd5a3b4e5e877b1092333559b2673ca29b2f9e3257cd0945049dd1627f9b24"
+      CAN_INTERFACE: "c0586060974c638dc9db92f2bc44b59264f305387e62250b1a1bfc986bfe8fc0"
       ARM_SIDE: "left"
       AUTO_ENABLE: "true"
       TIMEOUT_MS: "5"
 
-  # --- Right Arm (real CAN) ---
+  # --- Right Arm (fake CAN) ---
   - id: right_arm
     path: ../../target/release/dora-openarm-playback
     inputs:
@@ -173,7 +173,7 @@ nodes:
       - joint_state
       - trajectory_status
     env:
-      CAN_INTERFACE: "d1c0840bab8324b50dfc67b5c3c736629000ff7b3d269f79cda321feb1f79824"
+      CAN_INTERFACE: "28f34b9e8c51de7876c042874bb635ebb4f8008fee90c930f2756ca25e7c3d6b"
       ARM_SIDE: "right"
       AUTO_ENABLE: "true"
       TIMEOUT_MS: "5"

@@ -818,6 +818,8 @@ def format_grasp_result(candidate):
             int(round(mask_bbox[2])),
             int(round(mask_bbox[3])),
         ]
+    if command_ts:
+        result["command_ts"] = command_ts
     return result
 
 
@@ -845,6 +847,7 @@ reasons = []
 best_grasp_result = None  # stored grasp result dict while place detection runs
 place_center = None       # (cx_px, cy_px) of the container centroid
 place_vlm_point = None    # VLM-located point for connected component filtering
+command_ts = 0            # timestamp from chat for KPI
 mask_bbox = None          # (x_min, y_min, x_max, y_max) pixel bbox of segmented object
 retries_left = 0          # retry counter for segmentation/locate failures
 MAX_RETRIES = 1           # how many times to retry before giving up
@@ -868,20 +871,20 @@ def _emit_best_geo(node, img, cands, fc):
     grasp = format_grasp_result(winner)
 
     if PLACE_CONTAINER:
-        best_grasp_result = grasp
         if place_center is not None:
-            # Have VLM-estimated place coords — refine with SAM3 point prompt
+            # VLM already located the place target — use directly, skip SAM3
             place_cx, place_cy = place_center
-            place_vlm_point = (place_cx, place_cy)
-            print(f"[Place] Refining '{PLACE_CONTAINER}' at ({place_cx:.0f},{place_cy:.0f}) with SAM3...")
-            node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
-            node.send_output("sam3_points", pa.array([place_cx, place_cy]),
-                             {"image_id": "image", "text": PLACE_CONTAINER})
+            print(f"[Place] Using VLM-located point directly: ({place_cx:.0f},{place_cy:.0f})")
+            grasp["place_px"] = [round(place_cx, 1), round(place_cy, 1)]
             place_center = None
-            state = STATE_PLACE_SAM3_PENDING
+            grasp_json = json.dumps(grasp)
+            print(f"  Grasp result: {grasp_json}")
+            node.send_output("grasp_result", pa.array([grasp_json]))
+            frame_count += 1
+            state = STATE_IDLE
         else:
-            # No pre-located coords — ask VLM to locate the container first,
-            # then use that point for SAM3 (text prompts give oversized masks)
+            # No pre-located coords — ask VLM to locate the container
+            best_grasp_result = grasp
             print(f"\n[Place] Asking VLM to locate '{PLACE_CONTAINER}'...")
             node.send_output("status", pa.array([f"Locating '{PLACE_CONTAINER}'..."]))
             prompt = PLACE_LOCATE_PROMPT_TEMPLATE.format(container_name=PLACE_CONTAINER)
@@ -954,6 +957,7 @@ for event in node:
                 continue
             TARGET_OBJECT = cmd.get("pick", TARGET_OBJECT)
             PLACE_CONTAINER = cmd.get("place", "")
+            command_ts = cmd.get("command_ts", 0)
             print(f"[command] pick='{TARGET_OBJECT}', place='{PLACE_CONTAINER}'")
             # Fall through to trigger logic below
             event_id = "trigger"

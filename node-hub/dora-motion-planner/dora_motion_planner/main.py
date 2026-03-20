@@ -542,8 +542,18 @@ def solve_ik(
     target_xyz = target_xyzrpy[:3]
     q_init_np = current_joints.cpu().numpy() if torch.is_tensor(current_joints) else np.asarray(current_joints)
 
-    # ---- Position-only fast path ----
+    # ---- Position-only fast path (TracIK with current rotation) ----
     if position_only:
+        if trac_ik_solver is not None:
+            # Use current EE rotation as target — just move position
+            _, cur_rot = trac_ik_solver._solver.fk(q_init_np.astype(np.float64))
+            q_np, err = trac_ik_solver.solve(
+                np.array(target_xyz, dtype=np.float64),
+                q_init=q_init_np, target_rot=cur_rot,
+            )
+            if q_np is not None and err <= pos_threshold:
+                return torch.tensor(q_np, dtype=torch.float32, device=device)
+        # PinIK fallback for position-only
         if pin_ik is not None:
             q_np, err = pin_ik.solve(np.array(target_xyz, dtype=np.float64), q_init=q_init_np,
                                      horiz_grip=horiz_grip)
@@ -553,28 +563,13 @@ def solve_ik(
                 cross_err = float(np.linalg.norm(ee_check - target_xyz))
                 if cross_err <= pos_threshold:
                     return q_t
-        # Adam position-only fallback
-        target_pos = torch.tensor(target_xyz, dtype=torch.float32, device=device)
-        lower = torch.tensor(joint_limits[0], dtype=torch.float32, device=device)
-        upper = torch.tensor(joint_limits[1], dtype=torch.float32, device=device)
-        q, err = _ik_batch_adam(
-            ik_chain, target_pos, None, current_joints,
-            lower, upper, device, num_seeds, max_iters, rot_weight=0.0,
-            horiz_grip=horiz_grip,
-        )
-        if err <= pos_threshold:
-            return q
-        print(f"[IK] Position-only failed: err={err*1000:.1f}mm")
+        print(f"[IK] Position-only failed")
         return None
 
     # ---- 6-DOF path: orientation matters ----
     target_rot_np = ScipyRotation.from_euler("XYZ", target_xyzrpy[3:6]).as_matrix()
-    target_pos = torch.tensor(target_xyz, dtype=torch.float32, device=device)
-    lower = torch.tensor(joint_limits[0], dtype=torch.float32, device=device)
-    upper = torch.tensor(joint_limits[1], dtype=torch.float32, device=device)
 
-    # Step 1: Try TracIK directly from current_joints (fast path, ~0.1ms)
-    # Works when the arm is already near the workspace (not cold start).
+    # Step 1: Try TracIK directly from current_joints (fast, ~0.1ms)
     if trac_ik_solver is not None:
         q_refined, ref_err = trac_ik_solver.solve(
             np.array(target_xyz, dtype=np.float64),
@@ -590,22 +585,15 @@ def solve_ik(
                 print(f"[IK] TracIK 6-DOF OK (direct): err={ref_err*1000:.2f}mm ({t_ik*1000:.0f}ms)")
                 return q_t
 
-    # Step 2: TracIK failed from current pose — get position seed via Adam,
-    # then retry TracIK from that seed (handles cold start from zeros).
-    q_pos_seed, pos_err = _ik_batch_adam(
-        ik_chain, target_pos, None, current_joints,
-        lower, upper, device, num_seeds, max_iters, rot_weight=0.0,
-        horiz_grip=horiz_grip,
-    )
-    if pos_err > pos_threshold:
-        t_ik = time.perf_counter() - t_ik_start
-        print(f"[IK] FAILED: position unreachable at "
-              f"xyz=[{target_xyz[0]:.3f},{target_xyz[1]:.3f},{target_xyz[2]:.3f}] "
-              f"(pos_err={pos_err*1000:.1f}mm, {t_ik:.1f}s)")
-        return None
+    # Step 2: TracIK failed — get position seed via PinIK, then retry TracIK
+    q_seed_np = q_init_np
+    if pin_ik is not None:
+        q_np, err = pin_ik.solve(np.array(target_xyz, dtype=np.float64), q_init=q_init_np,
+                                 horiz_grip=horiz_grip)
+        if err <= pos_threshold * 5:  # looser threshold — just need a nearby seed
+            q_seed_np = q_np
 
     if trac_ik_solver is not None:
-        q_seed_np = q_pos_seed.detach().cpu().numpy()
         q_refined, ref_err = trac_ik_solver.solve(
             np.array(target_xyz, dtype=np.float64),
             q_init=q_seed_np,
@@ -1225,10 +1213,14 @@ def _build_pick_place_trajectory(
             # Track last successful rotation for fallback
             _, prev_rot_np = trac_ik_solver._solver.fk(q_prev_np.astype(np.float64)) if trac_ik_solver is not None else (None, None)
             failed = 0
+            IK_SKIP = 3  # solve every Nth keypoint, joint-lerp between
             for i in range(1, n_keypoints):
                 if i == n_keypoints - 1:
                     key_qs.append(q_g.clone())
                     break
+                # Skip intermediate keypoints — joint-lerp will fill them
+                if i % IK_SKIP != 0:
+                    continue
                 target_xyz = cart_targets[i]
                 alpha_r = i / (n_keypoints - 1)
                 if position_only:
@@ -1246,7 +1238,7 @@ def _build_pick_place_trajectory(
                     kp_rot = prev_rot_np
 
                 solved = False
-                # Use Distance mode TracIK — minimizes joint distance from seed
+                # Use Distance mode — minimizes joint distance from seed (safer)
                 kp_solver = trac_ik_dist if trac_ik_dist is not None else trac_ik_solver
                 if kp_solver is not None and kp_rot is not None:
                     q_np, err = kp_solver.solve(
@@ -2018,6 +2010,11 @@ def main():
                 v1 = float(p1[1])
                 u2 = float(p2[0])
                 v2 = float(p2[1])
+                # KPI timing
+                command_ts = data.get("command_ts", 0)
+                t_received = time.time()
+                if command_ts:
+                    print(f"[KPI] command->planner: {t_received - command_ts:.1f}s")
                 print(
                     f"[motion-planner] grasp_result: jaw1=({u1:.0f},{v1:.0f}) "
                     f"jaw2=({u2:.0f},{v2:.0f})"
@@ -2121,10 +2118,16 @@ def main():
                     result[1]["grasp_input"] = grasp_input
                     _set_playback(playback, result[0], result[1], node=node)
                     traj_meta = result[1]
+                    t_planned = time.time()
+                    duration = round(result[0].shape[0] * float(traj_meta.get("dt", 0.1)), 1)
+                    if command_ts:
+                        print(f"[KPI] command->planned: {t_planned - command_ts:.1f}s  "
+                              f"(planner: {t_planned - t_received:.1f}s)  "
+                              f"trajectory: {result[0].shape[0]}wp, {duration}s")
                     node.send_output("trajectory_status", pa.array([json.dumps({
                         "status": "ready",
                         "waypoints": result[0].shape[0],
-                        "duration": round(result[0].shape[0] * float(traj_meta.get("dt", 0.1)), 1),
+                        "duration": duration,
                         "arm": traj_meta.get("arm", "left"),
                     })]))
                 else:
