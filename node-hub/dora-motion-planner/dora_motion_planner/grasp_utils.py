@@ -251,7 +251,7 @@ def grasp_pose_from_jaw_pixels(
     # 0° = straight down, 90° = fully horizontal facing the object.
     if approach_angle_deg > 0.1:
         # Fixed approach heading: -135° from X axis = (-1, -1) direction in XY
-        approach_heading_deg = 135.0
+        approach_heading_deg = -135.0
         heading_rad = np.radians(approach_heading_deg)
         horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
         angle_rad = np.radians(approach_angle_deg)
@@ -336,6 +336,7 @@ def place_pose_from_pixel(
     floor_height: float = 0.04,
     approach_margin: float = 0.05,
     jaw_contact_depth: float = 0.0,
+    mask_bbox: list | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Compute a place pose from a single pixel (container centroid).
 
@@ -391,7 +392,37 @@ def place_pose_from_pixel(
     print(f"[place] jaw offset: {np.round(tcp_offset[:2]*1000, 1)}mm "
           f"(jaw_contact_depth={jaw_contact_depth*1000:.0f}mm)")
 
-    place_z = max(pt_rob[2] + place_depth_offset, floor_height)
+    # Find the highest Z in the place region (like grasp does)
+    if mask_bbox is not None:
+        depth_2d = depth_map.reshape(height, width)
+        x_min = max(0, int(mask_bbox[0]))
+        y_min = max(0, int(mask_bbox[1]))
+        x_max = min(width - 1, int(mask_bbox[2]))
+        y_max = min(height - 1, int(mask_bbox[3]))
+        ys_grid, xs_grid = np.mgrid[y_min:y_max+1, x_min:x_max+1]
+        d_block = depth_2d[y_min:y_max+1, x_min:x_max+1].astype(np.float32)
+        valid = (d_block > 100) & (d_block < 5000)
+        if np.any(valid):
+            d_valid = d_block[valid] * 0.001
+            xs_valid = xs_grid[valid].astype(np.float32)
+            ys_valid = ys_grid[valid].astype(np.float32)
+            pts_cam = np.stack([
+                (xs_valid - cx) * d_valid / fx,
+                (ys_valid - cy) * d_valid / fy,
+                d_valid,
+            ], axis=1)
+            pts_rob = (R_cam @ pts_cam.T).T + cam_translation
+            object_top_z = float(pts_rob[:, 2].max())
+            # Use centroid XY from mask (more robust than single pixel)
+            place_xy = pts_rob[:, :2].mean(axis=0)
+            n_scanned = int(np.count_nonzero(valid))
+            print(f"[place] mask bbox scan: {n_scanned} pixels, "
+                  f"top_z={object_top_z:.4f}m, centroid_xy=({place_xy[0]:.4f},{place_xy[1]:.4f})")
+            place_z = max(object_top_z + place_depth_offset, floor_height)
+        else:
+            place_z = max(pt_rob[2] + place_depth_offset, floor_height)
+    else:
+        place_z = max(pt_rob[2] + place_depth_offset, floor_height)
     place_pos = np.array([place_xy[0], place_xy[1], place_z], dtype=np.float32)
     place_xyzrpy = np.concatenate([place_pos, grasp_rpy]).astype(np.float32)
 
