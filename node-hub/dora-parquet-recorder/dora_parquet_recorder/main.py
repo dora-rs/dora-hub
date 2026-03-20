@@ -15,6 +15,7 @@ from dora import Node
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "30"))
 LOG_DIR = os.getenv("LOG_DIR", "data_logs")
 
+
 class DoraParquetRecorder:
     def __init__(self):
         self.write_queue = queue.Queue()
@@ -29,8 +30,7 @@ class DoraParquetRecorder:
         print(f"[Recorder] Online. Batch Size: {BATCH_SIZE}", flush=True)
 
     def _writer_loop(self):
-        """Collects small tables and writes them in big chunks.
-        """
+        """Collects small tables and writes them in big chunks."""
         # Buffer to hold tables for each input_id: { "cam_feed": [table1, table2...] }
         buffers = {}
 
@@ -48,7 +48,7 @@ class DoraParquetRecorder:
                 # 3. Check if bucket is full
                 if len(buffers[input_id]) >= BATCH_SIZE:
                     self._flush_buffer(input_id, buffers[input_id])
-                    buffers[input_id] = [] # Empty the bucket
+                    buffers[input_id] = []  # Empty the bucket
 
             except queue.Empty:
                 continue
@@ -79,9 +79,8 @@ class DoraParquetRecorder:
                 file_path = os.path.join(LOG_DIR, f"{input_id}.parquet")
                 # 'compression=None' is faster for CPU, 'snappy' saves disk space
                 self.writers[input_id] = pq.ParquetWriter(
-                    file_path,
-                    batch_table.schema,
-                    compression='NONE')
+                    file_path, batch_table.schema, compression="NONE"
+                )
                 print(f"[Recorder] Created log: {file_path}", flush=True)
 
             # One single write for 30 frames!
@@ -104,21 +103,19 @@ class DoraParquetRecorder:
                 try:
                     data_blob = value.buffers()[1].to_pybytes()
                 except Exception:
-                    data_blob = value.to_string().encode('utf-8')
+                    data_blob = value.to_string().encode("utf-8")
             else:
                 # Fallback for strings/other types
                 if not isinstance(value, (pa.Array, pa.ChunkedArray)):
                     value = pa.array([value])
-                data_blob = value.to_pylist()[0] # Fallback (slower but safe)
+                data_blob = value.to_pylist()[0]  # Fallback (slower but safe)
 
             # 3. Queue it up
             timestamp = datetime.now().isoformat()
 
-            table = pa.Table.from_pydict({
-                "timestamp": [timestamp],
-                "data": [data_blob],
-                "metadata": [meta_json]
-            })
+            table = pa.Table.from_pydict(
+                {"timestamp": [timestamp], "data": [data_blob], "metadata": [meta_json]}
+            )
 
             self.write_queue.put((input_id, table))
 
@@ -129,6 +126,7 @@ class DoraParquetRecorder:
         self.shutdown_flag = True
         if self.writer_thread.is_alive():
             self.writer_thread.join(timeout=5.0)
+
 
 def main():
     node = Node()
@@ -148,6 +146,7 @@ def main():
             break
 
     recorder._shutdown()
+
 
 if __name__ == "__main__":
     main()

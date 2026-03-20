@@ -9,7 +9,8 @@ import os
 
 MAX_LINEAR_SPEED = float(os.getenv("MAX_LINEAR_SPEED", "0.05"))
 MAX_ANGULAR_SPEED = float(os.getenv("MAX_ANGULAR_SPEED", "0.8"))
-JOYSTICK_DEADZONE = float(os.getenv("JOYSTICK_DEADZONE", "0.2"))    
+JOYSTICK_DEADZONE = float(os.getenv("JOYSTICK_DEADZONE", "0.2"))
+
 
 class Controller:
     """Controller mapping."""
@@ -53,7 +54,6 @@ def main():
     joystick.init()
 
     controller = Controller()
-
 
     print(f"Detected controller: {joystick.get_name()}")
     print(f"Number of axes: {joystick.get_numaxes()}")

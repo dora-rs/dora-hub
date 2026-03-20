@@ -54,7 +54,11 @@ def write_dict_to_json(file_path, key: str, new_data):
 
 
 def save_image_and_add_to_json(
-    frame_dict: dict, root_path, llama_root_path, jsonl_file, messages,
+    frame_dict: dict,
+    root_path,
+    llama_root_path,
+    jsonl_file,
+    messages,
 ):
     """Save an image from a NumPy array and add a new JSON object as a line to a JSONL file.
 
