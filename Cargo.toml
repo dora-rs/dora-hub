@@ -107,3 +107,4 @@ path = "examples/rerun-viewer/run.rs"
 [dependencies]
 eyre = "0.6.8"
 sha1 = "0.10.6"
+tokio = { version = "1.24.2", features = ["macros", "rt-multi-thread"] }
