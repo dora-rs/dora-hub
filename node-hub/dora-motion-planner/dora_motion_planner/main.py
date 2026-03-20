@@ -2081,18 +2081,92 @@ def main():
                     f"jaw2=({u2:.0f},{v2:.0f})"
                 )
 
+                # KPI: time from chat command to motion planner
+                command_ts = data.get("command_ts", 0)
+                t_received = time.time()
+                if command_ts:
+                    print(f"[KPI] command->planner: {t_received - command_ts:.1f}s")
+
                 # Parse optional place target
                 place_uv = None
+                place_mask_bbox = None
+                place_data = data.get("place_px")
+                if place_data and len(place_data) >= 2:
+                    place_u = float(place_data[0])
+                    place_v = float(place_data[1])
+                    place_uv = (place_u, place_v)
+                    print(
+                        f"[motion-planner] grasp_result: place=({place_u:.0f},{place_v:.0f})"
+                    )
+                place_bbox_data = data.get("place_mask_bbox")
+                if place_bbox_data and len(place_bbox_data) >= 4:
+                    place_mask_bbox = [int(x) for x in place_bbox_data]
+                    print(f"[motion-planner] grasp_result: place_mask_bbox={place_mask_bbox}")
+
+                # Arm selection from metadata or deprojected Y
+                target_y = _estimate_target_y(
+                    u1, v1, u2, v2,
+                    latest_depth, latest_intrinsics, latest_image_size,
+                    cam_t, cam_rot,
+                )
+                preferred_arm = select_arm(metadata, target_y)
+                arm_order = [preferred_arm]
+                other_arm = "right" if preferred_arm == "left" else "left"
+                if other_arm in arms:
+                    arm_order.append(other_arm)
+
+                pc_tensor, pc_robot = build_pointcloud(
+                    latest_depth, latest_intrinsics, latest_image_size,
+                    cam_t, cam_rot, device,
+                )
+
+                result = None
+                fail_reason = None
+                for arm_name in arm_order:
+                    arm = arms.get(arm_name)
+                    if arm is None:
+                        continue
+                    print(f"[motion-planner] Trying {arm_name} arm for grasp")
+
+                    result, fail_reason = plan_grasp_from_pixels(
+                        u1, v1, u2, v2,
+                        node, arm.optimizer, arm.ik_chain,
+                        arm.optimizer.capsules,
+                        arm.joint_limits, device,
+                        arm.current_joints,
+                        latest_depth, latest_intrinsics, latest_image_size,
+                        cam_t, cam_rot, pc_tensor, arm.num_joints,
+                        arm=arm_name,
+                        table_plane=table_plane,
+                        table_polygon=table_polygon,
+                        place_uv=place_uv,
+                        place_mask_bbox=place_mask_bbox,
+                        pin_ik=arm.pin_ik,
+                        trac_ik_solver=arm.trac_ik,
+                        trac_ik_dist=arm.trac_ik_dist,
+                        latest_image=latest_image,
+                    )
+                    if result is not None:
+                        break
+                    print(f"[motion-planner] {arm_name} arm failed: {fail_reason}")
+
+                if result is not None:
                     grasp_input = {"p1": [u1, v1], "p2": [u2, v2]}
                     if place_uv:
                         grasp_input["place"] = list(place_uv)
                     result[1]["grasp_input"] = grasp_input
                     _set_playback(playback, result[0], result[1], node=node)
                     traj_meta = result[1]
+                    t_planned = time.time()
+                    duration = round(result[0].shape[0] * float(traj_meta.get("dt", 0.1)), 1)
+                    if command_ts:
+                        print(f"[KPI] command->planned: {t_planned - command_ts:.1f}s  "
+                              f"(planner: {t_planned - t_received:.1f}s)  "
+                              f"trajectory: {result[0].shape[0]}wp, {duration}s")
                     node.send_output("trajectory_status", pa.array([json.dumps({
                         "status": "ready",
                         "waypoints": result[0].shape[0],
-                        "duration": round(result[0].shape[0] * float(traj_meta.get("dt", 0.1)), 1),
+                        "duration": duration,
                         "arm": traj_meta.get("arm", "left"),
                     })]))
                 else:

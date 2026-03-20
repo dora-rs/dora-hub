@@ -12,6 +12,7 @@ import json
 import os
 import queue
 import random
+import time
 import re
 import sys
 import threading
@@ -183,6 +184,7 @@ def main():
                     # Try direct JSON first
                     cmd = _try_parse_json(text)
                     if cmd and "pick" in cmd:
+                        cmd["command_ts"] = time.time()
                         print(f"[chat] Direct JSON command: {cmd}")
                         chat.send(f"Got it: pick '{cmd.get('pick', '')}'"
                                   + (f", place in '{cmd['place']}'" if cmd.get("place") else "")
@@ -204,6 +206,7 @@ def main():
                 print(f"[chat] VLM parse response: {text[:200]}")
                 cmd = _try_parse_json(text)
                 if cmd and "pick" in cmd:
+                    cmd["command_ts"] = time.time()
                     chat.send(f"Understood: pick '{cmd.get('pick', '')}'"
                               + (f", place in '{cmd['place']}'" if cmd.get("place") else "")
                               + ". Planning trajectory...")
