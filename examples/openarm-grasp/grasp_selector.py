@@ -242,7 +242,17 @@ def parse_locate_both_response(text):
     try:
         data = json.loads(text[start:end])
     except (json.JSONDecodeError, ValueError):
-        return None
+        # VLM sometimes returns {{"bbox_2d":...}, {"bbox_2d":...}} (invalid JSON)
+        # Fix by replacing outer {} with [] to make it a valid array
+        snippet = text[start:end].strip()
+        if snippet.startswith("{") and snippet.endswith("}") and snippet.count('{"bbox_2d"') >= 2:
+            fixed = "[" + snippet[1:-1] + "]"
+            try:
+                data = json.loads(fixed)
+            except (json.JSONDecodeError, ValueError):
+                return None
+        else:
+            return None
 
     # Handle array format: [{"bbox_2d": [...], "label": "sausage"}, {"bbox_2d": [...], "label": "pan"}]
     if isinstance(data, list):
@@ -270,10 +280,15 @@ def parse_locate_both_response(text):
             last_vlm_place_bbox = place_bbox
         return (pick_cx, pick_cy), place_px
 
-    # Handle object format: {"pick": {...}, "place": {...}}
+    # Handle object format: {"pick": {...}, "place": {...}} or {"pick": [...], "place": [...]}
     if not isinstance(data, dict):
         return None
     pick_data = data.get("pick")
+    if pick_data is None:
+        return None
+    # Handle bare array: {"pick": [x_min, y_min, x_max, y_max]}
+    if isinstance(pick_data, list) and len(pick_data) == 4:
+        pick_data = {"bbox_2d": pick_data}
     if not isinstance(pick_data, dict):
         return None
     pick_result = _parse_bbox_or_center(pick_data)
@@ -284,6 +299,8 @@ def parse_locate_both_response(text):
 
     place_data = data.get("place")
     place_px = None
+    if isinstance(place_data, list) and len(place_data) == 4:
+        place_data = {"bbox_2d": place_data}
     if isinstance(place_data, dict):
         place_result = _parse_bbox_or_center(place_data)
         if place_result is not None:
