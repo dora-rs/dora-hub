@@ -1372,9 +1372,16 @@ for event in node:
                         pick_coords = single
 
                 if pick_coords is None:
-                    print(f"[SAM3] VLM locate failed, falling back to text prompt")
-                    node.send_output("sam3_text", pa.array([TARGET_OBJECT]), {"image_id": "image"})
-                    state = STATE_SAM3_MASK_PENDING
+                    print(f"[SAM3] ERROR: VLM locate failed — no bbox returned, retrying")
+                    # Retry the VLM locate instead of falling back to text prompt
+                    if PLACE_CONTAINER:
+                        prompt = LOCATE_BOTH_PROMPT_TEMPLATE.format(
+                            pick_name=TARGET_OBJECT, place_name=PLACE_CONTAINER)
+                    else:
+                        prompt = LOCATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
+                    send_vlm_request(node, img, prompt)
+                    # Stay in same state to retry
+                    continue
                 else:
                     cx_px, cy_px = pick_coords
                     locate_center = (cx_px, cy_px)
@@ -1548,11 +1555,12 @@ for event in node:
                             place_center = None
                             state = STATE_PLACE_SAM3_PENDING
                         else:
-                            # No pre-located coords — use SAM3 text prompt directly
-                            print(f"\n[Place] Segmenting '{PLACE_CONTAINER}' with SAM3 text prompt...")
-                            node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
-                            node.send_output("sam3_text", pa.array([PLACE_CONTAINER]), {"image_id": "image"})
-                            state = STATE_PLACE_SAM3_PENDING
+                            # No pre-located coords — ask VLM to locate
+                            print(f"\n[Place] No place coords, asking VLM to locate '{PLACE_CONTAINER}'...")
+                            node.send_output("status", pa.array([f"Locating '{PLACE_CONTAINER}'..."]))
+                            prompt = PLACE_LOCATE_PROMPT_TEMPLATE.format(container_name=PLACE_CONTAINER)
+                            send_vlm_request(node, img, prompt)
+                            state = STATE_PLACE_VLM_LOCATE
                     else:
                         grasp_json = json.dumps(grasp)
                         print(f"  Grasp result: {grasp_json}")
@@ -1596,11 +1604,12 @@ for event in node:
                                          {"image_id": "image", "text": PLACE_CONTAINER})
                     state = STATE_PLACE_SAM3_PENDING
                 else:
-                    # VLM failed — try SAM3 text prompt as last resort
-                    print(f"  [Place] Failed to parse VLM location, trying SAM3 text prompt...")
-                    node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
-                    node.send_output("sam3_text", pa.array([PLACE_CONTAINER]), {"image_id": "image"})
-                    state = STATE_PLACE_SAM3_PENDING
+                    # VLM failed — retry VLM locate
+                    print(f"  [Place] Failed to parse VLM location, retrying...")
+                    node.send_output("status", pa.array([f"Locating '{PLACE_CONTAINER}'..."]))
+                    prompt = PLACE_LOCATE_PROMPT_TEMPLATE.format(container_name=PLACE_CONTAINER)
+                    send_vlm_request(node, img, prompt)
+                    # Stay in STATE_PLACE_VLM_LOCATE to retry
 
             else:
                 print(f"VLM response in unexpected state {state}, ignoring")
