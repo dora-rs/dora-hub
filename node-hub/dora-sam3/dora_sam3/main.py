@@ -218,6 +218,68 @@ def main():
                     },
                 )
 
+            elif "boxes" in event_id:
+                # Box prompt: [x_min, y_min, x_max, y_max] in pixel coords
+                box_data = event["value"].to_numpy().reshape((-1, 4))
+                if len(frames) == 0:
+                    continue
+                first_image = next(iter(frames.keys()))
+                image_id = event["metadata"].get("image_id", first_image)
+                text_hint = event["metadata"].get("text", "")
+
+                if image_id in image_states:
+                    state = image_states[image_id]
+                else:
+                    if image_id in frames:
+                        state = processor.preprocess(frames[image_id])
+                        image_states[image_id] = state
+                    else:
+                        continue
+                frame = frames.get(image_id)
+                if frame is not None:
+                    if hasattr(frame, 'shape'):
+                        img_h, img_w = frame.shape[0], frame.shape[1]
+                    elif hasattr(frame, 'size'):
+                        img_w, img_h = frame.size  # PIL Image
+                    else:
+                        img_h, img_w = 720, 1280
+                else:
+                    img_h, img_w = 720, 1280
+
+                print(f"[dora-sam3] Box prompt: {len(box_data)} boxes on {image_id} ({img_w}x{img_h})" +
+                      (f" text='{text_hint}'" if text_hint else ""))
+                with torch.inference_mode():
+                    processor.reset_all_prompts(state)
+                    if text_hint:
+                        state = processor.set_text_prompt(prompt=text_hint, state=state)
+                    for x_min, y_min, x_max, y_max in box_data:
+                        # Convert pixel xyxy to normalized cxcywh
+                        cx = float((x_min + x_max) / 2.0) / img_w
+                        cy = float((y_min + y_max) / 2.0) / img_h
+                        bw = float(x_max - x_min) / img_w
+                        bh = float(y_max - y_min) / img_h
+                        state = processor.add_geometric_prompt(
+                            box=[cx, cy, bw, bh], label=True, state=state
+                        )
+
+                masks = state.get("masks")
+                if masks is None or masks.shape[0] == 0:
+                    node.send_output("masks", pa.array([]), {})
+                    continue
+
+                merged = masks[:, 0, :, :].any(dim=0).cpu().numpy().astype(np.uint8)
+                merged *= 255
+
+                node.send_output(
+                    "masks",
+                    pa.array(merged.ravel()),
+                    metadata={
+                        "image_id": image_id,
+                        "width": img_w,
+                        "height": img_h,
+                    },
+                )
+
         elif event_type == "ERROR":
             print("[dora-sam3] Error:" + event["error"])
 

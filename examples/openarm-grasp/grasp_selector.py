@@ -54,11 +54,8 @@ GRIPPER_COLOR_RGB = (0, 220, 0)
 
 # --- Prompts ---
 LOCATE_PROMPT_TEMPLATE = (
-    "You are a robot vision system. Find {object_name} in this image and output "
-    "its bounding box. Use normalized coordinates from 0 to 1000 where "
-    "(0,0) is top-left and (1000,1000) is bottom-right. "
-    'Output ONLY JSON: {{"x_min": 0, "y_min": 0, "x_max": 1000, "y_max": 1000}} '
-    "(replace with actual normalized values of the tight bounding box around the object)"
+    "Detect {object_name} in this image with a bounding box. "
+    'Output JSON: {{"bbox_2d": [x_min, y_min, x_max, y_max], "label": "{object_name}"}}'
 )
 
 RATE_PROMPT_TEMPLATE = (
@@ -75,20 +72,16 @@ RATE_PROMPT_TEMPLATE = (
 )
 
 PLACE_LOCATE_PROMPT_TEMPLATE = (
-    "Look at this image carefully. Where is {container_name}? "
-    "Output its bounding box. Use normalized coordinates from 0 to 1000 where "
-    "(0,0) is top-left and (1000,1000) is bottom-right. "
-    'If you can see it, output ONLY JSON: {{"x_min": 0, "y_min": 0, "x_max": 1000, "y_max": 1000}}\n'
-    'If it is NOT in the image, output ONLY JSON: {{"x_min": -1, "y_min": -1, "x_max": -1, "y_max": -1}}'
+    "Detect {container_name} in this image with a bounding box. "
+    'Output JSON: {{"bbox_2d": [x_min, y_min, x_max, y_max], "label": "{container_name}"}}'
 )
 
 LOCATE_BOTH_PROMPT_TEMPLATE = (
-    "You are a robot vision system. Find two objects and output their bounding boxes. "
-    "Use normalized coordinates from 0 to 1000 where (0,0) is top-left and (1000,1000) is bottom-right.\n"
-    "1. {pick_name} — the object to pick up\n"
-    "2. {place_name} — the place target\n"
-    'Output ONLY JSON: {{"pick": {{"x_min": 0, "y_min": 0, "x_max": 1000, "y_max": 1000}}, '
-    '"place": {{"x_min": 0, "y_min": 0, "x_max": 1000, "y_max": 1000}}}}'
+    "Detect two objects in this image with bounding boxes:\n"
+    "1. {pick_name}\n"
+    "2. {place_name}\n"
+    'Output JSON: {{"pick": {{"bbox_2d": [x_min, y_min, x_max, y_max]}}, '
+    '"place": {{"bbox_2d": [x_min, y_min, x_max, y_max]}}}}'
 )
 
 
@@ -173,6 +166,20 @@ def _parse_bbox_or_center(data):
     if not isinstance(data, dict):
         return None
     try:
+        # bbox_2d format: [x_min, y_min, x_max, y_max] (Qwen3-VL native)
+        if "bbox_2d" in data and isinstance(data["bbox_2d"], list) and len(data["bbox_2d"]) >= 4:
+            b = data["bbox_2d"]
+            x_min_n, y_min_n, x_max_n, y_max_n = float(b[0]), float(b[1]), float(b[2]), float(b[3])
+            if x_min_n < 0 or y_min_n < 0:
+                return x_min_n, y_min_n, None
+            x_min = max(0, min(x_min_n * WIDTH / 1000.0, WIDTH - 1))
+            y_min = max(0, min(y_min_n * HEIGHT / 1000.0, HEIGHT - 1))
+            x_max = max(0, min(x_max_n * WIDTH / 1000.0, WIDTH - 1))
+            y_max = max(0, min(y_max_n * HEIGHT / 1000.0, HEIGHT - 1))
+            cx = (x_min + x_max) / 2.0
+            cy = (y_min + y_max) / 2.0
+            return cx, cy, (x_min, y_min, x_max, y_max)
+
         # Bounding box format (0-1000 normalized, converted to pixel)
         if "x_min" in data and "y_min" in data and "x_max" in data and "y_max" in data:
             x_min_n = float(data["x_min"])
@@ -222,15 +229,50 @@ def parse_locate_both_response(text):
     last_vlm_bbox = None
     last_vlm_place_bbox = None
     text = strip_think_tags(text)
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start == -1 or end == 0:
+    # Remove markdown code fences if present
+    text = text.replace("```json", "").replace("```", "").strip()
+
+    # Try parsing as JSON — could be object or array
+    start = text.find("[") if text.find("[") >= 0 and (text.find("{") < 0 or text.find("[") < text.find("{")) else text.find("{")
+    if start < 0:
+        return None
+    end = max(text.rfind("]"), text.rfind("}")) + 1
+    if end <= start:
         return None
     try:
         data = json.loads(text[start:end])
     except (json.JSONDecodeError, ValueError):
         return None
 
+    # Handle array format: [{"bbox_2d": [...], "label": "sausage"}, {"bbox_2d": [...], "label": "pan"}]
+    if isinstance(data, list):
+        pick_result = None
+        place_result = None
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            result = _parse_bbox_or_center(item)
+            if result is None:
+                continue
+            # First item = pick, second = place (by order)
+            if pick_result is None:
+                pick_result = result
+            elif place_result is None:
+                place_result = result
+        if pick_result is None:
+            return None
+        pick_cx, pick_cy, pick_bbox = pick_result
+        last_vlm_bbox = pick_bbox
+        place_px = None
+        if place_result is not None:
+            place_cx, place_cy, place_bbox = place_result
+            place_px = (place_cx, place_cy)
+            last_vlm_place_bbox = place_bbox
+        return (pick_cx, pick_cy), place_px
+
+    # Handle object format: {"pick": {...}, "place": {...}}
+    if not isinstance(data, dict):
+        return None
     pick_data = data.get("pick")
     if not isinstance(pick_data, dict):
         return None
@@ -893,8 +935,19 @@ def _emit_best_geo(node, img, cands, fc):
             place_vlm_point = (place_cx, place_cy)
             print(f"[Place] Refining '{PLACE_CONTAINER}' at ({place_cx:.0f},{place_cy:.0f}) with SAM3...")
             node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
-            node.send_output("sam3_points", pa.array([place_cx, place_cy]),
-                             {"image_id": "image", "text": PLACE_CONTAINER})
+            if last_vlm_place_bbox is not None:
+                bx0, by0, bx1, by1 = last_vlm_place_bbox
+                print(f"  [Place] Sending VLM bbox [{bx0:.0f},{by0:.0f},{bx1:.0f},{by1:.0f}] to SAM3")
+                node.send_output("sam3_boxes", pa.array([bx0, by0, bx1, by1]),
+                                 {"image_id": "image", "text": PLACE_CONTAINER})
+            else:
+                hw = 50
+                bx0 = max(0, place_cx - hw)
+                by0 = max(0, place_cy - hw)
+                bx1 = min(WIDTH, place_cx + hw)
+                by1 = min(HEIGHT, place_cy + hw)
+                node.send_output("sam3_boxes", pa.array([bx0, by0, bx1, by1]),
+                                 {"image_id": "image", "text": PLACE_CONTAINER})
             place_center = None
             state = STATE_PLACE_SAM3_PENDING
         else:
@@ -1284,6 +1337,7 @@ for event in node:
             text = event["value"][0].as_py()
 
             if state == STATE_SAM3_VLM_LOCATE:
+                print(f"[SAM3] Raw VLM locate response: {text[:300]}")
                 pick_coords = None
                 if PLACE_CONTAINER:
                     both = parse_locate_both_response(text)
@@ -1307,9 +1361,22 @@ for event in node:
                 else:
                     cx_px, cy_px = pick_coords
                     locate_center = (cx_px, cy_px)
-                    print(f"[SAM3] VLM located at ({cx_px:.0f}, {cy_px:.0f}), sending point to SAM3")
-                    node.send_output("status", pa.array([f"Segmenting at ({cx_px:.0f},{cy_px:.0f})..."]))
-                    node.send_output("sam3_points", pa.array([cx_px, cy_px]), {"image_id": "image", "text": TARGET_OBJECT})
+                    if last_vlm_bbox is not None:
+                        bx0, by0, bx1, by1 = last_vlm_bbox
+                        print(f"[SAM3] VLM bbox [{bx0:.0f},{by0:.0f},{bx1:.0f},{by1:.0f}], sending box to SAM3")
+                        node.send_output("status", pa.array([f"Segmenting at ({cx_px:.0f},{cy_px:.0f})..."]))
+                        node.send_output("sam3_boxes", pa.array([bx0, by0, bx1, by1]),
+                                         {"image_id": "image", "text": TARGET_OBJECT})
+                    else:
+                        print(f"[SAM3] VLM located at ({cx_px:.0f}, {cy_px:.0f}), sending box to SAM3")
+                        node.send_output("status", pa.array([f"Segmenting at ({cx_px:.0f},{cy_px:.0f})..."]))
+                        hw = 50
+                        bx0 = max(0, cx_px - hw)
+                        by0 = max(0, cy_px - hw)
+                        bx1 = min(WIDTH, cx_px + hw)
+                        by1 = min(HEIGHT, cy_px + hw)
+                        node.send_output("sam3_boxes", pa.array([bx0, by0, bx1, by1]),
+                                         {"image_id": "image", "text": TARGET_OBJECT})
                     state = STATE_SAM3_MASK_PENDING
 
             elif state == STATE_LOCATE_PENDING:
@@ -1443,12 +1510,24 @@ for event in node:
                     if PLACE_CONTAINER:
                         best_grasp_result = grasp
                         if place_center is not None:
-                            # Have VLM-estimated place coords — refine with SAM3 point prompt
+                            # Have VLM-estimated place coords — refine with SAM3
                             place_cx, place_cy = place_center
+                            place_vlm_point = (place_cx, place_cy)
                             print(f"[Place] Refining '{PLACE_CONTAINER}' at ({place_cx:.0f},{place_cy:.0f}) with SAM3...")
                             node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
-                            node.send_output("sam3_points", pa.array([place_cx, place_cy]),
-                                             {"image_id": "image", "text": PLACE_CONTAINER})
+                            if last_vlm_place_bbox is not None:
+                                bx0, by0, bx1, by1 = last_vlm_place_bbox
+                                print(f"  [Place] Sending VLM bbox [{bx0:.0f},{by0:.0f},{bx1:.0f},{by1:.0f}] to SAM3")
+                                node.send_output("sam3_boxes", pa.array([bx0, by0, bx1, by1]),
+                                                 {"image_id": "image", "text": PLACE_CONTAINER})
+                            else:
+                                hw = 50
+                                bx0 = max(0, place_cx - hw)
+                                by0 = max(0, place_cy - hw)
+                                bx1 = min(WIDTH, place_cx + hw)
+                                by1 = min(HEIGHT, place_cy + hw)
+                                node.send_output("sam3_boxes", pa.array([bx0, by0, bx1, by1]),
+                                                 {"image_id": "image", "text": PLACE_CONTAINER})
                             place_center = None
                             state = STATE_PLACE_SAM3_PENDING
                         else:
@@ -1484,8 +1563,20 @@ for event in node:
                     place_vlm_point = (place_cx, place_cy)
                     print(f"  [Place] VLM located '{PLACE_CONTAINER}' at ({place_cx:.0f},{place_cy:.0f}), refining with SAM3...")
                     node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
-                    node.send_output("sam3_points", pa.array([place_cx, place_cy]),
-                                     {"image_id": "image", "text": PLACE_CONTAINER})
+                    if last_vlm_bbox is not None:
+                        bx0, by0, bx1, by1 = last_vlm_bbox
+                        print(f"  [Place] Sending VLM bbox [{bx0:.0f},{by0:.0f},{bx1:.0f},{by1:.0f}] to SAM3")
+                        node.send_output("sam3_boxes", pa.array([bx0, by0, bx1, by1]),
+                                         {"image_id": "image", "text": PLACE_CONTAINER})
+                    else:
+                        # No bbox — create small box around point
+                        hw = 50
+                        bx0 = max(0, place_cx - hw)
+                        by0 = max(0, place_cy - hw)
+                        bx1 = min(WIDTH, place_cx + hw)
+                        by1 = min(HEIGHT, place_cy + hw)
+                        node.send_output("sam3_boxes", pa.array([bx0, by0, bx1, by1]),
+                                         {"image_id": "image", "text": PLACE_CONTAINER})
                     state = STATE_PLACE_SAM3_PENDING
                 else:
                     # VLM failed — try SAM3 text prompt as last resort

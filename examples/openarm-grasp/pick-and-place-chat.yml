@@ -46,6 +46,7 @@ nodes:
         queue_size: 1
       text: selector/sam3_text
       points: selector/sam3_points
+      boxes: selector/sam3_boxes
     outputs:
       - masks
     env:
@@ -71,6 +72,7 @@ nodes:
       - grasp_result
       - sam3_text
       - sam3_points
+      - sam3_boxes
       - status
     env:
       IMAGE_WIDTH: "1280"
