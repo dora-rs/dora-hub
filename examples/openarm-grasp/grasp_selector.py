@@ -126,7 +126,7 @@ def send_vlm_request(node, image_rgb, prompt_text):
     node.send_output("vlm_request", pa.array(texts))
 
 
-def parse_locate_response(text):
+def parse_locate_response(text, expected_label=None):
     """Extract center + optional bbox from VLM response -> (cx_px, cy_px) or None.
 
     Handles both new bbox format and legacy center-point format:
@@ -134,16 +134,76 @@ def parse_locate_response(text):
       {"cx": N, "cy": N}                                    — legacy 0-1000 normalized
     Returns (cx_px, cy_px) in pixel coordinates, or None.
     Also sets last_vlm_bbox global when a bbox is parsed.
+
+    If ``expected_label`` is given, the returned label must be a substring
+    match (case-insensitive) or the response is rejected as a mismatch.
     """
     global last_vlm_bbox
     last_vlm_bbox = None
     text = strip_think_tags(text)
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start == -1 or end == 0:
+    # Remove markdown code fences if present
+    clean = text.replace("```json", "").replace("```", "").strip()
+    # Find JSON start — could be array or object
+    start_obj = clean.find("{")
+    start_arr = clean.find("[")
+    if start_obj < 0 and start_arr < 0:
+        return None
+    if start_arr >= 0 and (start_obj < 0 or start_arr < start_obj):
+        start = start_arr
+    else:
+        start = start_obj
+    end = max(clean.rfind("]"), clean.rfind("}")) + 1
+    if end <= start:
         return None
     try:
-        data = json.loads(text[start:end])
+        data = json.loads(clean[start:end])
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    # Unwrap array: pick the largest bbox (by area) matching the expected label
+    if isinstance(data, list):
+        best_item = None
+        best_area = -1
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            # Filter by label if expected
+            if expected_label:
+                lbl = item.get("label", "")
+                if isinstance(lbl, str) and lbl:
+                    exp = expected_label.lower()
+                    ret = lbl.lower()
+                    if exp not in ret and ret not in exp:
+                        continue
+            # Compute bbox area
+            b = item.get("bbox_2d", [])
+            if isinstance(b, list) and len(b) >= 4:
+                area = abs(b[2] - b[0]) * abs(b[3] - b[1])
+            else:
+                area = 0
+            if area > best_area:
+                best_area = area
+                best_item = item
+        if best_item is None:
+            if expected_label:
+                labels = [it.get("label", "?") for it in data if isinstance(it, dict)]
+                print(f"[VLM] No items match expected label '{expected_label}' "
+                      f"(got: {labels}) — rejecting")
+            return None
+        data = best_item
+
+    # Label sanity check: reject if VLM returned the wrong object
+    if expected_label and isinstance(data, dict):
+        returned_label = data.get("label", "")
+        if isinstance(returned_label, str) and returned_label:
+            exp = expected_label.lower()
+            ret = returned_label.lower()
+            if exp not in ret and ret not in exp:
+                print(f"[VLM] Label mismatch: expected '{expected_label}', "
+                      f"got '{returned_label}' — rejecting")
+                return None
+
+    try:
         result = _parse_bbox_or_center(data)
         if result is None:
             return None
@@ -924,6 +984,7 @@ command_ts = 0            # timestamp from chat for KPI
 mask_bbox = None          # (x_min, y_min, x_max, y_max) pixel bbox of segmented object
 last_vlm_place_bbox = None  # VLM-returned bbox for place target
 vlm_locate_retries = 0     # retry counter for VLM locate failures
+place_locate_retries = 0   # retry counter for place VLM locate failures
 retries_left = 0          # retry counter for segmentation/locate failures
 MAX_RETRIES = 1           # how many times to retry before giving up
 
@@ -1099,11 +1160,8 @@ for event in node:
                 mask_h = int(mask_meta.get("height", HEIGHT))
                 mask_raw = event["value"].to_numpy(zero_copy_only=False)
                 if mask_raw.size == 0 or mask_raw.size < mask_h * mask_w:
-                    print("  [Place] SAM3 returned empty mask, falling back to grasp-only")
-                    node.send_output("status", pa.array([f"Place target '{PLACE_CONTAINER}' not found, grasp-only"]))
-                    grasp_json = json.dumps(best_grasp_result)
-                    print(f"  Grasp result: {grasp_json}")
-                    node.send_output("grasp_result", pa.array([grasp_json]))
+                    print(f"  [Place] SAM3 returned empty mask for '{PLACE_CONTAINER}', aborting")
+                    node.send_output("status", pa.array([f"Failed: place target '{PLACE_CONTAINER}' not found"]))
                     best_grasp_result = None
                     frame_count += 1
                     state = STATE_IDLE
@@ -1149,12 +1207,8 @@ for event in node:
                 print(f"  [Place] Container mask: {n_mask} pixels")
 
                 if n_mask < 100:
-                    # Empty mask — send grasp-only result
-                    print("  [Place] Container mask too small, falling back to grasp-only")
-                    node.send_output("status", pa.array([f"Place target '{PLACE_CONTAINER}' not found, grasp-only"]))
-                    grasp_json = json.dumps(best_grasp_result)
-                    print(f"  Grasp result: {grasp_json}")
-                    node.send_output("grasp_result", pa.array([grasp_json]))
+                    print(f"  [Place] Container mask too small ({n_mask}px) for '{PLACE_CONTAINER}', aborting")
+                    node.send_output("status", pa.array([f"Failed: place target '{PLACE_CONTAINER}' not found"]))
                     best_grasp_result = None
                     frame_count += 1
                     state = STATE_IDLE
@@ -1354,7 +1408,7 @@ for event in node:
             if state == STATE_SAM3_VLM_LOCATE:
                 print(f"[SAM3] Raw VLM locate response: {text[:300]}")
                 pick_coords = None
-                result = parse_locate_response(text)
+                result = parse_locate_response(text, expected_label=TARGET_OBJECT)
                 if result is not None and result[0] >= 0:
                     pick_coords = result
 
@@ -1403,7 +1457,7 @@ for event in node:
                             place_center = place_px
                             print(f"[Pass 1] Place '{PLACE_CONTAINER}' at ({place_px[0]:.0f}, {place_px[1]:.0f})")
                 if pick_coords is None:
-                    result = parse_locate_response(text)
+                    result = parse_locate_response(text, expected_label=TARGET_OBJECT)
                     if result is not None and result[0] >= 0:
                         pick_coords = result
                 if pick_coords is None:
@@ -1559,20 +1613,18 @@ for event in node:
             elif state == STATE_PLACE_VLM_LOCATE:
                 # VLM returns 0-1000 normalized coords — refine via SAM3
                 print(f"  [Place] Raw VLM response: {text[:500]}")
-                result = parse_locate_response(text)
+                result = parse_locate_response(text, expected_label=PLACE_CONTAINER)
                 if result is not None:
                     place_cx, place_cy = result
                     if place_cx < 0 or place_cy < 0:
-                        print(f"  [Place] VLM says '{PLACE_CONTAINER}' not found, falling back to grasp-only")
-                        node.send_output("status", pa.array([f"Place target '{PLACE_CONTAINER}' not found, grasp-only"]))
-                        grasp_json = json.dumps(best_grasp_result)
-                        print(f"  Grasp result: {grasp_json}")
-                        node.send_output("grasp_result", pa.array([grasp_json]))
+                        print(f"  [Place] VLM says '{PLACE_CONTAINER}' not found, aborting")
+                        node.send_output("status", pa.array([f"Failed: place target '{PLACE_CONTAINER}' not found"]))
                         best_grasp_result = None
                         frame_count += 1
                         state = STATE_IDLE
                         continue
                     # Refine VLM point with SAM3 segmentation → bbox center
+                    place_locate_retries = 0
                     place_vlm_point = (place_cx, place_cy)
                     print(f"  [Place] VLM located '{PLACE_CONTAINER}' at ({place_cx:.0f},{place_cy:.0f}), refining with SAM3...")
                     node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
@@ -1592,12 +1644,21 @@ for event in node:
                                          {"image_id": "image", "text": PLACE_CONTAINER})
                     state = STATE_PLACE_SAM3_PENDING
                 else:
-                    # VLM failed — retry VLM locate
-                    print(f"  [Place] Failed to parse VLM location, retrying...")
-                    node.send_output("status", pa.array([f"Locating '{PLACE_CONTAINER}'..."]))
-                    prompt = PLACE_LOCATE_PROMPT_TEMPLATE.format(container_name=PLACE_CONTAINER)
-                    send_vlm_request(node, img, prompt)
-                    # Stay in STATE_PLACE_VLM_LOCATE to retry
+                    # VLM failed — retry VLM locate (with limit)
+                    place_locate_retries += 1
+                    if place_locate_retries <= 3:
+                        print(f"  [Place] Failed to parse VLM location, retrying ({place_locate_retries}/3)...")
+                        node.send_output("status", pa.array([f"Locating '{PLACE_CONTAINER}'..."]))
+                        prompt = PLACE_LOCATE_PROMPT_TEMPLATE.format(container_name=PLACE_CONTAINER)
+                        send_vlm_request(node, img, prompt)
+                        # Stay in STATE_PLACE_VLM_LOCATE to retry
+                    else:
+                        print(f"  [Place] VLM locate failed after 3 retries, aborting")
+                        place_locate_retries = 0
+                        node.send_output("status", pa.array([f"Failed: place target '{PLACE_CONTAINER}' not found"]))
+                        best_grasp_result = None
+                        frame_count += 1
+                        state = STATE_IDLE
 
             else:
                 print(f"VLM response in unexpected state {state}, ignoring")

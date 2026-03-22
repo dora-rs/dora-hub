@@ -835,6 +835,8 @@ def plan_grasp_from_pixels(
     table_polygon=None,
     place_uv=None,
     place_mask_bbox=None,
+    place_mask=None,
+    pick_mask=None,
     pin_ik=None,
     trac_ik_solver=None,
     trac_ik_dist=None,
@@ -953,6 +955,8 @@ def plan_grasp_from_pixels(
             approach_margin=APPROACH_MARGIN,
             jaw_contact_depth=JAW_CONTACT_DEPTH,
             mask_bbox=place_mask_bbox,
+            place_mask=place_mask,
+            pick_mask=pick_mask,
         )
         if place_result is not None:
             place_xyzrpy, preplace_xyzrpy = place_result
@@ -1018,12 +1022,61 @@ def plan_grasp_from_pixels(
             mid_u, mid_v = (iu1 + iu2) // 2, (iv1 + iv2) // 2
             cv2.putText(debug_img, "PICK", (mid_u - 20, mid_v - 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            # Draw place point — blue
+            # Draw free/occupied space within container and corrected place target
+            if place_mask is not None and place_xyzrpy is not None:
+                from .grasp_utils import find_free_place_target
+                fp_result = find_free_place_target(
+                    place_mask, latest_depth, fx, fy, cx, cy,
+                    cam_t, cam_rot, pick_mask=pick_mask, width=w, height=h,
+                )
+                if fp_result is not None:
+                    pm_2d = place_mask if place_mask.ndim == 2 else place_mask.reshape(h, w)
+                    place_bin = (pm_2d > 0).astype(np.uint8)
+                    depth_2d_dbg = latest_depth.reshape(h, w).astype(np.float32)
+                    valid_dbg = (depth_2d_dbg > 100) & (depth_2d_dbg < 5000) & (place_bin > 0)
+                    depths_dbg = depth_2d_dbg[valid_dbg]
+                    if len(depths_dbg) > 0:
+                        floor_d = np.percentile(depths_dbg, 85)
+                        free_px = (np.abs(depth_2d_dbg - floor_d) <= 15) & valid_dbg
+                        occupied_px = valid_dbg & ~free_px
+                        # Green overlay for free space
+                        green_overlay = np.zeros_like(debug_img)
+                        green_overlay[:, :] = (0, 200, 0)
+                        debug_img[free_px] = cv2.addWeighted(
+                            debug_img, 0.6, green_overlay, 0.4, 0)[free_px]
+                        # Red overlay for occupied space
+                        red_overlay = np.zeros_like(debug_img)
+                        red_overlay[:, :] = (0, 0, 200)
+                        debug_img[occupied_px] = cv2.addWeighted(
+                            debug_img, 0.6, red_overlay, 0.4, 0)[occupied_px]
+                    fp_u, fp_v, _, fits = fp_result
+                    # Stamp pick mask outline at the chosen place position
+                    if pick_mask is not None and fits:
+                        pk_2d = pick_mask if pick_mask.ndim == 2 else pick_mask.reshape(h, w)
+                        pk_bin = (pk_2d > 0).astype(np.uint8)
+                        pk_ys, pk_xs = np.where(pk_bin > 0)
+                        if len(pk_ys) > 0:
+                            pk_cy, pk_cx = int(pk_ys.mean()), int(pk_xs.mean())
+                            dy, dx = fp_v - pk_cy, fp_u - pk_cx
+                            # Create shifted mask and draw its contour
+                            M = np.float32([[1, 0, dx], [0, 1, dy]])
+                            shifted_mask = cv2.warpAffine(pk_bin, M, (w, h))
+                            cnts_pk, _ = cv2.findContours(shifted_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            cv2.drawContours(debug_img, cnts_pk, -1, (0, 255, 255), 3)
+                    # Draw corrected place target crosshair
+                    label = "PLACE(free)" if fits else "PLACE(no-fit)"
+                    sz = 18
+                    cv2.line(debug_img, (fp_u - sz, fp_v), (fp_u + sz, fp_v), (0, 200, 255), 3)
+                    cv2.line(debug_img, (fp_u, fp_v - sz), (fp_u, fp_v + sz), (0, 200, 255), 3)
+                    cv2.circle(debug_img, (fp_u, fp_v), 14, (0, 200, 255), 2)
+                    cv2.putText(debug_img, label, (fp_u - 50, fp_v - 22),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+            # Draw original place point — blue
             if place_uv is not None:
                 pu, pv = int(round(place_uv[0])), int(round(place_uv[1]))
                 cv2.circle(debug_img, (pu, pv), 12, (255, 100, 0), 2)
-                cv2.putText(debug_img, "PLACE", (pu - 25, pv - 18),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 0), 2)
+                cv2.putText(debug_img, "PLACE(orig)", (pu - 40, pv - 18),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 0), 2)
             # Draw place mask bbox — cyan
             if place_mask_bbox is not None:
                 x0, y0, x1, y1 = [int(v) for v in place_mask_bbox]
@@ -1367,8 +1420,8 @@ def _build_pick_place_trajectory(
         seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, safe_z=True, position_only=True)
         q_prev = _append(seg1, skip_first=False)
 
-    # Phase 2: pre-grasp → grasp (short descent)
-    seg2 = _cartesian_segment("Phase 2: pre-grasp -> grasp", q_prev, q_grasp, horiz_grip=True)
+    # Phase 2: pre-grasp → grasp (short descent, slow)
+    seg2 = _cartesian_segment("Phase 2: pre-grasp -> grasp", q_prev, q_grasp, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0)
     q_prev = _append(seg2)
 
     # Dwell at grasp (hold for gripper close)
@@ -1381,8 +1434,8 @@ def _build_pick_place_trajectory(
         seg3 = _cartesian_segment("Phase 3: grasp -> pre-place", q_prev, q_preplace, safe_z=True, horiz_grip=True)
         q_prev = _append(seg3)
 
-        # Phase 4: pre-place → place (descent)
-        seg4 = _cartesian_segment("Phase 4: pre-place -> place", q_prev, q_place, horiz_grip=True)
+        # Phase 4: pre-place → place (descent, slow)
+        seg4 = _cartesian_segment("Phase 4: pre-place -> place", q_prev, q_place, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0)
         q_prev = _append(seg4)
 
         # Dwell at place (hold for gripper open)
@@ -2131,6 +2184,39 @@ def main():
                     place_mask_bbox = [int(x) for x in place_bbox_data]
                     print(f"[motion-planner] grasp_result: place_mask_bbox={place_mask_bbox}")
 
+                # Load SAM3 masks from disk for free-space place targeting
+                loaded_place_mask = None
+                loaded_pick_mask = None
+                if place_uv is not None and EXPORT_DIR:
+                    import glob as _g_mask
+                    search_dirs = [Path(EXPORT_DIR).parent, Path(EXPORT_DIR).parent.resolve()]
+                    # Load place mask
+                    place_mask_files = []
+                    for sd in search_dirs:
+                        place_mask_files.extend(sorted(_g_mask.glob(str(sd / "critic_place_mask_*.png"))))
+                    if place_mask_files:
+                        import cv2 as _cv2_mask
+                        pm = _cv2_mask.imread(str(place_mask_files[-1]), _cv2_mask.IMREAD_GRAYSCALE)
+                        if pm is not None:
+                            w_img, h_img = latest_image_size
+                            if pm.shape[:2] != (h_img, w_img):
+                                pm = _cv2_mask.resize(pm, (w_img, h_img), interpolation=_cv2_mask.INTER_NEAREST)
+                            loaded_place_mask = pm
+                            print(f"[motion-planner] Loaded place mask: {place_mask_files[-1]}")
+                    # Load pick mask
+                    pick_mask_files = []
+                    for sd in search_dirs:
+                        pick_mask_files.extend(sorted(_g_mask.glob(str(sd / "critic_mask_*.png"))))
+                    if pick_mask_files:
+                        import cv2 as _cv2_mask
+                        pkm = _cv2_mask.imread(str(pick_mask_files[-1]), _cv2_mask.IMREAD_GRAYSCALE)
+                        if pkm is not None:
+                            w_img, h_img = latest_image_size
+                            if pkm.shape[:2] != (h_img, w_img):
+                                pkm = _cv2_mask.resize(pkm, (w_img, h_img), interpolation=_cv2_mask.INTER_NEAREST)
+                            loaded_pick_mask = pkm
+                            print(f"[motion-planner] Loaded pick mask: {pick_mask_files[-1]}")
+
                 # Save debug image with pick/place targets (before IK, always saved)
                 if EXPORT_DIR and latest_image is not None:
                     try:
@@ -2179,41 +2265,74 @@ def main():
                                     debug_img, 0.75, green, 0.25, 0)[mask_img > 0]
                                 cnts, _ = cv2.findContours(mask_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                                 cv2.drawContours(debug_img, cnts, -1, (0, 255, 0), 2)
+                        # Draw original place point
                         if place_uv is not None:
                             pu, pv = int(round(place_uv[0])), int(round(place_uv[1]))
                             cv2.circle(debug_img, (pu, pv), 12, (255, 100, 0), 2)
-                            cv2.putText(debug_img, "PLACE", (pu - 25, pv - 18),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 0), 2)
-                        # Draw place mask bbox — cyan
+                            cv2.putText(debug_img, "PLACE(orig)", (pu - 45, pv - 18),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 0), 2)
+                        # Draw place mask bbox
                         if place_mask_bbox is not None:
                             x0, y0, x1, y1 = [int(v) for v in place_mask_bbox]
-                            cv2.rectangle(debug_img, (x0, y0), (x1, y1), (255, 255, 0), 2)
-                        # Overlay place mask or bbox as semi-transparent cyan
-                        place_mask_drawn = False
-                        place_mask_files = []
-                        for sd in search_dirs:
-                            place_mask_files.extend(sorted(_g.glob(str(sd / "critic_place_mask_*.png"))))
-                        if place_mask_files:
-                            place_mask_path = str(place_mask_files[-1])
-                            if os.path.exists(place_mask_path):
-                                place_mask_img = cv2.imread(place_mask_path, cv2.IMREAD_GRAYSCALE)
-                                if place_mask_img is not None:
-                                    if place_mask_img.shape[:2] != debug_img.shape[:2]:
-                                        place_mask_img = cv2.resize(place_mask_img, (debug_img.shape[1], debug_img.shape[0]),
-                                                                    interpolation=cv2.INTER_NEAREST)
-                                    cyan = np.zeros_like(debug_img)
-                                    cyan[:, :] = (255, 150, 0)
-                                    debug_img[place_mask_img > 0] = cv2.addWeighted(
-                                        debug_img, 0.75, cyan, 0.25, 0)[place_mask_img > 0]
-                                    cnts, _ = cv2.findContours(place_mask_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                                    cv2.drawContours(debug_img, cnts, -1, (255, 150, 0), 2)
-                                    place_mask_drawn = True
-                        # Fallback: fill place bbox with semi-transparent cyan
-                        if not place_mask_drawn and place_mask_bbox is not None:
-                            x0, y0, x1, y1 = [int(v) for v in place_mask_bbox]
-                            overlay = debug_img.copy()
-                            cv2.rectangle(overlay, (x0, y0), (x1, y1), (255, 150, 0), -1)
-                            debug_img = cv2.addWeighted(debug_img, 0.8, overlay, 0.2, 0)
+                            cv2.rectangle(debug_img, (x0, y0), (x1, y1), (255, 255, 0), 1)
+                        # Free-space visualization within container
+                        if loaded_place_mask is not None and place_uv is not None and latest_depth is not None:
+                            from .grasp_utils import find_free_place_target
+                            w_d, h_d = latest_image_size
+                            fx_d, fy_d, cx_d, cy_d = latest_intrinsics
+                            fp_dbg = find_free_place_target(
+                                loaded_place_mask, latest_depth, fx_d, fy_d, cx_d, cy_d,
+                                cam_t, cam_rot, pick_mask=loaded_pick_mask,
+                                width=w_d, height=h_d,
+                            )
+                            if fp_dbg is not None:
+                                pm_2d = loaded_place_mask
+                                place_bin = (pm_2d > 0).astype(np.uint8)
+                                depth_2d_dbg = latest_depth.reshape(h_d, w_d).astype(np.float32)
+                                valid_dbg = (depth_2d_dbg > 100) & (depth_2d_dbg < 5000) & (place_bin > 0)
+                                depths_dbg = depth_2d_dbg[valid_dbg]
+                                if len(depths_dbg) > 0:
+                                    floor_d = np.percentile(depths_dbg, 85)
+                                    free_px = (np.abs(depth_2d_dbg - floor_d) <= 15) & valid_dbg
+                                    occupied_px = valid_dbg & ~free_px
+                                    # Green overlay for free space
+                                    green_ov = np.zeros_like(debug_img)
+                                    green_ov[:, :] = (0, 200, 0)
+                                    debug_img[free_px] = cv2.addWeighted(
+                                        debug_img, 0.6, green_ov, 0.4, 0)[free_px]
+                                    # Red overlay for occupied space
+                                    red_ov = np.zeros_like(debug_img)
+                                    red_ov[:, :] = (0, 0, 200)
+                                    debug_img[occupied_px] = cv2.addWeighted(
+                                        debug_img, 0.6, red_ov, 0.4, 0)[occupied_px]
+                                # Draw container contour
+                                cnts_c, _ = cv2.findContours(place_bin, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                cv2.drawContours(debug_img, cnts_c, -1, (255, 150, 0), 2)
+                                fp_u, fp_v, _, fits = fp_dbg
+                                # Stamp pick mask outline at placement position
+                                if loaded_pick_mask is not None and fits:
+                                    pk_bin = (loaded_pick_mask > 0).astype(np.uint8)
+                                    pk_ys, pk_xs = np.where(pk_bin > 0)
+                                    if len(pk_ys) > 0:
+                                        pk_cy, pk_cx = int(pk_ys.mean()), int(pk_xs.mean())
+                                        dy, dx = fp_v - pk_cy, fp_u - pk_cx
+                                        M = np.float32([[1, 0, dx], [0, 1, dy]])
+                                        shifted_m = cv2.warpAffine(pk_bin, M, (w_d, h_d))
+                                        cnts_pk, _ = cv2.findContours(shifted_m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                        cv2.drawContours(debug_img, cnts_pk, -1, (0, 255, 255), 3)
+                                # Crosshair at corrected place target
+                                label = "PLACE(free)" if fits else "PLACE(no-fit)"
+                                sz = 18
+                                cv2.line(debug_img, (fp_u - sz, fp_v), (fp_u + sz, fp_v), (0, 200, 255), 3)
+                                cv2.line(debug_img, (fp_u, fp_v - sz), (fp_u, fp_v + sz), (0, 200, 255), 3)
+                                cv2.circle(debug_img, (fp_u, fp_v), 14, (0, 200, 255), 2)
+                                cv2.putText(debug_img, label, (fp_u - 50, fp_v - 22),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 200, 255), 2)
+                        elif loaded_place_mask is not None:
+                            # Fallback: just draw place mask contour
+                            place_bin_f = (loaded_place_mask > 0).astype(np.uint8)
+                            cnts_f, _ = cv2.findContours(place_bin_f, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                            cv2.drawContours(debug_img, cnts_f, -1, (255, 150, 0), 2)
                         # Arm label
                         cv2.putText(debug_img, f"arm={metadata.get('arm', '?')}", (10, 25),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
@@ -2297,6 +2416,8 @@ def main():
                         table_polygon=table_polygon,
                         place_uv=place_uv,
                         place_mask_bbox=place_mask_bbox,
+                        place_mask=loaded_place_mask,
+                        pick_mask=loaded_pick_mask,
                         pin_ik=arm.pin_ik,
                         trac_ik_solver=arm.trac_ik,
                         trac_ik_dist=arm.trac_ik_dist,
