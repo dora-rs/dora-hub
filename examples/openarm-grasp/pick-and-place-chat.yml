@@ -124,6 +124,7 @@ nodes:
       - gripper_command
       - trajectory_status
       - trajectory_json
+      - debug_image
     env:
       URDF_PATH: "../openarm/openarm_v10.urdf"
       LEFT_END_EFFECTOR_LINK: "openarm_left_hand_tcp"
@@ -194,3 +195,14 @@ nodes:
       IMAGE_WIDTH: "1280"
       IMAGE_HEIGHT: "720"
       OUTPUT_DIR: "."
+
+  # --- Debug Image MoQ Publisher ---
+  - id: debug_image_pub
+    path: ../../target/release/dora-moq-image
+    inputs:
+      image: motion_planner/debug_image
+    env:
+      MOQ_RELAY: "https://cdn.1ms.ai"
+      MOQ_PATH: "anon/debug-image"
+      IMAGE_WIDTH: "1280"
+      IMAGE_HEIGHT: "720"

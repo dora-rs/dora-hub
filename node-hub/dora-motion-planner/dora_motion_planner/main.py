@@ -2225,6 +2225,9 @@ def main():
                         latest_path = str(Path(EXPORT_DIR) / "pick_place_targets.png")
                         cv2.imwrite(latest_path, debug_img)
                         print(f"[motion-planner] Debug image: {debug_path}")
+                        # Send debug image to MoQ publisher (BGR→RGB)
+                        debug_rgb = cv2.cvtColor(debug_img, cv2.COLOR_BGR2RGB)
+                        node.send_output("debug_image", pa.array(debug_rgb.ravel()))
                     except Exception as e:
                         print(f"[motion-planner] Debug image failed: {e}")
 

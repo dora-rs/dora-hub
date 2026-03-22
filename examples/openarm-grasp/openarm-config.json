@@ -44,7 +44,14 @@
       }
     }
   ],
-  "cameras": [],
+  "cameras": [
+    {
+      "id": "debug",
+      "enabled": true,
+      "label": "Debug Image",
+      "path": "anon/debug-image"
+    }
+  ],
   "audio": {
     "path": "anon/openarm-audio",
     "enabled": true
