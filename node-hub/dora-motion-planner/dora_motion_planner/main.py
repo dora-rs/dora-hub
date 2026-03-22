@@ -2187,7 +2187,33 @@ def main():
                         # Draw place mask bbox — cyan
                         if place_mask_bbox is not None:
                             x0, y0, x1, y1 = [int(v) for v in place_mask_bbox]
-                            cv2.rectangle(debug_img, (x0, y0), (x1, y1), (255, 255, 0), 1)
+                            cv2.rectangle(debug_img, (x0, y0), (x1, y1), (255, 255, 0), 2)
+                        # Overlay place mask or bbox as semi-transparent cyan
+                        place_mask_drawn = False
+                        place_mask_files = []
+                        for sd in search_dirs:
+                            place_mask_files.extend(sorted(_g.glob(str(sd / "critic_place_mask_*.png"))))
+                        if place_mask_files:
+                            place_mask_path = str(place_mask_files[-1])
+                            if os.path.exists(place_mask_path):
+                                place_mask_img = cv2.imread(place_mask_path, cv2.IMREAD_GRAYSCALE)
+                                if place_mask_img is not None:
+                                    if place_mask_img.shape[:2] != debug_img.shape[:2]:
+                                        place_mask_img = cv2.resize(place_mask_img, (debug_img.shape[1], debug_img.shape[0]),
+                                                                    interpolation=cv2.INTER_NEAREST)
+                                    cyan = np.zeros_like(debug_img)
+                                    cyan[:, :] = (255, 150, 0)
+                                    debug_img[place_mask_img > 0] = cv2.addWeighted(
+                                        debug_img, 0.75, cyan, 0.25, 0)[place_mask_img > 0]
+                                    cnts, _ = cv2.findContours(place_mask_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                    cv2.drawContours(debug_img, cnts, -1, (255, 150, 0), 2)
+                                    place_mask_drawn = True
+                        # Fallback: fill place bbox with semi-transparent cyan
+                        if not place_mask_drawn and place_mask_bbox is not None:
+                            x0, y0, x1, y1 = [int(v) for v in place_mask_bbox]
+                            overlay = debug_img.copy()
+                            cv2.rectangle(overlay, (x0, y0), (x1, y1), (255, 150, 0), -1)
+                            debug_img = cv2.addWeighted(debug_img, 0.8, overlay, 0.2, 0)
                         # Arm label
                         cv2.putText(debug_img, f"arm={metadata.get('arm', '?')}", (10, 25),
                                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)

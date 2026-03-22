@@ -54,12 +54,11 @@ GRIPPER_COLOR_RGB = (0, 220, 0)
 
 # --- Prompts ---
 LOCATE_PROMPT_TEMPLATE = (
-    "You are a robot vision system. Find the geometric center of "
-    "{object_name} in this image. This center point will be used to "
-    "segment the full object, so it must be in the middle of the object. "
-    "Use normalized coordinates from 0 to 1000 where (0,0) is top-left "
-    "and (1000,1000) is bottom-right. cx and cy must each be a single integer. "
-    'Output ONLY JSON: {{"cx": 500, "cy": 500}} (replace with actual values)'
+    "You are a robot vision system. Find {object_name} in this image and output "
+    "its bounding box. Use normalized coordinates from 0 to 1000 where "
+    "(0,0) is top-left and (1000,1000) is bottom-right. "
+    'Output ONLY JSON: {{"x_min": 0, "y_min": 0, "x_max": 1000, "y_max": 1000}} '
+    "(replace with actual normalized values of the tight bounding box around the object)"
 )
 
 RATE_PROMPT_TEMPLATE = (
@@ -77,19 +76,19 @@ RATE_PROMPT_TEMPLATE = (
 
 PLACE_LOCATE_PROMPT_TEMPLATE = (
     "Look at this image carefully. Where is {container_name}? "
-    "Give the center coordinates as integers in normalized 0-1000 space "
-    "where (0,0) is top-left and (1000,1000) is bottom-right. "
-    'If you can see it, output ONLY JSON: {{"cx": <0-1000>, "cy": <0-1000>}}\n'
-    'If it is NOT in the image, output ONLY JSON: {{"cx": -1, "cy": -1}}'
+    "Output its bounding box. Use normalized coordinates from 0 to 1000 where "
+    "(0,0) is top-left and (1000,1000) is bottom-right. "
+    'If you can see it, output ONLY JSON: {{"x_min": 0, "y_min": 0, "x_max": 1000, "y_max": 1000}}\n'
+    'If it is NOT in the image, output ONLY JSON: {{"x_min": -1, "y_min": -1, "x_max": -1, "y_max": -1}}'
 )
 
 LOCATE_BOTH_PROMPT_TEMPLATE = (
-    "You are a robot vision system. Find the geometric centers of two objects:\n"
-    "1. {pick_name} (the object to pick up)\n"
-    "2. {place_name} (the place target)\n"
-    "Use normalized coordinates from 0 to 1000 where (0,0) is top-left "
-    "and (1000,1000) is bottom-right.\n"
-    'Output ONLY JSON: {{"pick": {{"cx": 500, "cy": 500}}, "place": {{"cx": 500, "cy": 500}}}}'
+    "You are a robot vision system. Find two objects and output their bounding boxes. "
+    "Use normalized coordinates from 0 to 1000 where (0,0) is top-left and (1000,1000) is bottom-right.\n"
+    "1. {pick_name} — the object to pick up\n"
+    "2. {place_name} — the place target\n"
+    'Output ONLY JSON: {{"pick": {{"x_min": 0, "y_min": 0, "x_max": 1000, "y_max": 1000}}, '
+    '"place": {{"x_min": 0, "y_min": 0, "x_max": 1000, "y_max": 1000}}}}'
 )
 
 
@@ -135,16 +134,16 @@ def send_vlm_request(node, image_rgb, prompt_text):
 
 
 def parse_locate_response(text):
-    """Extract center coordinates from VLM response -> (cx_px, cy_px) or None.
+    """Extract center + optional bbox from VLM response -> (cx_px, cy_px) or None.
 
-    VLM returns 0-1000 normalized coords; this converts to pixel coordinates.
-    Handles various VLM output formats:
-      {"cx": 500, "cy": 500}
-      {"cx": [500, 500]}         — both coords in one field
-      {"center": [500, 500]}
-      {"x": 500, "y": 500}
-    Returns pixel coordinates (converted from 0-1000 space).
+    Handles both new bbox format and legacy center-point format:
+      {"x_min": N, "y_min": N, "x_max": N, "y_max": N}   — pixel bbox (preferred)
+      {"cx": N, "cy": N}                                    — legacy 0-1000 normalized
+    Returns (cx_px, cy_px) in pixel coordinates, or None.
+    Also sets last_vlm_bbox global when a bbox is parsed.
     """
+    global last_vlm_bbox
+    last_vlm_bbox = None
     text = strip_think_tags(text)
     start = text.find("{")
     end = text.rfind("}") + 1
@@ -152,44 +151,76 @@ def parse_locate_response(text):
         return None
     try:
         data = json.loads(text[start:end])
-
-        cx_norm, cy_norm = None, None
-
-        # Try standard {"cx": N, "cy": N}
-        if "cx" in data and "cy" in data:
-            cx_raw, cy_raw = data["cx"], data["cy"]
-            cx_norm = float(cx_raw[0]) if isinstance(cx_raw, list) else float(cx_raw)
-            cy_norm = float(cy_raw[0]) if isinstance(cy_raw, list) else float(cy_raw)
-        # Try {"cx": [x, y]} — both packed in one field
-        elif "cx" in data and isinstance(data["cx"], list) and len(data["cx"]) >= 2:
-            cx_norm, cy_norm = float(data["cx"][0]), float(data["cx"][1])
-        # Try {"center": [x, y]}
-        elif "center" in data and isinstance(data["center"], list):
-            cx_norm, cy_norm = float(data["center"][0]), float(data["center"][1])
-        # Try {"x": N, "y": N}
-        elif "x" in data and "y" in data:
-            cx_norm, cy_norm = float(data["x"]), float(data["y"])
-
-        if cx_norm is None or cy_norm is None:
+        result = _parse_bbox_or_center(data)
+        if result is None:
             return None
-        # Preserve negative values (used as "not found" signal)
-        if cx_norm < 0 or cy_norm < 0:
-            return cx_norm, cy_norm
-        # Convert 0-1000 normalized → pixel and clamp to image bounds
-        cx_px = max(0.0, min(cx_norm * WIDTH / 1000.0, WIDTH - 1))
-        cy_px = max(0.0, min(cy_norm * HEIGHT / 1000.0, HEIGHT - 1))
-        return cx_px, cy_px
+        cx, cy, bbox = result
+        if cx < 0 or cy < 0:
+            return cx, cy
+        last_vlm_bbox = bbox
+        return cx, cy
     except (json.JSONDecodeError, KeyError, TypeError, ValueError, IndexError):
         return None
 
 
-def parse_locate_both_response(text):
-    """Parse VLM response with both pick and place coordinates.
+# Global to store the last VLM-returned bounding box (set by parse_locate_response)
+last_vlm_bbox = None
 
-    Expected format: {"pick": {"cx": N, "cy": N}, "place": {"cx": N, "cy": N}}
+
+def _parse_bbox_or_center(data):
+    """Parse a single object dict — bbox or legacy center point.
+    Returns (cx_px, cy_px, bbox_or_None) where bbox = (x_min, y_min, x_max, y_max)."""
+    if not isinstance(data, dict):
+        return None
+    try:
+        # Bounding box format (0-1000 normalized, converted to pixel)
+        if "x_min" in data and "y_min" in data and "x_max" in data and "y_max" in data:
+            x_min_n = float(data["x_min"])
+            y_min_n = float(data["y_min"])
+            x_max_n = float(data["x_max"])
+            y_max_n = float(data["y_max"])
+            if x_min_n < 0 or y_min_n < 0:
+                return x_min_n, y_min_n, None
+            x_min = max(0, min(x_min_n * WIDTH / 1000.0, WIDTH - 1))
+            y_min = max(0, min(y_min_n * HEIGHT / 1000.0, HEIGHT - 1))
+            x_max = max(0, min(x_max_n * WIDTH / 1000.0, WIDTH - 1))
+            y_max = max(0, min(y_max_n * HEIGHT / 1000.0, HEIGHT - 1))
+            cx = (x_min + x_max) / 2.0
+            cy = (y_min + y_max) / 2.0
+            return cx, cy, (x_min, y_min, x_max, y_max)
+
+        # Legacy center-point format (0-1000 normalized)
+        cx_norm, cy_norm = None, None
+        if "cx" in data and "cy" in data:
+            cx_raw, cy_raw = data["cx"], data["cy"]
+            cx_norm = float(cx_raw[0]) if isinstance(cx_raw, list) else float(cx_raw)
+            cy_norm = float(cy_raw[0]) if isinstance(cy_raw, list) else float(cy_raw)
+        elif "x" in data and "y" in data:
+            cx_norm, cy_norm = float(data["x"]), float(data["y"])
+        elif "center" in data and isinstance(data["center"], list):
+            cx_norm, cy_norm = float(data["center"][0]), float(data["center"][1])
+
+        if cx_norm is None or cy_norm is None:
+            return None
+        if cx_norm < 0 or cy_norm < 0:
+            return cx_norm, cy_norm, None
+        cx_px = max(0.0, min(cx_norm * WIDTH / 1000.0, WIDTH - 1))
+        cy_px = max(0.0, min(cy_norm * HEIGHT / 1000.0, HEIGHT - 1))
+        return cx_px, cy_px, None
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def parse_locate_both_response(text):
+    """Parse VLM response with both pick and place bboxes/centers.
+
+    Handles both new bbox format and legacy center-point format.
     Returns (pick_px, place_px) where each is (cx_px, cy_px), or None on failure.
-    place_px may be None if only pick was found.
+    Also sets last_vlm_bbox and last_vlm_place_bbox globals.
     """
+    global last_vlm_bbox, last_vlm_place_bbox
+    last_vlm_bbox = None
+    last_vlm_place_bbox = None
     text = strip_think_tags(text)
     start = text.find("{")
     end = text.rfind("}") + 1
@@ -200,42 +231,25 @@ def parse_locate_both_response(text):
     except (json.JSONDecodeError, ValueError):
         return None
 
-    def _to_float(v):
-        """Convert value to float, handling lists like [500]."""
-        if isinstance(v, (list, tuple)):
-            return float(v[0]) if v else None
-        return float(v)
-
-    def _extract(obj):
-        if not isinstance(obj, dict):
-            return None
-        try:
-            if "cx" in obj and "cy" in obj:
-                return _to_float(obj["cx"]), _to_float(obj["cy"])
-            if "x" in obj and "y" in obj:
-                return _to_float(obj["x"]), _to_float(obj["y"])
-            if "center" in obj and isinstance(obj["center"], list) and len(obj["center"]) >= 2:
-                return float(obj["center"][0]), float(obj["center"][1])
-        except (TypeError, ValueError, IndexError):
-            return None
+    pick_data = data.get("pick")
+    if not isinstance(pick_data, dict):
         return None
-
-    def _to_px(cx_norm, cy_norm):
-        if cx_norm < 0 or cy_norm < 0:
-            return cx_norm, cy_norm
-        cx_px = max(0.0, min(cx_norm * WIDTH / 1000.0, WIDTH - 1))
-        cy_px = max(0.0, min(cy_norm * HEIGHT / 1000.0, HEIGHT - 1))
-        return cx_px, cy_px
-
-    pick_raw = _extract(data.get("pick")) if isinstance(data.get("pick"), dict) else None
-    if pick_raw is None:
+    pick_result = _parse_bbox_or_center(pick_data)
+    if pick_result is None:
         return None
-    pick_px = _to_px(*pick_raw)
+    pick_cx, pick_cy, pick_bbox = pick_result
+    last_vlm_bbox = pick_bbox
 
-    place_raw = _extract(data.get("place")) if isinstance(data.get("place"), dict) else None
-    place_px = _to_px(*place_raw) if place_raw else None
+    place_data = data.get("place")
+    place_px = None
+    if isinstance(place_data, dict):
+        place_result = _parse_bbox_or_center(place_data)
+        if place_result is not None:
+            place_cx, place_cy, place_bbox = place_result
+            place_px = (place_cx, place_cy)
+            last_vlm_place_bbox = place_bbox
 
-    return pick_px, place_px
+    return (pick_cx, pick_cy), place_px
 
 
 def parse_rate_response(text):
@@ -849,6 +863,7 @@ place_center = None       # (cx_px, cy_px) of the container centroid
 place_vlm_point = None    # VLM-located point for connected component filtering
 command_ts = 0            # timestamp from chat for KPI
 mask_bbox = None          # (x_min, y_min, x_max, y_max) pixel bbox of segmented object
+last_vlm_place_bbox = None  # VLM-returned bbox for place target
 retries_left = 0          # retry counter for segmentation/locate failures
 MAX_RETRIES = 1           # how many times to retry before giving up
 
@@ -872,16 +887,16 @@ def _emit_best_geo(node, img, cands, fc):
 
     if PLACE_CONTAINER:
         if place_center is not None:
-            # VLM already located the place target — use directly, skip SAM3
+            # VLM located the place target — segment with SAM3 for proper mask
             place_cx, place_cy = place_center
-            print(f"[Place] Using VLM-located point directly: ({place_cx:.0f},{place_cy:.0f})")
-            grasp["place_px"] = [round(place_cx, 1), round(place_cy, 1)]
+            best_grasp_result = grasp
+            place_vlm_point = (place_cx, place_cy)
+            print(f"[Place] Refining '{PLACE_CONTAINER}' at ({place_cx:.0f},{place_cy:.0f}) with SAM3...")
+            node.send_output("status", pa.array([f"Segmenting '{PLACE_CONTAINER}'..."]))
+            node.send_output("sam3_points", pa.array([place_cx, place_cy]),
+                             {"image_id": "image", "text": PLACE_CONTAINER})
             place_center = None
-            grasp_json = json.dumps(grasp)
-            print(f"  Grasp result: {grasp_json}")
-            node.send_output("grasp_result", pa.array([grasp_json]))
-            frame_count += 1
-            state = STATE_IDLE
+            state = STATE_PLACE_SAM3_PENDING
         else:
             # No pre-located coords — ask VLM to locate the container
             best_grasp_result = grasp
@@ -1028,6 +1043,21 @@ for event in node:
                 mask = (mask_raw.reshape((mask_h, mask_w)) > 0).astype(np.uint8) * 255
                 n_mask_raw = np.count_nonzero(mask)
 
+                # Crop place mask to VLM bbox
+                if last_vlm_place_bbox is not None:
+                    bx0 = max(0, int(last_vlm_place_bbox[0]))
+                    by0 = max(0, int(last_vlm_place_bbox[1]))
+                    bx1 = min(mask_w, int(last_vlm_place_bbox[2]) + 1)
+                    by1 = min(mask_h, int(last_vlm_place_bbox[3]) + 1)
+                    cropped = np.zeros_like(mask)
+                    cropped[by0:by1, bx0:bx1] = mask[by0:by1, bx0:bx1]
+                    n_cropped = np.count_nonzero(cropped)
+                    if n_cropped > 50:
+                        print(f"  [Place] Cropped mask to VLM bbox [{bx0},{by0},{bx1},{by1}]: "
+                              f"{n_mask_raw} -> {n_cropped} pixels")
+                        mask = cropped
+                        n_mask_raw = n_cropped
+
                 # Keep only the connected component closest to the VLM-located
                 # center.  SAM3 often returns multiple objects in one mask.
                 if place_vlm_point is not None and n_mask_raw > 0:
@@ -1089,10 +1119,21 @@ for event in node:
                     round(place_cx, 1),
                     round(place_cy, 1),
                 ]
-                grasp["place_mask_bbox"] = [
-                    int(xs.min()), int(ys.min()),
-                    int(xs.max()), int(ys.max()),
-                ]
+                # Use VLM bbox if available (more accurate), fall back to SAM3 mask extent
+                if last_vlm_place_bbox is not None:
+                    bx0, by0, bx1, by1 = last_vlm_place_bbox
+                    max_half = 200
+                    bx0 = max(bx0, place_cx - max_half)
+                    by0 = max(by0, place_cy - max_half)
+                    bx1 = min(bx1, place_cx + max_half)
+                    by1 = min(by1, place_cy + max_half)
+                    grasp["place_mask_bbox"] = [int(bx0), int(by0), int(bx1), int(by1)]
+                    print(f"  [Place] Using VLM bbox (clamped): {grasp['place_mask_bbox']}")
+                else:
+                    grasp["place_mask_bbox"] = [
+                        int(xs.min()), int(ys.min()),
+                        int(xs.max()), int(ys.max()),
+                    ]
                 grasp_json = json.dumps(grasp)
                 print(f"  Grasp result: {grasp_json}")
                 node.send_output("grasp_result", pa.array([grasp_json]))
@@ -1141,17 +1182,40 @@ for event in node:
                     state = STATE_IDLE
                 continue
             mask = (mask_raw.reshape((mask_h, mask_w)) > 0).astype(np.uint8) * 255
+            n_mask_raw = np.count_nonzero(mask)
+
+            # Crop mask to VLM bounding box to remove over-segmented regions
+            if last_vlm_bbox is not None:
+                bx0 = max(0, int(last_vlm_bbox[0]))
+                by0 = max(0, int(last_vlm_bbox[1]))
+                bx1 = min(mask_w, int(last_vlm_bbox[2]) + 1)
+                by1 = min(mask_h, int(last_vlm_bbox[3]) + 1)
+                cropped = np.zeros_like(mask)
+                cropped[by0:by1, bx0:bx1] = mask[by0:by1, bx0:bx1]
+                n_cropped = np.count_nonzero(cropped)
+                if n_cropped > 50:
+                    print(f"  Cropped mask to VLM bbox [{bx0},{by0},{bx1},{by1}]: "
+                          f"{n_mask_raw} -> {n_cropped} pixels")
+                    mask = cropped
+                else:
+                    print(f"  VLM bbox crop too small ({n_cropped}px), keeping full mask")
+
             n_mask = np.count_nonzero(mask)
             total_px = mask_w * mask_h
             mask_ratio = n_mask / total_px
             print(f"  {source_name} mask received: {n_mask} pixels ({mask_ratio:.1%} of image)")
 
             # Compute mask bounding box for object-top-Z estimation in motion planner
-            if n_mask > 0:
+            # Prefer VLM bbox (tighter) over SAM3 mask extent (may over-segment)
+            if last_vlm_bbox is not None:
+                mask_bbox = last_vlm_bbox
+                print(f"  Mask bbox (VLM): x=[{mask_bbox[0]:.0f},{mask_bbox[2]:.0f}] "
+                      f"y=[{mask_bbox[1]:.0f},{mask_bbox[3]:.0f}]")
+            elif n_mask > 0:
                 ys_m, xs_m = np.where(mask > 0)
                 mask_bbox = (float(xs_m.min()), float(ys_m.min()),
                              float(xs_m.max()), float(ys_m.max()))
-                print(f"  Mask bbox: x=[{mask_bbox[0]:.0f},{mask_bbox[2]:.0f}] "
+                print(f"  Mask bbox (SAM): x=[{mask_bbox[0]:.0f},{mask_bbox[2]:.0f}] "
                       f"y=[{mask_bbox[1]:.0f},{mask_bbox[3]:.0f}]")
             else:
                 mask_bbox = None
