@@ -139,20 +139,21 @@ def main():
 
                 n_instances = masks.shape[0]
                 img_h, img_w = masks.shape[2], masks.shape[3]
+                score_list = scores.cpu().tolist()
                 print(
                     f"[dora-sam3] Found {n_instances} instances "
-                    f"(scores: {scores.cpu().tolist()})"
+                    f"(scores: {score_list})"
                 )
 
                 if n_instances == 0:
                     node.send_output("masks", pa.array([]), {})
                     continue
 
-                # Merge all instance masks into a single binary mask
-                # (any pixel that belongs to any instance = True)
-                merged = masks[:, 0, :, :].any(dim=0).cpu().numpy().astype(np.uint8)
-                # merged shape: [H, W], values 0 or 1
-                merged *= 255  # 0/255 for consistency with dora-sam2
+                # Use highest-scoring instance instead of merging all
+                best_idx = int(scores.argmax())
+                merged = masks[best_idx, 0, :, :].cpu().numpy().astype(np.uint8)
+                merged *= 255
+                print(f"[dora-sam3] Using instance {best_idx} (score={score_list[best_idx]:.3f})")
 
                 node.send_output(
                     "masks",
@@ -201,11 +202,18 @@ def main():
                         )
 
                 masks = state.get("masks")
+                scores = state.get("scores")
                 if masks is None or masks.shape[0] == 0:
                     node.send_output("masks", pa.array([]), {})
                     continue
 
-                merged = masks[:, 0, :, :].any(dim=0).cpu().numpy().astype(np.uint8)
+                n = masks.shape[0]
+                if scores is not None and n > 1:
+                    best_idx = int(scores.argmax())
+                    print(f"[dora-sam3] Point: {n} instances, using best (idx={best_idx}, score={scores[best_idx]:.3f})")
+                    merged = masks[best_idx, 0, :, :].cpu().numpy().astype(np.uint8)
+                else:
+                    merged = masks[:, 0, :, :].any(dim=0).cpu().numpy().astype(np.uint8)
                 merged *= 255
 
                 node.send_output(
@@ -263,11 +271,18 @@ def main():
                         )
 
                 masks = state.get("masks")
+                scores = state.get("scores")
                 if masks is None or masks.shape[0] == 0:
                     node.send_output("masks", pa.array([]), {})
                     continue
 
-                merged = masks[:, 0, :, :].any(dim=0).cpu().numpy().astype(np.uint8)
+                n = masks.shape[0]
+                if scores is not None and n > 1:
+                    best_idx = int(scores.argmax())
+                    print(f"[dora-sam3] Box: {n} instances, using best (idx={best_idx}, score={scores[best_idx]:.3f})")
+                    merged = masks[best_idx, 0, :, :].cpu().numpy().astype(np.uint8)
+                else:
+                    merged = masks[:, 0, :, :].any(dim=0).cpu().numpy().astype(np.uint8)
                 merged *= 255
 
                 node.send_output(

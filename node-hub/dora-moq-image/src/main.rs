@@ -127,7 +127,7 @@ fn main() -> eyre::Result<()> {
                 if init_segment.is_none() {
                     if let Some(ref seq_hdr) = parsed.sequence_header {
                         let init = muxer.create_init_segment(seq_hdr, width, height);
-                        video_track.write(stamp(init.clone(), wall_ms));
+                        video_track.write(init.clone());
                         init_segment = Some(init);
                         println!("[dora-moq-image] Sent AV1 CMAF init segment");
                     }
@@ -143,9 +143,9 @@ fn main() -> eyre::Result<()> {
                     if let Some(ref init) = init_segment {
                         let mut combined = init.clone();
                         combined.extend_from_slice(&segment);
-                        video_track.write(stamp(combined, wall_ms));
+                        video_track.write(combined);
                     } else {
-                        video_track.write(stamp(segment, wall_ms));
+                        video_track.write(segment);
                     }
                 }
             }
