@@ -923,6 +923,7 @@ place_vlm_point = None    # VLM-located point for connected component filtering
 command_ts = 0            # timestamp from chat for KPI
 mask_bbox = None          # (x_min, y_min, x_max, y_max) pixel bbox of segmented object
 last_vlm_place_bbox = None  # VLM-returned bbox for place target
+vlm_locate_retries = 0     # retry counter for VLM locate failures
 retries_left = 0          # retry counter for segmentation/locate failures
 MAX_RETRIES = 1           # how many times to retry before giving up
 
@@ -1065,16 +1066,13 @@ for event in node:
                 )
                 place_center = None
                 locate_center = None
-                if PLACE_CONTAINER:
-                    print(f"[SAM3] Asking VLM to locate '{TARGET_OBJECT}' + '{PLACE_CONTAINER}'...")
-                    node.send_output("status", pa.array([f"Locating '{TARGET_OBJECT}' + '{PLACE_CONTAINER}'..."]))
-                    prompt = LOCATE_BOTH_PROMPT_TEMPLATE.format(
-                        pick_name=TARGET_OBJECT, place_name=PLACE_CONTAINER)
-                else:
-                    print(f"[SAM3] Asking VLM to locate '{TARGET_OBJECT}'...")
-                    node.send_output("status", pa.array([f"Locating '{TARGET_OBJECT}'..."]))
-                    prompt = LOCATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
+                # Always locate pick object alone (single-object prompt is reliable)
+                # Place will be located separately after pick is found
+                print(f"[SAM3] Asking VLM to locate '{TARGET_OBJECT}'...")
+                node.send_output("status", pa.array([f"Locating '{TARGET_OBJECT}'..."]))
+                prompt = LOCATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
                 send_vlm_request(node, img, prompt)
+                vlm_locate_retries = 0
                 state = STATE_SAM3_VLM_LOCATE
             else:
                 img = np.frombuffer(latest_image, dtype=np.uint8).reshape(
@@ -1356,32 +1354,22 @@ for event in node:
             if state == STATE_SAM3_VLM_LOCATE:
                 print(f"[SAM3] Raw VLM locate response: {text[:300]}")
                 pick_coords = None
-                if PLACE_CONTAINER:
-                    both = parse_locate_both_response(text)
-                    if both is not None:
-                        pick_px, place_px = both
-                        if pick_px[0] >= 0 and pick_px[1] >= 0:
-                            pick_coords = pick_px
-                        if place_px is not None and place_px[0] >= 0 and place_px[1] >= 0:
-                            place_center = place_px
-                            print(f"[SAM3] Place '{PLACE_CONTAINER}' at ({place_px[0]:.0f}, {place_px[1]:.0f})")
-                if pick_coords is None:
-                    # Try single-object parse as fallback
-                    single = parse_locate_response(text)
-                    if single is not None and single[0] >= 0:
-                        pick_coords = single
+                result = parse_locate_response(text)
+                if result is not None and result[0] >= 0:
+                    pick_coords = result
 
                 if pick_coords is None:
-                    print(f"[SAM3] ERROR: VLM locate failed — no bbox returned, retrying")
-                    # Retry the VLM locate instead of falling back to text prompt
-                    if PLACE_CONTAINER:
-                        prompt = LOCATE_BOTH_PROMPT_TEMPLATE.format(
-                            pick_name=TARGET_OBJECT, place_name=PLACE_CONTAINER)
-                    else:
+                    vlm_locate_retries += 1
+                    if vlm_locate_retries <= 3:
+                        print(f"[SAM3] VLM locate failed — retrying ({vlm_locate_retries}/3)")
                         prompt = LOCATE_PROMPT_TEMPLATE.format(object_name=TARGET_OBJECT)
-                    send_vlm_request(node, img, prompt)
-                    # Stay in same state to retry
-                    continue
+                        send_vlm_request(node, img, prompt)
+                        continue
+                    else:
+                        print(f"[SAM3] VLM locate failed after 3 retries, giving up")
+                        vlm_locate_retries = 0
+                        state = STATE_IDLE
+                        continue
                 else:
                     cx_px, cy_px = pick_coords
                     locate_center = (cx_px, cy_px)
