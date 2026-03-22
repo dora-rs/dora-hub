@@ -232,6 +232,94 @@ pub fn set_joint_angles(
     }
 }
 
+/// Compute world-space positions for each joint's child link using forward kinematics.
+/// Returns a list of (link_name, world_position, collision_radius) for collision spheres.
+pub fn compute_fk_positions(
+    robot: &urdf_rs::Robot,
+    joint_angles: &HashMap<String, f32>,
+    root_pos: Vec3,
+    root_rot: Quat,
+) -> Vec<(String, Vec3, f32)> {
+    let mut parent_to_joints: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut child_links: Vec<String> = Vec::new();
+    for (i, joint) in robot.joints.iter().enumerate() {
+        parent_to_joints
+            .entry(joint.parent.link.clone())
+            .or_default()
+            .push(i);
+        child_links.push(joint.child.link.clone());
+    }
+
+    let root_links: Vec<&str> = robot
+        .links
+        .iter()
+        .filter(|l| !child_links.contains(&l.name))
+        .map(|l| l.name.as_str())
+        .collect();
+
+    let mut result = Vec::new();
+    let mut stack: Vec<(&str, Vec3, Quat)> = root_links
+        .iter()
+        .map(|name| (*name, root_pos, root_rot))
+        .collect();
+
+    while let Some((link_name, world_pos, world_rot)) = stack.pop() {
+        if let Some(joint_indices) = parent_to_joints.get(link_name) {
+            for &ji in joint_indices {
+                let joint = &robot.joints[ji];
+                let angle = joint_angles.get(&joint.name).copied().unwrap_or(0.0);
+
+                let xyz = &joint.origin.xyz;
+                let rpy = &joint.origin.rpy;
+                let local_pos = Vec3::new(xyz[0] as f32, xyz[1] as f32, xyz[2] as f32);
+                let origin_rot = quat_from_rpy(&[rpy[0], rpy[1], rpy[2]]);
+
+                let child_pos = world_pos + world_rot * local_pos;
+
+                let child_rot = if matches!(
+                    joint.joint_type,
+                    urdf_rs::JointType::Revolute | urdf_rs::JointType::Continuous
+                ) {
+                    let axis = Vec3::new(
+                        joint.axis.xyz[0] as f32,
+                        joint.axis.xyz[1] as f32,
+                        joint.axis.xyz[2] as f32,
+                    );
+                    let joint_rot = Quat::from_axis_angle(axis, angle);
+                    world_rot * origin_rot * joint_rot
+                } else {
+                    world_rot * origin_rot
+                };
+
+                let child_pos = if matches!(joint.joint_type, urdf_rs::JointType::Prismatic) {
+                    let axis = Vec3::new(
+                        joint.axis.xyz[0] as f32,
+                        joint.axis.xyz[1] as f32,
+                        joint.axis.xyz[2] as f32,
+                    );
+                    child_pos + world_rot * (axis * angle)
+                } else {
+                    child_pos
+                };
+
+                let radius = if joint.child.link.contains("hand")
+                    || joint.child.link.contains("finger")
+                    || joint.child.link.contains("EE")
+                {
+                    0.03
+                } else {
+                    0.05
+                };
+
+                result.push((joint.child.link.clone(), child_pos, radius));
+                stack.push((&joint.child.link, child_pos, child_rot));
+            }
+        }
+    }
+
+    result
+}
+
 /// Clean URDF string by replacing empty <geometry> tags with a tiny dummy box.
 pub fn clean_urdf_string(urdf_string: &str) -> String {
     let mut urdf_clean = String::new();

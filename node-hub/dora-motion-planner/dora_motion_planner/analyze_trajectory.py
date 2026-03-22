@@ -97,9 +97,10 @@ def analyze_joint_limits(
             upper = defaults[1][: traj.shape[1]]
 
     violations = []
+    tol = 0.01  # ~0.6deg tolerance for rounding
     for j in range(traj.shape[1]):
-        below = np.where(traj[:, j] < lower[j])[0]
-        above = np.where(traj[:, j] > upper[j])[0]
+        below = np.where(traj[:, j] < lower[j] - tol)[0]
+        above = np.where(traj[:, j] > upper[j] + tol)[0]
         for t in below:
             violations.append({
                 "waypoint": int(t),

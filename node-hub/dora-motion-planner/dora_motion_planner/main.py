@@ -115,7 +115,7 @@ NUM_SEEDS = int(os.getenv("NUM_SEEDS", "4"))
 MAX_ITERS = int(os.getenv("MAX_ITERS", "200"))
 DEVICE = os.getenv("DEVICE", "cuda")
 GRASP_DEPTH_OFFSET = float(os.getenv("GRASP_DEPTH_OFFSET", "-0.01"))
-PLACE_DEPTH_OFFSET = float(os.getenv("PLACE_DEPTH_OFFSET", "0.05"))
+PLACE_DEPTH_OFFSET = float(os.getenv("PLACE_DEPTH_OFFSET", "0.01"))
 FLOOR_HEIGHT = float(os.getenv("FLOOR_HEIGHT", "0.005"))
 APPROACH_MARGIN = float(os.getenv("APPROACH_MARGIN", "0.10"))
 JAW_CONTACT_DEPTH = float(os.getenv("JAW_CONTACT_DEPTH", "0.0"))
@@ -147,6 +147,17 @@ def compute_gripper_close_rad(object_width_m):
     """
     gap_mm = max(0, object_width_m * 1000 - 20)  # 20mm squeeze margin
     # Fraction of travel to open from closed: 0 = fully closed, 1 = fully open
+    open_frac = min(1.0, gap_mm / GRIPPER_TRAVEL_MM)
+    return GRIPPER_CLOSED_RAD + open_frac * (GRIPPER_OPEN_RAD - GRIPPER_CLOSED_RAD)
+
+
+def compute_gripper_approach_rad(object_width_m):
+    """Compute gripper approach opening — just wider than the object.
+
+    Opens to object width + 10mm margin, instead of fully open.
+    This avoids knocking nearby objects during approach.
+    """
+    gap_mm = object_width_m * 1000 + 5  # 5mm clearance
     open_frac = min(1.0, gap_mm / GRIPPER_TRAVEL_MM)
     return GRIPPER_CLOSED_RAD + open_frac * (GRIPPER_OPEN_RAD - GRIPPER_CLOSED_RAD)
 
@@ -885,6 +896,39 @@ def plan_grasp_from_pixels(
         print("[motion-planner] grasp: IK failed for pre-grasp, skipping")
         return None, "IK failed for pre-grasp pose (unreachable)"
 
+    # Solve a travel pre-grasp at 70° orientation for smooth transit from home.
+    # The actual pre-grasp may use a different approach angle (e.g. 30°) which
+    # causes IK failures along the travel path.  We transit to q_pregrasp_travel
+    # first, then do a short joint interpolation to q_pregrasp at the same position.
+    q_pregrasp_travel = None
+    if APPROACH_ANGLE_DEG < 60.0:
+        travel_angle = 70.0
+        heading_rad = np.radians(-135.0)
+        horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
+        angle_rad = np.radians(travel_angle)
+        travel_approach = np.sin(angle_rad) * horiz + np.cos(angle_rad) * np.array([0.0, 0.0, -1.0])
+        travel_approach = travel_approach / np.linalg.norm(travel_approach)
+        travel_z_ee = travel_approach
+        up = np.array([0.0, 0.0, 1.0])
+        travel_y = np.cross(travel_z_ee, up)
+        travel_y = travel_y / np.linalg.norm(travel_y)
+        travel_x = np.cross(travel_y, travel_z_ee)
+        travel_x = travel_x / np.linalg.norm(travel_x)
+        travel_y = np.cross(travel_z_ee, travel_x)
+        from scipy.spatial.transform import Rotation as R_scipy
+        travel_rot = np.stack([travel_x, travel_y, travel_z_ee], axis=1)
+        travel_rpy = R_scipy.from_matrix(travel_rot).as_euler("XYZ")
+        travel_pregrasp = pregrasp_xyzrpy.copy()
+        travel_pregrasp[3:6] = travel_rpy
+        q_pregrasp_travel = solve_ik(
+            ik_chain, travel_pregrasp, current_joints, joint_limits, device,
+            num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
+        )
+        if q_pregrasp_travel is not None:
+            print(f"[motion-planner] travel pre-grasp at 70° OK")
+        else:
+            print(f"[motion-planner] travel pre-grasp at 70° failed, using direct")
+
     q_grasp = solve_ik(ik_chain, grasp_xyzrpy, q_pregrasp, joint_limits, device,
                        num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver)
     if q_grasp is None:
@@ -939,6 +983,7 @@ def plan_grasp_from_pixels(
         q_start, q_pregrasp, q_grasp, q_preplace, q_place,
         pc_tensor, num_joints, arm, object_width,
         grasp_xyzrpy, place_xyzrpy,
+        q_pregrasp_travel=q_pregrasp_travel,
         joint_limits=joint_limits, device=device,
         table_plane=table_plane, table_polygon=table_polygon,
         pin_ik=pin_ik,
@@ -1072,6 +1117,7 @@ def _build_pick_place_trajectory(
     joint_limits=None, device=None,
     table_plane=None, table_polygon=None,
     pin_ik=None,
+    q_pregrasp_travel=None,
     trac_ik_solver=None,
     trac_ik_dist=None,
 ):
@@ -1134,7 +1180,7 @@ def _build_pick_place_trajectory(
 
         # Build Cartesian via-points and compute path length
         if safe_z:
-            z_clear = max(p_s[2], p_g[2]) + 0.08
+            z_clear = max(p_s[2], p_g[2]) + 0.12
             if staging:
                 via_points = np.array([
                     p_s,
@@ -1306,12 +1352,22 @@ def _build_pick_place_trajectory(
             segments.append(seg)
         return seg[-1]  # return actual last waypoint
 
-    # Phase 1: start → pre-grasp (position only — rotation handled by Phase 1b)
-    seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, safe_z=True, position_only=True)
-    q_prev = _append(seg1, skip_first=False)
+    # Phase 1: start → pre-grasp
+    if q_pregrasp_travel is not None:
+        # Travel at 70° orientation (reliable), then interpolate to actual pre-grasp
+        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp (travel)", q_start, q_pregrasp_travel, safe_z=True, position_only=True)
+        q_prev = _append(seg1, skip_first=False)
+        # Phase 1b: short joint interpolation from travel orientation to grasp orientation
+        N_ROTATE = 45
+        alphas = torch.linspace(0, 1, N_ROTATE + 1)[1:].unsqueeze(1)
+        seg1b = (q_pregrasp_travel.cpu() * (1 - alphas) + q_pregrasp.cpu() * alphas)
+        print(f"  Phase 1b: rotate to grasp orientation ({N_ROTATE} steps)")
+        q_prev = _append(seg1b)
+    else:
+        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, safe_z=True, position_only=True)
+        q_prev = _append(seg1, skip_first=False)
 
     # Phase 2: pre-grasp → grasp (short descent)
-    # (No Phase 1b rotation needed — solve_ik already gives q_pregrasp with correct 6-DOF orientation)
     seg2 = _cartesian_segment("Phase 2: pre-grasp -> grasp", q_prev, q_grasp, horiz_grip=True)
     q_prev = _append(seg2)
 
@@ -1333,6 +1389,10 @@ def _build_pick_place_trajectory(
         place_dwell_start = sum(s.shape[0] for s in segments)
         place_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
         segments.append(place_dwell)
+
+        # Phase 4a: lift back to pre-place height before rotating
+        seg4a = _cartesian_segment("Phase 4a: place -> pre-place", q_prev, q_preplace, horiz_grip=True)
+        q_prev = _append(seg4a)
     else:
         # Grasp-only: lift back to pre-grasp
         seg3a = _cartesian_segment("Phase 3a: grasp -> pre-grasp", q_prev, q_pregrasp, safe_z=True, horiz_grip=True)
@@ -1351,7 +1411,41 @@ def _build_pick_place_trajectory(
     if trac_ik_solver is not None:
         _, prev_rot = trac_ik_solver._solver.fk(q_prev_np.astype(np.float64))
         q_ah_np, ah_err = trac_ik_solver.solve(above_home_pos, q_init=q_prev_np, target_rot=prev_rot)
-    # Go directly home — no intermediate above-home or rotation phases
+    # If we used a travel orientation, rotate back to it at current position before going home
+    if q_pregrasp_travel is not None:
+        # Solve IK for 70° travel orientation at the current EE position
+        p_cur = _fk_pos(q_prev)
+        travel_angle = 70.0
+        heading_rad = np.radians(-135.0)
+        horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
+        angle_rad = np.radians(travel_angle)
+        travel_approach = np.sin(angle_rad) * horiz + np.cos(angle_rad) * np.array([0.0, 0.0, -1.0])
+        travel_approach = travel_approach / np.linalg.norm(travel_approach)
+        travel_z_ee = travel_approach
+        up = np.array([0.0, 0.0, 1.0])
+        travel_y = np.cross(travel_z_ee, up)
+        travel_y = travel_y / np.linalg.norm(travel_y)
+        travel_x = np.cross(travel_y, travel_z_ee)
+        travel_x = travel_x / np.linalg.norm(travel_x)
+        travel_y = np.cross(travel_z_ee, travel_x)
+        from scipy.spatial.transform import Rotation as R_scipy
+        travel_rot = np.stack([travel_x, travel_y, travel_z_ee], axis=1)
+        travel_rpy = R_scipy.from_matrix(travel_rot).as_euler("XYZ")
+        p_cur_np = p_cur.cpu().numpy() if hasattr(p_cur, 'cpu') else np.asarray(p_cur)
+        cur_travel_pose = np.concatenate([p_cur_np, travel_rpy]).astype(np.float32)
+        q_cur_travel = solve_ik(
+            ik_chain, cur_travel_pose, q_prev, joint_limits, device,
+            num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
+        )
+        if q_cur_travel is not None:
+            N_ROTATE = 45
+            alphas = torch.linspace(0, 1, N_ROTATE + 1)[1:].unsqueeze(1)
+            seg4b = (q_prev.cpu() * (1 - alphas) + q_cur_travel.cpu() * alphas)
+            print(f"  Phase 4b: rotate back to travel orientation ({N_ROTATE} steps)")
+            q_prev = _append(seg4b)
+        else:
+            print(f"  Phase 4b: travel orientation IK failed at current pos, skipping rotation")
+    # Go home
     seg5 = _cartesian_segment("Phase 5: place -> home", q_prev, q_home, safe_z=True, position_only=True)
     _append(seg5)
 
@@ -1393,13 +1487,14 @@ def _build_pick_place_trajectory(
         )
 
     close_rad = compute_gripper_close_rad(object_width)
+    approach_rad = compute_gripper_approach_rad(object_width)
     gripper_actions = [
-        {"waypoint": 0, "rad": float(GRIPPER_OPEN_RAD)},  # open before descent
+        {"waypoint": 0, "rad": float(approach_rad)},  # open just wider than object
         {"waypoint": grasp_dwell_start, "rad": float(close_rad)},
     ]
     if q_place is not None:
         gripper_actions.append(
-            {"waypoint": place_dwell_start, "rad": float(GRIPPER_OPEN_RAD)}
+            {"waypoint": place_dwell_start, "rad": float(approach_rad)}
         )
 
     traj_np = full_traj.numpy().astype(np.float32)
@@ -2036,6 +2131,77 @@ def main():
                     place_mask_bbox = [int(x) for x in place_bbox_data]
                     print(f"[motion-planner] grasp_result: place_mask_bbox={place_mask_bbox}")
 
+                # Save debug image with pick/place targets (before IK, always saved)
+                if EXPORT_DIR and latest_image is not None:
+                    try:
+                        import cv2
+                        w, h = latest_image_size
+                        img_flat = latest_image
+                        if img_flat.size == w * h * 3:
+                            debug_img = img_flat.reshape(h, w, 3).copy()
+                            debug_img = cv2.cvtColor(debug_img, cv2.COLOR_RGB2BGR)
+                        else:
+                            debug_img = np.zeros((h, w, 3), dtype=np.uint8)
+                        iu1, iv1 = int(round(u1)), int(round(v1))
+                        iu2, iv2 = int(round(u2)), int(round(v2))
+                        cv2.circle(debug_img, (iu1, iv1), 8, (0, 255, 0), 2)
+                        cv2.circle(debug_img, (iu2, iv2), 8, (0, 255, 0), 2)
+                        cv2.line(debug_img, (iu1, iv1), (iu2, iv2), (0, 255, 0), 2)
+                        mid_u, mid_v = (iu1 + iu2) // 2, (iv1 + iv2) // 2
+                        cv2.putText(debug_img, "PICK", (mid_u - 20, mid_v - 15),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                        # Draw pick mask bbox — green
+                        pick_bbox = data.get("mask_bbox")
+                        if pick_bbox and len(pick_bbox) >= 4:
+                            x0, y0, x1, y1 = [int(v) for v in pick_bbox]
+                            cv2.rectangle(debug_img, (x0, y0), (x1, y1), (0, 255, 0), 1)
+                        # Overlay SAM3 pick mask as semi-transparent green
+                        # Selector saves masks in its working dir (parent of EXPORT_DIR)
+                        import glob as _g
+                        # Search relative to EXPORT_DIR parent and also absolute
+                        search_dirs = [Path(EXPORT_DIR).parent, Path(EXPORT_DIR).parent.resolve()]
+                        mask_files = []
+                        for sd in search_dirs:
+                            mask_files.extend(sorted(_g.glob(str(sd / "critic_mask_*.png"))))
+                        pick_mask_path = str(mask_files[-1]) if mask_files else ""
+                        if not mask_files:
+                            print(f"[debug] No mask files found in {search_dirs}")
+                        if pick_mask_path and os.path.exists(pick_mask_path):
+                            print(f"[debug] Loading mask: {pick_mask_path}")
+                            mask_img = cv2.imread(pick_mask_path, cv2.IMREAD_GRAYSCALE)
+                            if mask_img is not None:
+                                if mask_img.shape[:2] != debug_img.shape[:2]:
+                                    mask_img = cv2.resize(mask_img, (debug_img.shape[1], debug_img.shape[0]),
+                                                          interpolation=cv2.INTER_NEAREST)
+                                green = np.zeros_like(debug_img)
+                                green[:, :] = (0, 255, 0)
+                                debug_img[mask_img > 0] = cv2.addWeighted(
+                                    debug_img, 0.75, green, 0.25, 0)[mask_img > 0]
+                                cnts, _ = cv2.findContours(mask_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                                cv2.drawContours(debug_img, cnts, -1, (0, 255, 0), 2)
+                        if place_uv is not None:
+                            pu, pv = int(round(place_uv[0])), int(round(place_uv[1]))
+                            cv2.circle(debug_img, (pu, pv), 12, (255, 100, 0), 2)
+                            cv2.putText(debug_img, "PLACE", (pu - 25, pv - 18),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 100, 0), 2)
+                        # Draw place mask bbox — cyan
+                        if place_mask_bbox is not None:
+                            x0, y0, x1, y1 = [int(v) for v in place_mask_bbox]
+                            cv2.rectangle(debug_img, (x0, y0), (x1, y1), (255, 255, 0), 1)
+                        # Arm label
+                        cv2.putText(debug_img, f"arm={metadata.get('arm', '?')}", (10, 25),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                        import datetime as _dt
+                        ts = _dt.datetime.now().strftime("%H%M%S")
+                        debug_path = str(Path(EXPORT_DIR) / f"pick_place_targets_{ts}.png")
+                        cv2.imwrite(debug_path, debug_img)
+                        # Also save as latest for easy access
+                        latest_path = str(Path(EXPORT_DIR) / "pick_place_targets.png")
+                        cv2.imwrite(latest_path, debug_img)
+                        print(f"[motion-planner] Debug image: {debug_path}")
+                    except Exception as e:
+                        print(f"[motion-planner] Debug image failed: {e}")
+
                 # Arm selection from metadata or deprojected Y
                 target_y = _estimate_target_y(
                     u1,
@@ -2134,6 +2300,7 @@ def main():
                     node.send_output("trajectory_status", pa.array([json.dumps({
                         "status": "failed",
                         "reason": fail_reason or "Both arms failed",
+                        "retry": True,
                     })]))
 
             # --- Execute: start playback (confirm mode) ---

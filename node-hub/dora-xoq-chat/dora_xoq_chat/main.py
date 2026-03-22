@@ -105,6 +105,8 @@ def main():
 
     state = STATE_IDLE
     last_user_message = ""
+    last_cmd = None
+    retries = 0
     node = Node()
     greeted = False
 
@@ -185,6 +187,7 @@ def main():
                     cmd = _try_parse_json(text)
                     if cmd and "pick" in cmd:
                         cmd["command_ts"] = time.time()
+                        last_cmd = cmd.copy()
                         print(f"[chat] Direct JSON command: {cmd}")
                         chat.send(f"Got it: pick '{cmd.get('pick', '')}'"
                                   + (f", place in '{cmd['place']}'" if cmd.get("place") else "")
@@ -207,6 +210,7 @@ def main():
                 cmd = _try_parse_json(text)
                 if cmd and "pick" in cmd:
                     cmd["command_ts"] = time.time()
+                    last_cmd = cmd.copy()
                     chat.send(f"Understood: pick '{cmd.get('pick', '')}'"
                               + (f", place in '{cmd['place']}'" if cmd.get("place") else "")
                               + ". Planning trajectory...")
@@ -244,6 +248,7 @@ def main():
                 s = status.get("status", "")
                 print(f"[chat] trajectory_status: {s} (state={state})")
                 if s == "ready" and state == STATE_PLANNING:
+                    retries = 0
                     wp = status.get("waypoints", "?")
                     dur = status.get("duration", "?")
                     arm = status.get("arm", "?")
@@ -252,9 +257,18 @@ def main():
                     state = STATE_EXECUTING
                 elif s == "failed":
                     reason = status.get("reason", "")
-                    msg = f"Failed: {reason}" if reason else "Planning failed."
-                    chat.send(f"{msg} Try a different command.")
-                    state = STATE_IDLE
+                    if status.get("retry") and retries < 2 and last_cmd is not None:
+                        retries += 1
+                        chat.send(f"Retrying ({retries}/2): {reason}")
+                        print(f"[chat] Retrying command ({retries}/2): {reason}")
+                        last_cmd["command_ts"] = time.time()
+                        node.send_output("command", pa.array([json.dumps(last_cmd)]))
+                        state = STATE_PLANNING
+                    else:
+                        retries = 0
+                        msg = f"Failed: {reason}" if reason else "Planning failed."
+                        chat.send(f"{msg} Try a different command.")
+                        state = STATE_IDLE
                 elif s == "busy":
                     chat.send("Busy with previous command. Wait for it to finish.")
                     state = STATE_IDLE
