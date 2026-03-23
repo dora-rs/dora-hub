@@ -6,9 +6,16 @@ import pyarrow as pa
 import torch
 from dora import Node
 from PIL import Image
-from sam2.sam2_image_predictor import SAM2ImagePredictor
+from sam2.build_sam import build_sam2_camera_predictor
+from huggingface_hub import hf_hub_download
 
-predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2-hiera-large")
+ckpt_path = hf_hub_download(
+    repo_id="facebook/sam2-hiera-tiny", 
+    filename="sam2_hiera_tiny.pt"
+)
+model_cfg = "sam2_hiera_t.yaml"
+
+predictor = build_sam2_camera_predictor(model_cfg, ckpt_path)
 
 
 def main():
@@ -20,6 +27,8 @@ def main():
     labels = None
     return_type = pa.Array
     image_id = None
+    is_tracking = False
+    object_id = 1
     for event in node:
         event_type = event["type"]
 
@@ -65,44 +74,22 @@ def main():
                     raise RuntimeError(f"Unsupported image encoding: {encoding}")
                 image = Image.fromarray(frame)
                 frames[event_id] = image
+                if not is_tracking:
+                    node.send_output("masks", pa.array([]), metadata={"primitive": "masks"})
+                    continue
 
-                # TODO: Fix the tracking code for SAM2.
-                continue
-                if last_pred is not None:
-                    with (
-                        torch.inference_mode(),
-                        torch.autocast(
-                            "cuda",
-                            dtype=torch.bfloat16,
-                        ),
-                    ):
-                        predictor.set_image(frames[image_id])
-
-                        new_logits = []
-                        new_masks = []
-
-                        if len(last_pred.shape) < 3:
-                            last_pred = np.expand_dims(last_pred, 0)
-
-                        for mask in last_pred:
-                            mask = np.expand_dims(mask, 0)  # Make shape: 1x256x256
-                            masks, _, new_logit = predictor.predict(
-                                mask_input=mask,
-                                multimask_output=False,
-                            )
-                            if len(masks.shape) == 4:
-                                masks = masks[:, 0, :, :]
-                            else:
-                                masks = masks[0, :, :]
-
-                            masks = masks > 0
-                            new_masks.append(masks)
-                            new_logits.append(new_logit)
-                            ## Mask to 3 channel image
-
-                        last_pred = np.concatenate(new_logits, axis=0)
-                        masks = np.concatenate(new_masks, axis=0)
-
+                with (
+                    torch.inference_mode(),
+                    torch.autocast(
+                        "cuda",
+                        dtype=torch.bfloat16,
+                    ),
+                ):
+                    _, out_mask_logits = predictor.track(frames[image_id])
+                    if len(out_mask_logits) == 0:
+                        node.send_output("masks", pa.array([]), metadata={"primitive": "masks"})
+                    else:
+                        masks = (out_mask_logits[0] > 0.0).cpu().numpy().squeeze()                    
                         match return_type:
                             case pa.Array:
                                 node.send_output(
@@ -112,6 +99,7 @@ def main():
                                         "image_id": image_id,
                                         "width": frames[image_id].width,
                                         "height": frames[image_id].height,
+                                        "primitive": "masks"
                                     },
                                 )
                             case pa.StructArray:
@@ -129,6 +117,7 @@ def main():
                                         "image_id": image_id,
                                         "width": frames[image_id].width,
                                         "height": frames[image_id].height,
+                                        "primitive": "masks"
                                     },
                                 )
 
@@ -213,23 +202,16 @@ def main():
                         dtype=torch.bfloat16,
                     ),
                 ):
-                    predictor.set_image(frames[image_id])
-                    labels = [i for i in range(len(points))]
-                    masks, _scores, last_pred = predictor.predict(
-                        points,
-                        point_labels=labels,
-                        multimask_output=False,
+                    predictor.load_first_frame(frames[image_id])
+                    labels = [1 for i in range(len(points))]
+                    _, _, out_mask_logits = predictor.add_new_prompt(
+                        frame_idx=0,
+                        obj_id=object_id,
+                        points=points,
+                        labels=labels
                     )
-
-                    if len(masks.shape) == 4:
-                        masks = masks[:, 0, :, :]
-                        last_pred = last_pred[:, 0, :, :]
-                    else:
-                        masks = masks[0, :, :]
-                        last_pred = last_pred[0, :, :]
-
-                    masks = masks > 0
-                    ## Mask to 3 channel image
+                    is_tracking = True
+                    masks = (out_mask_logits[0] > 0.0).cpu().numpy().squeeze()
                     match return_type:
                         case pa.Array:
                             node.send_output(
@@ -239,6 +221,7 @@ def main():
                                     "image_id": image_id,
                                     "width": frames[image_id].width,
                                     "height": frames[image_id].height,
+                                    "primitive": "masks"
                                 },
                             )
                         case pa.StructArray:
@@ -256,6 +239,7 @@ def main():
                                     "image_id": image_id,
                                     "width": frames[image_id].width,
                                     "height": frames[image_id].height,
+                                    "primitive": "masks"
                                 },
                             )
 
