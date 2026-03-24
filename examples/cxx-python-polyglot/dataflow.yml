@@ -1,0 +1,12 @@
+nodes:
+  - id: hardware_sensor
+    path: build/cxx_sensor
+    inputs:
+      tick: dora/timer/millis/50
+    outputs:
+      - vibration_data
+
+  - id: ai_brain
+    path: py_brain/py_brain/main.py    
+    inputs:
+      vibration_data: hardware_sensor/vibration_data
