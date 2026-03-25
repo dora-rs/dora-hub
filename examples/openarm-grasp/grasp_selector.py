@@ -41,6 +41,7 @@ DEPTH_THRESHOLD_MM = float(os.getenv("DEPTH_THRESHOLD_MM", "30"))
 USE_SAM2 = os.getenv("USE_SAM2", "true").lower() in ("1", "true", "yes")
 USE_SAM3 = os.getenv("USE_SAM3", "false").lower() in ("1", "true", "yes")
 PLACE_CONTAINER = os.getenv("PLACE_CONTAINER", "")  # e.g. "the pan" — enables place detection
+ACTION = ""  # "flip" = pick-flip-place (place back at same location, rotated 180°)
 SKIP_VLM_RATING = os.getenv("SKIP_VLM_RATING", "false").lower() in ("1", "true", "yes")
 
 # Gripper physical dimensions (SO-100 / similar small gripper)
@@ -1006,7 +1007,21 @@ def _emit_best_geo(node, img, cands, fc):
     node.send_output("status", pa.array([f"Grasp found ({winner.angle_deg:.0f}deg)"]))
     grasp = format_grasp_result(winner)
 
-    if PLACE_CONTAINER:
+    if ACTION == "flip":
+        # Flip: place back at pick location with flipped orientation
+        cx_px = (grasp["p1"][0] + grasp["p2"][0]) / 2.0
+        cy_px = (grasp["p1"][1] + grasp["p2"][1]) / 2.0
+        grasp["place_px"] = [round(cx_px, 1), round(cy_px, 1)]
+        grasp["action"] = "flip"
+        if mask_bbox is not None:
+            grasp["place_mask_bbox"] = list(mask_bbox)
+        print(f"[Flip] place_px = pick center ({cx_px:.0f},{cy_px:.0f})")
+        grasp_json = json.dumps(grasp)
+        print(f"  Grasp result: {grasp_json}")
+        node.send_output("grasp_result", pa.array([grasp_json]))
+        frame_count += 1
+        state = STATE_IDLE
+    elif PLACE_CONTAINER:
         if place_center is not None:
             # VLM located the place target — segment with SAM3 for proper mask
             place_cx, place_cy = place_center
@@ -1104,8 +1119,9 @@ for event in node:
                 continue
             TARGET_OBJECT = cmd.get("pick", TARGET_OBJECT)
             PLACE_CONTAINER = cmd.get("place", "")
+            ACTION = cmd.get("action", "")
             command_ts = cmd.get("command_ts", 0)
-            print(f"[command] pick='{TARGET_OBJECT}', place='{PLACE_CONTAINER}'")
+            print(f"[command] pick='{TARGET_OBJECT}', place='{PLACE_CONTAINER}', action='{ACTION}'")
             # Fall through to trigger logic below
             event_id = "trigger"
 
@@ -1573,7 +1589,21 @@ for event in node:
 
                     grasp = format_grasp_result(winner)
 
-                    if PLACE_CONTAINER:
+                    if ACTION == "flip":
+                        # Flip: place back at pick location
+                        cx_px = (grasp["p1"][0] + grasp["p2"][0]) / 2.0
+                        cy_px = (grasp["p1"][1] + grasp["p2"][1]) / 2.0
+                        grasp["place_px"] = [round(cx_px, 1), round(cy_px, 1)]
+                        grasp["action"] = "flip"
+                        if mask_bbox is not None:
+                            grasp["place_mask_bbox"] = list(mask_bbox)
+                        print(f"[Flip] place_px = pick center ({cx_px:.0f},{cy_px:.0f})")
+                        grasp_json = json.dumps(grasp)
+                        print(f"  Grasp result: {grasp_json}")
+                        node.send_output("grasp_result", pa.array([grasp_json]))
+                        frame_count += 1
+                        state = STATE_IDLE
+                    elif PLACE_CONTAINER:
                         best_grasp_result = grasp
                         if place_center is not None:
                             # Have VLM-estimated place coords — refine with SAM3

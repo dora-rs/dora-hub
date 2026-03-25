@@ -47,7 +47,9 @@ def pixel_to_3d(
     patch = depth_2d[v_lo:v_hi, u_lo:u_hi].astype(np.float32)
     valid = (patch > 50) & (patch < 5000)  # 50mm–5m (skip sensor noise)
     if np.any(valid):
-        z_mm = np.median(patch[valid])
+        # Use 25th percentile (closest surface) to avoid depth bleed from
+        # surfaces the object sits on (e.g., sausage on bread).
+        z_mm = np.percentile(patch[valid], 25)
         z = z_mm * 0.001  # mm -> m
         x = (u - cx) * z / fx
         y = (v - cy) * z / fy
@@ -219,6 +221,7 @@ def grasp_pose_from_jaw_pixels(
     v_center = (v1 + v2) / 2.0
     p_center_cam = pixel_to_3d(
         u_center, v_center, depth_map, fx, fy, cx, cy, width, height,
+        patch_size=11,  # smaller patch to avoid depth bleed from surface below
         cam_translation=cam_translation, cam_rotation=cam_rotation,
         table_z=floor_height,
     )
@@ -250,7 +253,7 @@ def grasp_pose_from_jaw_pixels(
     # Z_ee (fingertip direction) tilts from straight-down toward the
     # object.  horiz points from the arm base toward the object in XY.
     # 0° = straight down, 90° = fully horizontal facing the object.
-    if approach_angle_deg > 0.1:
+    if abs(approach_angle_deg) > 0.1:
         # Fixed approach heading: -135° from X axis = (-1, -1) direction in XY
         approach_heading_deg = -135.0
         heading_rad = np.radians(approach_heading_deg)
@@ -268,7 +271,7 @@ def grasp_pose_from_jaw_pixels(
     # parallel to Z_ee, so instead force jaws horizontal: X_ee = up,
     # Y_ee = cross(Z_ee, up) — always perpendicular and horizontal.
     z_ee = approach
-    if approach_angle_deg >= 30.0:
+    if abs(approach_angle_deg) >= 30.0:
         # Horizontal jaws: X_ee ≈ up, Y_ee = horizontal perpendicular to Z_ee
         up = np.array([0.0, 0.0, 1.0])
         y_ee = np.cross(z_ee, up)
@@ -318,6 +321,19 @@ def grasp_pose_from_jaw_pixels(
     pregrasp_xyzrpy = np.concatenate([pregrasp_center, rpy]).astype(np.float32)
 
     return grasp_xyzrpy, pregrasp_xyzrpy, float(object_top_z), object_width
+
+
+def flip_rpy_around_jaw(grasp_rpy):
+    """Rotate 180° around Z_ee (approach/finger axis) for flip operation.
+
+    This is the gripper roll: the object spins around the approach direction,
+    flipping top-to-bottom when the approach is tilted. The gripper stays
+    pointed in the same direction.
+    """
+    R_grasp = Rotation.from_euler("XYZ", grasp_rpy).as_matrix()
+    Rz_180 = np.diag([-1.0, -1.0, 1.0])
+    R_flip = R_grasp @ Rz_180
+    return Rotation.from_matrix(R_flip).as_euler("XYZ").astype(np.float32)
 
 
 def find_free_place_target(
@@ -392,8 +408,12 @@ def find_free_place_target(
                 f"[free-place] pick kernel size: "
                 f"{pick_kernel.shape[1]}x{pick_kernel.shape[0]}px"
             )
-            # Erode: each surviving pixel means the full pick kernel fits there
-            eroded = cv2.erode(free_mask, pick_kernel)
+            # Erode: each surviving pixel means the full pick kernel fits there.
+            # borderValue=0 treats out-of-image as occupied, so spots near
+            # the image edge where the kernel would overlap the boundary are
+            # naturally removed — no arbitrary hard margin needed.
+            eroded = cv2.erode(free_mask, pick_kernel,
+                               borderType=cv2.BORDER_CONSTANT, borderValue=0)
         else:
             eroded = free_mask
     else:
@@ -404,7 +424,9 @@ def find_free_place_target(
     print(f"[free-place] fits={fits}, valid_placement_pixels={np.count_nonzero(eroded)}")
 
     if fits:
-        # Distance transform on eroded mask — find spot furthest from all edges
+        # Distance transform on eroded mask — find spot furthest from all edges.
+        # Image boundary is already handled by the erosion (borderValue=0),
+        # so spots near the edge have small distance values naturally.
         dist = cv2.distanceTransform(eroded, cv2.DIST_L2, 5)
         _, max_val, _, max_loc = cv2.minMaxLoc(dist)
         u_best, v_best = max_loc  # (x, y) from minMaxLoc

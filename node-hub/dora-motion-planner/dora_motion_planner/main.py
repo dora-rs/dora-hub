@@ -80,7 +80,7 @@ from .collision_model import (
     capsule_capsule_distance,
     box_points_distance,
 )
-from .grasp_utils import grasp_pose_from_jaw_pixels, place_pose_from_pixel
+from .grasp_utils import grasp_pose_from_jaw_pixels, place_pose_from_pixel, flip_rpy_around_jaw
 from .pointcloud import (
     compute_table_plane,
     depth_to_pointcloud,
@@ -133,7 +133,7 @@ PLAYBACK = PLAYBACK_MODE in ("1", "true", "yes", "confirm")
 PLACE_TARGET_STR = os.getenv("PLACE_TARGET", "")
 DWELL_STEPS = int(os.getenv("DWELL_STEPS", "15"))  # hold waypoints for gripper action
 CARTESIAN_SPEED = float(os.getenv("CARTESIAN_SPEED", "0.15"))  # m/s EE speed
-PLAYBACK_HZ = 60  # trajectory playback rate
+PLAYBACK_HZ = 36  # trajectory playback rate
 
 # Gripper motor angle constants (imported from trajectory_json)
 GRIPPER_TRAVEL_MM = 44.0      # jaw travel range in mm
@@ -145,7 +145,7 @@ def compute_gripper_close_rad(object_width_m):
     Starts from fully closed and opens just enough to leave a gap
     slightly smaller than the object (5mm squeeze) for a firm hold.
     """
-    gap_mm = max(0, object_width_m * 1000 - 20)  # 20mm squeeze margin
+    gap_mm = max(0, object_width_m * 1000 - 25)  # 25mm squeeze margin
     # Fraction of travel to open from closed: 0 = fully closed, 1 = fully open
     open_frac = min(1.0, gap_mm / GRIPPER_TRAVEL_MM)
     return GRIPPER_CLOSED_RAD + open_frac * (GRIPPER_OPEN_RAD - GRIPPER_CLOSED_RAD)
@@ -157,7 +157,7 @@ def compute_gripper_approach_rad(object_width_m):
     Opens to object width + 10mm margin, instead of fully open.
     This avoids knocking nearby objects during approach.
     """
-    gap_mm = object_width_m * 1000 + 5  # 5mm clearance
+    gap_mm = object_width_m * 1000 + 7  # 7mm clearance
     open_frac = min(1.0, gap_mm / GRIPPER_TRAVEL_MM)
     return GRIPPER_CLOSED_RAD + open_frac * (GRIPPER_OPEN_RAD - GRIPPER_CLOSED_RAD)
 
@@ -841,6 +841,7 @@ def plan_grasp_from_pixels(
     trac_ik_solver=None,
     trac_ik_dist=None,
     latest_image=None,
+    action="",
 ):
     """Plan a grasp (or pick-and-place) trajectory from two jaw pixel positions.
 
@@ -886,7 +887,7 @@ def plan_grasp_from_pixels(
 
     # Per-arm calibration offset (metres)
     # URDF frame: X=forward, Y=left/right, Z=up
-    cal_offset = np.array([0.03, -0.03, 0.0, 0.0, 0.0, 0.0])
+    cal_offset = np.array([0.015, -0.035, 0.0, 0.0, 0.0, 0.0])
     grasp_xyzrpy = grasp_xyzrpy + cal_offset
     pregrasp_xyzrpy = pregrasp_xyzrpy + cal_offset
 
@@ -942,42 +943,228 @@ def plan_grasp_from_pixels(
     q_preplace = None
     place_xyzrpy = None
 
+    # Pre-compute flipped RPY: Rz_local(90°) = roll around approach/finger axis
+    # Done at a closer position for workspace, then move back to place.
+    flipped_rpy = None
+    if action == "flip" and q_grasp is not None:
+        from scipy.spatial.transform import Rotation as R_flip_rot
+        R_grasp_mat = R_flip_rot.from_euler("XYZ", grasp_xyzrpy[3:6]).as_matrix()
+        # Start with 90° roll for validation
+        Rz_90 = np.array([[0, -1, 0], [1, 0, 0], [0, 0, 1]], dtype=np.float64)
+        R_rolled = R_grasp_mat @ Rz_90
+        flipped_rpy = R_flip_rot.from_matrix(R_rolled).as_euler("XYZ").astype(np.float32)
+        print(f"[motion-planner] flip: grasp_rpy={np.round(np.degrees(grasp_xyzrpy[3:6]), 1)} "
+              f"-> place_rpy={np.round(np.degrees(flipped_rpy), 1)} (Rz 90° roll)")
+
     if place_uv is not None:
         place_u, place_v = place_uv
+        # For flip: use FK-computed flipped orientation (J6 at opposite limit)
+        if action == "flip" and flipped_rpy is not None:
+            place_rpy = flipped_rpy
+            print(f"[motion-planner] flip: place_rpy={np.round(np.degrees(place_rpy), 1)} (from FK J6 flip)")
+            place_approach_margin = APPROACH_MARGIN
+        else:
+            place_rpy = grasp_xyzrpy[3:6]
+            place_approach_margin = APPROACH_MARGIN
         place_result = place_pose_from_pixel(
             place_u, place_v,
             latest_depth, fx, fy, cx, cy,
             cam_t, cam_rot,
-            grasp_rpy=grasp_xyzrpy[3:6],
+            grasp_rpy=place_rpy,
             width=w, height=h,
             place_depth_offset=PLACE_DEPTH_OFFSET,
             floor_height=FLOOR_HEIGHT,
-            approach_margin=APPROACH_MARGIN,
+            approach_margin=place_approach_margin,
             jaw_contact_depth=JAW_CONTACT_DEPTH,
-            mask_bbox=place_mask_bbox,
-            place_mask=place_mask,
+            mask_bbox=None if action == "flip" else place_mask_bbox,
+            place_mask=None if action == "flip" else place_mask,
             pick_mask=pick_mask,
         )
         if place_result is not None:
             place_xyzrpy, preplace_xyzrpy = place_result
             place_xyzrpy = place_xyzrpy + cal_offset
             preplace_xyzrpy = preplace_xyzrpy + cal_offset
-            q_preplace = solve_ik(
-                ik_chain, preplace_xyzrpy, q_grasp, joint_limits, device,
-                num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
-            )
-            if q_preplace is not None:
-                q_place = solve_ik(
-                    ik_chain, place_xyzrpy, q_preplace, joint_limits, device,
+            if action != "flip":
+                q_preplace = solve_ik(
+                    ik_chain, preplace_xyzrpy, q_grasp, joint_limits, device,
                     num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
                 )
-            if q_place is None:
-                print("[motion-planner] grasp: Place IK failed, rejecting")
-                return None, "Place target unreachable (IK failed)"
+                if q_preplace is not None:
+                    q_place = solve_ik(
+                        ik_chain, place_xyzrpy, q_preplace, joint_limits, device,
+                        num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
+                    )
+                if q_place is None:
+                    print("[motion-planner] grasp: Place IK failed, rejecting")
+                    return None, "Place target unreachable (IK failed)"
         else:
             print("[motion-planner] grasp: Place depth invalid, rejecting")
             return None, "Place target has invalid depth"
 
+
+    # Flip waypoints: move to closer position, do the roll, move back
+    q_flip_waypoints = []
+    descent_waypoints = []
+    if action == "flip" and place_xyzrpy is not None and flipped_rpy is not None:
+        from scipy.spatial.transform import Rotation as R_flip_rot
+        # Build travel orientation (90° = fully horizontal at -135° heading)
+        heading_rad = np.radians(-135.0)
+        horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
+        angle_rad = np.radians(90.0)
+        t_z = np.sin(angle_rad) * horiz + np.cos(angle_rad) * np.array([0, 0, -1.0])
+        t_z /= np.linalg.norm(t_z)
+        up = np.array([0.0, 0.0, 1.0])
+        t_y = np.cross(t_z, up); t_y /= np.linalg.norm(t_y)
+        t_x = np.cross(t_y, t_z); t_x /= np.linalg.norm(t_x)
+        t_y = np.cross(t_z, t_x)
+        R_travel = np.stack([t_x, t_y, t_z], axis=1)
+        travel_rpy = R_flip_rot.from_matrix(R_travel).as_euler("XYZ").astype(np.float32)
+
+        import torch as _torch
+
+        # Strategy: try (angle, height_extra) combinations until one works
+        # Prefer: 180° at low height > 160° > 135° > go higher
+        # Try 180° at increasing heights — baby steps will reach as far as possible
+        strategies = [
+            (180, 0.04), (180, 0.08), (180, 0.12),
+        ]
+
+        q_close = None
+        q_rolled = None
+        rolled_rpy = None
+        for roll_deg, height_extra in strategies:
+            close_pos = pregrasp_xyzrpy[:3].copy()
+            close_pos[2] += height_extra
+
+            # Solve travel orientation IK at this height
+            # close_pos already includes cal_offset from pregrasp_xyzrpy
+            close_xyzrpy = np.concatenate([close_pos, travel_rpy + cal_offset[3:6]])
+            q_close_try = solve_ik(ik_chain, close_xyzrpy, q_grasp, joint_limits, device,
+                                   num_seeds=NUM_SEEDS * 2, horiz_grip=False, trac_ik_solver=trac_ik_solver)
+            if q_close_try is None:
+                print(f"[motion-planner] flip: travel IK failed at +{height_extra:.2f}m, skipping")
+                continue
+
+            # Compute rolled orientation (right arm rolls opposite direction)
+            roll_sign = -1.0 if arm == "right" else 1.0
+            c, s = np.cos(np.radians(roll_sign * roll_deg)), np.sin(np.radians(roll_sign * roll_deg))
+            Rz_roll = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]], dtype=np.float64)
+            R_rolled = R_travel @ Rz_roll
+            rolled_rpy_try = R_flip_rot.from_matrix(R_rolled).as_euler("XYZ").astype(np.float32)
+            pos_target = close_pos.astype(np.float64)
+
+            print(f"[motion-planner] flip: trying {roll_deg}° at +{height_extra:.2f}m "
+                  f"(z={close_pos[2]:.3f}m) arm={arm}...")
+
+            # Baby-step TracIK: incrementally rotate from 0° to target in 10° steps
+            # Save ALL intermediate solutions as waypoints for smooth trajectory
+            step_deg = 1.0
+            n_steps = int(abs(roll_sign * roll_deg) / step_deg)
+            q_prev_step = q_close_try
+            baby_step_waypoints = []
+            q_rolled_try = None
+            for s in range(1, n_steps + 1):
+                angle_s = roll_sign * step_deg * s
+                c_s, s_s = np.cos(np.radians(angle_s)), np.sin(np.radians(angle_s))
+                Rz_s = np.array([[c_s, -s_s, 0], [s_s, c_s, 0], [0, 0, 1]], dtype=np.float64)
+                R_s = R_travel @ Rz_s
+                rpy_s = R_flip_rot.from_matrix(R_s).as_euler("XYZ").astype(np.float32)
+                xyzrpy_s = np.concatenate([close_pos, rpy_s + cal_offset[3:6]])
+                q_s = solve_ik(ik_chain, xyzrpy_s, q_prev_step, joint_limits, device,
+                               num_seeds=NUM_SEEDS, horiz_grip=False, trac_ik_solver=trac_ik_solver)
+                if q_s is not None:
+                    # Reject solutions with large joint jumps (config switch)
+                    q_prev_np = q_prev_step.cpu().numpy() if _torch.is_tensor(q_prev_step) else np.asarray(q_prev_step)
+                    q_s_np = q_s.cpu().numpy() if _torch.is_tensor(q_s) else np.asarray(q_s)
+                    max_jump = float(np.max(np.abs(q_s_np - q_prev_np)))
+                    if max_jump > 0.1:  # ~6° max per 1° EE step
+                        print(f"[motion-planner] flip: baby-step {angle_s:.0f}° rejected "
+                              f"(joint jump {np.degrees(max_jump):.1f}°), stopping")
+                        break
+                    q_prev_step = q_s
+                    baby_step_waypoints.append(q_s)
+                else:
+                    print(f"[motion-planner] flip: TracIK baby-step failed at {angle_s:.0f}°")
+                    break
+            else:
+                q_rolled_try = q_prev_step
+                print(f"[motion-planner] flip: TracIK baby-step solved {roll_deg}° in {n_steps} steps!")
+
+            if q_rolled_try is None and baby_step_waypoints:
+                # Use whatever angle TracIK reached (partial flip is better than nothing)
+                q_rolled_try = baby_step_waypoints[-1]
+                actual_deg = len(baby_step_waypoints) * step_deg
+                print(f"[motion-planner] flip: TracIK reached {actual_deg:.0f}° (target was {roll_deg}°)")
+            if q_rolled_try is not None:
+                q_close = q_close_try
+                q_rolled = q_rolled_try
+                rolled_rpy = rolled_rpy_try
+                print(f"[motion-planner] flip: {roll_deg}° at +{height_extra:.2f}m OK!")
+                break
+            else:
+                print(f"[motion-planner] flip: {roll_deg}° at +{height_extra:.2f}m failed")
+
+        if q_rolled is not None:
+            if baby_step_waypoints:
+                q_flip_waypoints = [q_close] + baby_step_waypoints
+                print(f"[motion-planner] flip: using {len(baby_step_waypoints)} baby-step waypoints")
+            else:
+                q_flip_waypoints = [q_close, q_rolled]
+
+        else:
+            return None, "Flip failed: no angle/height combination worked"
+
+        # Descent: TracIK baby steps, each seeded from previous.
+        # On joint jump or IK failure, subdivide into smaller steps before giving up.
+        q_rolled_wp = q_flip_waypoints[-1]
+        q_preplace = q_rolled_wp
+        q_place = q_rolled_wp  # default: drop from height
+        descent_waypoints = []
+        q_prev_descent = q_rolled_wp
+        target_z = grasp_xyzrpy[2] + 0.02
+        current_z = close_pos[2]
+        base_step_z = 0.01
+        stop_descent = False
+        while current_z - base_step_z >= target_z and not stop_descent:
+            next_z = current_z - base_step_z
+            # Try the full step first, then subdivide on failure
+            for n_sub in [1, 2, 4]:
+                sub_step = base_step_z / n_sub
+                sub_wps = []
+                q_sub_prev = q_prev_descent
+                sub_ok = True
+                for si in range(n_sub):
+                    sub_z = current_z - sub_step * (si + 1)
+                    descent_pos = close_pos.copy()
+                    descent_pos[2] = sub_z
+                    descent_xyzrpy = np.concatenate([descent_pos, rolled_rpy + cal_offset[3:6]])
+                    q_step = solve_ik(ik_chain, descent_xyzrpy, q_sub_prev, joint_limits, device,
+                                      num_seeds=NUM_SEEDS, horiz_grip=False, trac_ik_solver=trac_ik_solver)
+                    if q_step is not None:
+                        q_step_np = q_step.cpu().numpy() if torch.is_tensor(q_step) else np.asarray(q_step)
+                        q_prev_np = q_sub_prev.cpu().numpy() if torch.is_tensor(q_sub_prev) else np.asarray(q_sub_prev)
+                        if float(np.max(np.abs(q_step_np - q_prev_np))) > 0.1:
+                            sub_ok = False
+                            break
+                        sub_wps.append(q_step)
+                        q_sub_prev = q_step
+                    else:
+                        sub_ok = False
+                        break
+                if sub_ok:
+                    descent_waypoints.extend(sub_wps)
+                    q_prev_descent = sub_wps[-1]
+                    current_z = next_z
+                    break
+            else:
+                print(f"[motion-planner] flip: descent stopped at z={current_z:.3f}m (subdivide failed)")
+                stop_descent = True
+        if descent_waypoints:
+            q_place = descent_waypoints[-1]
+            print(f"[motion-planner] flip: descended {len(descent_waypoints)}cm "
+                  f"to z={current_z:.3f}m")
+        else:
+            print(f"[motion-planner] flip: no descent possible, dropping from height")
 
     q_start = current_joints.clone()
     t_plan_start = time.perf_counter()
@@ -993,6 +1180,8 @@ def plan_grasp_from_pixels(
         pin_ik=pin_ik,
         trac_ik_solver=trac_ik_solver,
         trac_ik_dist=trac_ik_dist,
+        q_flip_waypoints=q_flip_waypoints,
+        descent_waypoints=descent_waypoints if action == "flip" else [],
     )
     if result is None:
         return None, "Trajectory planning failed"
@@ -1173,6 +1362,8 @@ def _build_pick_place_trajectory(
     q_pregrasp_travel=None,
     trac_ik_solver=None,
     trac_ik_dist=None,
+    q_flip_waypoints=None,
+    descent_waypoints=None,
 ):
     """Build a full pick-and-place trajectory with dwell waypoints and gripper actions.
 
@@ -1180,7 +1371,7 @@ def _build_pick_place_trajectory(
       1. start → pre-grasp          (long, collision-aware)
       2. pre-grasp → grasp           (short, approach)
       dwell: hold at grasp           (gripper closes)
-      3. grasp → pre-place           (long, collision-aware)
+      3. grasp → [flip waypoints →] pre-place  (long, collision-aware)
       4. pre-place → place           (short, descent)
       dwell: hold at place           (gripper opens)
       5. place → pre-place           (short, retreat)
@@ -1233,7 +1424,7 @@ def _build_pick_place_trajectory(
 
         # Build Cartesian via-points and compute path length
         if safe_z:
-            z_clear = max(p_s[2], p_g[2]) + 0.12
+            z_clear = max(p_s[2], p_g[2]) + APPROACH_MARGIN
             if staging:
                 via_points = np.array([
                     p_s,
@@ -1410,11 +1601,40 @@ def _build_pick_place_trajectory(
         # Travel at 70° orientation (reliable), then interpolate to actual pre-grasp
         seg1 = _cartesian_segment("Phase 1: start -> pre-grasp (travel)", q_start, q_pregrasp_travel, safe_z=True, position_only=True)
         q_prev = _append(seg1, skip_first=False)
-        # Phase 1b: short joint interpolation from travel orientation to grasp orientation
-        N_ROTATE = 45
-        alphas = torch.linspace(0, 1, N_ROTATE + 1)[1:].unsqueeze(1)
-        seg1b = (q_pregrasp_travel.cpu() * (1 - alphas) + q_pregrasp.cpu() * alphas)
-        print(f"  Phase 1b: rotate to grasp orientation ({N_ROTATE} steps)")
+        # Phase 1b: simultaneous rotation + descent from travel to pre-grasp.
+        # Slerp orientation and interpolate XYZ in one pass (65 baby-steps).
+        N_ROTATE = 100
+        travel_pos_1b = _fk_pos(q_pregrasp_travel)
+        pregrasp_pos_1b = _fk_pos(q_pregrasp)
+        _, rot_start = trac_ik_solver._solver.fk(q_pregrasp_travel.cpu().numpy().astype(np.float64))
+        _, rot_end = trac_ik_solver._solver.fk(q_pregrasp.cpu().numpy().astype(np.float64))
+        rots_1b = Slerp([0.0, 1.0], ScipyRotation.from_matrix(np.stack([rot_start, rot_end])))
+        seg1b_wps = []
+        q_prev_1b = q_pregrasp_travel.cpu().numpy().astype(np.float64)
+        for si in range(1, N_ROTATE + 1):
+            alpha = si / N_ROTATE
+            rot_i = rots_1b(alpha).as_matrix()
+            pos_i = travel_pos_1b * (1 - alpha) + pregrasp_pos_1b * alpha
+            q_i, err = trac_ik_solver.solve(
+                np.array(pos_i, dtype=np.float64),
+                q_init=q_prev_1b, target_rot=rot_i,
+            )
+            if q_i is not None and err < 0.005:
+                max_jump = float(np.max(np.abs(q_i - q_prev_1b)))
+                if max_jump > 0.3:
+                    alpha_t = torch.tensor([alpha], dtype=torch.float32)
+                    q_lerp = q_pregrasp_travel.cpu() * (1 - alpha_t) + q_pregrasp.cpu() * alpha_t
+                    seg1b_wps.append(q_lerp.squeeze(0))
+                else:
+                    seg1b_wps.append(torch.tensor(q_i, dtype=torch.float32))
+                    q_prev_1b = q_i
+            else:
+                alpha_t = torch.tensor([alpha], dtype=torch.float32)
+                q_lerp = q_pregrasp_travel.cpu() * (1 - alpha_t) + q_pregrasp.cpu() * alpha_t
+                seg1b_wps.append(q_lerp.squeeze(0))
+        seg1b = torch.stack(seg1b_wps)
+        drop_mm = (travel_pos_1b[2] - pregrasp_pos_1b[2]) * 1000
+        print(f"  Phase 1b: rotate + descend to pre-grasp ({N_ROTATE} steps, {drop_mm:.0f}mm drop)")
         q_prev = _append(seg1b)
     else:
         seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, safe_z=True, position_only=True)
@@ -1430,22 +1650,69 @@ def _build_pick_place_trajectory(
     segments.append(grasp_dwell)
 
     if q_place is not None:
-        # Phase 3: grasp → pre-place (lift and transit directly, skip pregrasp)
-        seg3 = _cartesian_segment("Phase 3: grasp -> pre-place", q_prev, q_preplace, safe_z=True, horiz_grip=True)
-        q_prev = _append(seg3)
+        # Phase 3: grasp → [flip waypoints →] pre-place
+        if q_flip_waypoints:
+            # Flip waypoints: joint interp (for the roll)
+            for i, q_wp in enumerate(q_flip_waypoints):
+                N_STEPS = 15 if i == 0 else 2  # first step (grasp→travel) needs more time
+                alphas = torch.linspace(0, 1, N_STEPS + 1)[1:].unsqueeze(1)
+                seg = (q_prev.cpu() * (1 - alphas) + q_wp.cpu() * alphas)
+                print(f"  Phase 3 flip {i+1}/{len(q_flip_waypoints)}: "
+                      f"joint interp ({N_STEPS} steps)")
+                q_prev = _append(seg)
 
-        # Phase 4: pre-place → place (descent, slow)
-        seg4 = _cartesian_segment("Phase 4: pre-place -> place", q_prev, q_place, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0)
-        q_prev = _append(seg4)
+            # Descent: joint interp through baby-step IK waypoints
+            if descent_waypoints is not None and len(descent_waypoints) > 0:
+                for i, q_dw in enumerate(descent_waypoints):
+                    N_D = 10  # small steps between close configs
+                    alphas = torch.linspace(0, 1, N_D + 1)[1:].unsqueeze(1)
+                    seg_d = (q_prev.cpu() * (1 - alphas) + q_dw.cpu() * alphas)
+                    q_prev = _append(seg_d)
+                print(f"  Phase 3 flip descent: {len(descent_waypoints)} steps")
 
-        # Dwell at place (hold for gripper open)
-        place_dwell_start = sum(s.shape[0] for s in segments)
-        place_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
-        segments.append(place_dwell)
+            # Dwell at place (hold for gripper open)
+            place_dwell_start = sum(s.shape[0] for s in segments)
+            place_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
+            segments.append(place_dwell)
 
-        # Phase 4a: lift back to pre-place height before rotating
-        seg4a = _cartesian_segment("Phase 4a: place -> pre-place", q_prev, q_preplace, horiz_grip=True)
-        q_prev = _append(seg4a)
+            # Lift back up: reverse descent waypoints (same amount we descended)
+            q_rolled_wp = q_flip_waypoints[-1]
+            if descent_waypoints is not None and len(descent_waypoints) > 0:
+                for q_dw in reversed(descent_waypoints):
+                    N_D = 10
+                    alphas = torch.linspace(0, 1, N_D + 1)[1:].unsqueeze(1)
+                    seg_d = (q_prev.cpu() * (1 - alphas) + q_dw.cpu() * alphas)
+                    q_prev = _append(seg_d)
+                # Back to rolled config (same height as where we started the roll)
+                N_D = 15
+                alphas = torch.linspace(0, 1, N_D + 1)[1:].unsqueeze(1)
+                seg_d = (q_prev.cpu() * (1 - alphas) + q_rolled_wp.cpu() * alphas)
+                q_prev = _append(seg_d)
+                print(f"  Phase 4a (flip): lift back {len(descent_waypoints)} steps")
+
+            # Roll back to travel: reverse through baby-step waypoints
+            for i, q_wp in enumerate(reversed(q_flip_waypoints)):
+                N_STEPS = 2
+                alphas = torch.linspace(0, 1, N_STEPS + 1)[1:].unsqueeze(1)
+                seg = (q_prev.cpu() * (1 - alphas) + q_wp.cpu() * alphas)
+                q_prev = _append(seg)
+            print(f"  Phase 4b (flip): roll back through {len(q_flip_waypoints)} waypoints")
+        else:
+            seg3 = _cartesian_segment("Phase 3: grasp -> pre-place", q_prev, q_preplace, safe_z=True, horiz_grip=True)
+            q_prev = _append(seg3)
+
+            # Phase 4: pre-place → place (descent, slow)
+            seg4 = _cartesian_segment("Phase 4: pre-place -> place", q_prev, q_place, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0)
+            q_prev = _append(seg4)
+
+            # Dwell at place (hold for gripper open)
+            place_dwell_start = sum(s.shape[0] for s in segments)
+            place_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
+            segments.append(place_dwell)
+
+            # Phase 4a: lift back to pre-place height
+            seg4a = _cartesian_segment("Phase 4a: place -> pre-place", q_prev, q_preplace, horiz_grip=True)
+            q_prev = _append(seg4a)
     else:
         # Grasp-only: lift back to pre-grasp
         seg3a = _cartesian_segment("Phase 3a: grasp -> pre-grasp", q_prev, q_pregrasp, safe_z=True, horiz_grip=True)
@@ -1464,9 +1731,22 @@ def _build_pick_place_trajectory(
     if trac_ik_solver is not None:
         _, prev_rot = trac_ik_solver._solver.fk(q_prev_np.astype(np.float64))
         q_ah_np, ah_err = trac_ik_solver.solve(above_home_pos, q_init=q_prev_np, target_rot=prev_rot)
-    # If we used a travel orientation, rotate back to it at current position before going home
-    if q_pregrasp_travel is not None:
-        # Solve IK for 70° travel orientation at the current EE position
+    # If we used a travel orientation, lift higher first then rotate back (skip for flip)
+    if q_pregrasp_travel is not None and not q_flip_waypoints:
+        # Lift to clearance height before rotating orientation
+        p_cur = _fk_pos(q_prev)
+        z_clear_rot = max(p_cur[2] + 0.06, z_above)
+        lift_pos = np.array([p_cur[0], p_cur[1], z_clear_rot])
+        if trac_ik_solver is not None:
+            _, cur_rot_lift = trac_ik_solver._solver.fk(q_prev.cpu().numpy().astype(np.float64))
+            q_lift, lift_err = trac_ik_solver.solve(lift_pos, q_init=q_prev.cpu().numpy().astype(np.float64), target_rot=cur_rot_lift)
+            if q_lift is not None and lift_err < 0.005:
+                q_lift_t = torch.tensor(q_lift, dtype=torch.float32, device=device)
+                seg_lift = _cartesian_segment("Phase 4b-lift: lift before rotation", q_prev, q_lift_t, horiz_grip=True)
+                q_prev = _append(seg_lift)
+                print(f"  Phase 4b-lift: raised {(z_clear_rot - p_cur[2])*1000:.0f}mm before rotation")
+
+        # Solve IK for 70° travel orientation at the lifted position
         p_cur = _fk_pos(q_prev)
         travel_angle = 70.0
         heading_rad = np.radians(-135.0)
@@ -1498,7 +1778,8 @@ def _build_pick_place_trajectory(
             q_prev = _append(seg4b)
         else:
             print(f"  Phase 4b: travel orientation IK failed at current pos, skipping rotation")
-    # Go home
+    # Go home (always Cartesian with safe_z to avoid table collisions)
+    home_phase_start = sum(s.shape[0] for s in segments)
     seg5 = _cartesian_segment("Phase 5: place -> home", q_prev, q_home, safe_z=True, position_only=True)
     _append(seg5)
 
@@ -1539,6 +1820,17 @@ def _build_pick_place_trajectory(
             total_waypoints,
         )
 
+    # Build abort trajectory: from check waypoint → home (for grasp failure)
+    # Uses the same _cartesian_segment with safe_z for table clearance.
+    abort_traj_np = None
+    grasp_check_waypoint_raw = grasp_dwell_start + DWELL_STEPS + 30 + 30 + 15
+    if grasp_check_waypoint_raw < total_waypoints:
+        q_abort_start = full_traj[grasp_check_waypoint_raw]
+        abort_seg = _cartesian_segment("Abort: check -> home", q_abort_start, q_home, safe_z=True, position_only=True)
+        if abort_seg is not None and abort_seg.shape[0] > 0:
+            abort_traj_np = abort_seg.numpy().astype(np.float32)
+            print(f"[motion-planner] Abort path: {abort_traj_np.shape[0]} waypoints (check wp {grasp_check_waypoint_raw} → home)")
+
     close_rad = compute_gripper_close_rad(object_width)
     approach_rad = compute_gripper_approach_rad(object_width)
     gripper_actions = [
@@ -1549,6 +1841,16 @@ def _build_pick_place_trajectory(
         gripper_actions.append(
             {"waypoint": place_dwell_start, "rad": float(approach_rad)}
         )
+
+    # After the close ramp, command a full squeeze (0.0 rad) so the motor
+    # either stalls on the object or closes fully — giving a clear signal.
+    # Close ramp ends at grasp_dwell_start + 30, squeeze ramp starts there
+    # and runs another 30 steps, then allow ~15 steps for motor to settle.
+    squeeze_waypoint = grasp_dwell_start + 30
+    gripper_actions.append(
+        {"waypoint": squeeze_waypoint, "rad": float(GRIPPER_CLOSED_RAD)}
+    )
+    grasp_check_waypoint = squeeze_waypoint + 30 + 15  # after squeeze ramp + settle
 
     traj_np = full_traj.numpy().astype(np.float32)
     dt = 1.0 / PLAYBACK_HZ
@@ -1561,6 +1863,13 @@ def _build_pick_place_trajectory(
         "grasp_pose": grasp_xyzrpy.tolist(),
         "place_pose": place_xyzrpy.tolist() if place_xyzrpy is not None else None,
         "gripper_actions": json.dumps(gripper_actions),
+        "grasp_check_waypoint": grasp_check_waypoint,
+        "grasp_dwell_start": grasp_dwell_start,
+        "grasp_dwell_end": grasp_dwell_start + DWELL_STEPS + 30,  # after close ramp
+        "home_phase_start": home_phase_start,
+        "abort_trajectory": abort_traj_np,
+        "expected_close_rad": float(close_rad),
+        "approach_rad": float(approach_rad),
     }
     node.send_output(
         "joint_trajectory",
@@ -1686,6 +1995,64 @@ def _run_live_analysis(traj_np, traj_meta):
         print(f"[motion-planner] {line}")
 
 
+def _build_home_trajectory(current_joints_np, arm_cfg, device, hz=PLAYBACK_HZ):
+    """Build a safe home-return trajectory: lift up, then Cartesian to home.
+
+    Uses IK to plan a lift-then-home path that avoids table collisions.
+    Falls back to joint interpolation if IK fails.
+    Returns ``(traj_np, metadata)`` suitable for ``_set_playback``.
+    """
+    num_joints = arm_cfg.num_joints
+    q_start = current_joints_np[:num_joints].astype(np.float32)
+    q_home = np.zeros(num_joints, dtype=np.float32)
+
+    ik_chain = arm_cfg.ik_chain
+    trac_ik = arm_cfg.trac_ik
+
+    segments = []
+
+    # 1. Lift straight up by 80mm from current position
+    q_start_t = torch.tensor(q_start, dtype=torch.float32, device=device)
+    fk = ik_chain.forward_kinematics(q_start_t.unsqueeze(0))
+    cur_pos = fk.get_matrix()[0, :3, 3].cpu().numpy()
+    lift_pos = cur_pos.copy()
+    lift_pos[2] += 0.08  # 80mm up
+
+    q_lift = None
+    if trac_ik is not None:
+        _, cur_rot = trac_ik._solver.fk(q_start.astype(np.float64))
+        q_lift_np, err = trac_ik.solve(lift_pos, q_init=q_start.astype(np.float64), target_rot=cur_rot)
+        if q_lift_np is not None and err < 0.005:
+            q_lift = q_lift_np.astype(np.float32)
+
+    if q_lift is not None:
+        # Interpolate to lift position
+        N_LIFT = 30
+        alphas = np.linspace(0, 1, N_LIFT).reshape(-1, 1).astype(np.float32)
+        seg_lift = q_start * (1 - alphas) + q_lift * alphas
+        segments.append(seg_lift)
+        q_prev = q_lift
+    else:
+        q_prev = q_start
+
+    # 2. Interpolate from lifted position to home
+    max_delta = float(np.max(np.abs(q_home - q_prev)))
+    duration = max(1.0, max_delta / 2.0)
+    N_HOME = max(int(duration * hz), 20)
+    alphas = np.linspace(0, 1, N_HOME).reshape(-1, 1).astype(np.float32)
+    seg_home = q_prev * (1 - alphas) + q_home * alphas
+    segments.append(seg_home)
+
+    traj_np = np.concatenate(segments, axis=0)
+    meta = {
+        "num_waypoints": traj_np.shape[0],
+        "num_joints": num_joints,
+        "dt": 1.0 / hz,
+        "encoding": "home_return",
+    }
+    return traj_np, meta
+
+
 def _set_playback(state, traj_np, traj_meta, node=None):
     """Store a newly planned trajectory for playback and optionally export.
 
@@ -1713,9 +2080,19 @@ def _set_playback(state, traj_np, traj_meta, node=None):
         state["gripper_actions"] = []
     state["gripper_fired"] = set()
 
+    # Grasp verification: waypoint to check + expected gripper rad
+    state["expected_close_rad"] = traj_meta.get("expected_close_rad")
+    state["approach_rad"] = traj_meta.get("approach_rad")
+    state["grasp_check_waypoint"] = traj_meta.get("grasp_check_waypoint")
+    state["grasp_checked"] = False
+    if state["grasp_check_waypoint"] is not None:
+        print(f"[motion-planner] Grasp check armed at waypoint {state['grasp_check_waypoint']} "
+              f"(expected_close={state['expected_close_rad']})")
+
     # Build trajectory JSON (v3) with gripper frames for external playback
     extra = {}
-    for k in ("grasp_pose", "pregrasp_waypoint", "place_pose", "gripper_actions", "encoding"):
+    for k in ("grasp_pose", "pregrasp_waypoint", "place_pose", "gripper_actions", "encoding",
+              "grasp_check_waypoint", "grasp_dwell_start", "grasp_dwell_end", "home_phase_start"):
         if k in traj_meta:
             extra[k] = traj_meta[k]
     if "grasp_input" in traj_meta:
@@ -1728,6 +2105,17 @@ def _set_playback(state, traj_np, traj_meta, node=None):
         gripper=gripper_array,
         extra_metadata=extra,
     )
+    # Build abort trajectory commands (for grasp failure → home)
+    abort_traj = traj_meta.get("abort_trajectory")
+    if abort_traj is not None:
+        abort_doc = build_trajectory_json(
+            abort_traj,
+            arm=traj_meta.get("arm", "left"),
+            dt=state["play_dt"],
+            gripper=None,  # gripper open during abort (no gripper frames = open)
+        )
+        doc["abort_commands"] = abort_doc["commands"]
+
     state["trajectory_doc"] = doc
 
     if EXPORT_PATH:
@@ -1812,6 +2200,9 @@ def main():
         "gripper_fired": set(),
     }
 
+    # Latest joint states per arm (for grasp verification)
+    latest_joint_states = {"left": None, "right": None}
+
 
     node = Node()
     print(
@@ -1876,22 +2267,41 @@ def main():
 
                 if step >= T - 1 and not playback.get("internal_done"):
                     playback["internal_done"] = True
-                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "done"})]))
+                    print(f"[motion-planner] Playback streaming done, waiting for arm to finish...")
 
             # --- Arm trajectory status (external playback done) ---
             elif event_id in ("left_trajectory_status", "right_trajectory_status"):
                 raw = event["value"][0].as_py()
-                # Arm sends plain string "done" or JSON {"status": "done"}
-                is_done = False
-                if raw == "done":
-                    is_done = True
+                # Parse status: "done", "grasp_failed", or JSON
+                status_str = None
+                status_obj = {}
+                if raw in ("done", "playing"):
+                    status_str = raw
                 else:
                     try:
-                        is_done = json.loads(raw).get("status") == "done"
+                        status_obj = json.loads(raw)
+                        status_str = status_obj.get("status")
                     except (json.JSONDecodeError, TypeError, IndexError):
                         pass
-                if is_done and playback["playing"]:
+
+                if status_str == "grasp_failed" and playback["playing"]:
+                    # Playback node already went home — just signal retry
                     playback["playing"] = False
+                    tau = status_obj.get("gripper_max_torque", "?")
+                    print(f"[motion-planner] Grasp failed (close_max={tau}Nm), signaling retry")
+                    node.send_output("trajectory_status", pa.array([json.dumps({
+                        "status": "failed",
+                        "reason": "Grasp failed (gripper closed without object)",
+                        "retry": True,
+                    })]))
+
+                elif status_str == "done" and playback["playing"]:
+                    playback["playing"] = False
+                    tau = status_obj.get("gripper_max_torque")
+                    if tau is not None:
+                        print(f"[motion-planner] Grasp OK (close_max={tau:.2f}Nm)")
+                    print(f"[motion-planner] Arm reports done, signaling trajectory complete")
+                    node.send_output("trajectory_status", pa.array([json.dumps({"status": "done"})]))
 
             # --- Image (RGB for debug visualization) ---
             elif event_id == "image":
@@ -1929,6 +2339,7 @@ def main():
                     arm.current_joints = torch.tensor(
                         js[: arm.num_joints], dtype=torch.float32, device=device
                     )
+                    latest_joint_states["left"] = js
 
             elif event_id == "right_joint_state":
                 arm = arms.get("right")
@@ -1937,6 +2348,7 @@ def main():
                     arm.current_joints = torch.tensor(
                         js[: arm.num_joints], dtype=torch.float32, device=device
                     )
+                    latest_joint_states["right"] = js
 
             # --- Target pose ---
             elif event_id == "target_pose":
@@ -2184,6 +2596,10 @@ def main():
                     place_mask_bbox = [int(x) for x in place_bbox_data]
                     print(f"[motion-planner] grasp_result: place_mask_bbox={place_mask_bbox}")
 
+                grasp_action = data.get("action", "")
+                if grasp_action:
+                    print(f"[motion-planner] grasp_result: action={grasp_action}")
+
                 # Load SAM3 masks from disk for free-space place targeting
                 loaded_place_mask = None
                 loaded_pick_mask = None
@@ -2422,6 +2838,7 @@ def main():
                         trac_ik_solver=arm.trac_ik,
                         trac_ik_dist=arm.trac_ik_dist,
                         latest_image=latest_image,
+                        action=grasp_action,
                     )
                     if result is not None:
                         break
