@@ -85,8 +85,8 @@ GRIPPER_OPEN_RAD = -1.0472   # -60° = fully open (44mm finger travel)
 GRIPPER_CLOSED_RAD = 0.0     # fully closed
 
 # Per-motor gains (motors 1-8), matching openarm_playback.rs
-MOTOR_KP = [300.0, 300.0, 150.0, 300.0, 60.0, 60.0, 60.0, 30.0]
-MOTOR_KD = [7.5, 7.5, 3.75, 7.5, 1.5, 1.5, 1.5, 0.75]
+MOTOR_KP = [500.0, 400.0, 300.0, 300.0, 60.0, 60.0, 60.0, 20.0]
+MOTOR_KD = [11.0, 10.0, 7.5, 7.5, 1.5, 1.5, 1.5, 0.75]
 
 
 def _float_to_uint(x: float, x_min: float, x_max: float, bits: int) -> int:
@@ -166,6 +166,7 @@ def build(
     motor_ids: list[int] | None = None,
     gripper: np.ndarray | None = None,
     extra_metadata: dict | None = None,
+    gripper_kp_scale: float = 1.0,
 ) -> dict:
     """Build a (T, J) radian trajectory as a CAN-frame JSON dict (v3).
 
@@ -221,7 +222,7 @@ def build(
         if gripper is not None:
             g = float(gripper[i])
             grip_rad = GRIPPER_OPEN_RAD + g * (GRIPPER_CLOSED_RAD - GRIPPER_OPEN_RAD)
-            kp = MOTOR_KP[GRIPPER_MOTOR_ID - 1]
+            kp = MOTOR_KP[GRIPPER_MOTOR_ID - 1] * gripper_kp_scale
             kd = MOTOR_KD[GRIPPER_MOTOR_ID - 1]
             mit = _encode_mit_command(p_des=grip_rad, kp=kp, kd=kd)
             wire = _encode_wire_frame(GRIPPER_MOTOR_ID, mit)

@@ -66,6 +66,14 @@ fn decode_command_pos(data: &[u8]) -> f32 {
     raw as f32 / 65535.0 * (POS_MAX - POS_MIN) as f32 + POS_MIN as f32
 }
 
+/// Encode position into MIT command bytes 0-1 (same encoding as Python float_to_uint).
+fn encode_command_pos(data: &mut [u8], pos: f32) {
+    let pos_clamped = (pos as f64).clamp(POS_MIN, POS_MAX);
+    let raw = ((pos_clamped - POS_MIN) / (POS_MAX - POS_MIN) * 65535.0) as u16;
+    data[0] = (raw >> 8) as u8;
+    data[1] = (raw & 0xFF) as u8;
+}
+
 fn decode_wire_frame(wire: &[u8]) -> (u32, &[u8]) {
     let can_id = u32::from_le_bytes([wire[0], wire[1], wire[2], wire[3]]) & 0x1FFFFFFF;
     let len = (wire[4] as usize).min(64);
@@ -268,6 +276,7 @@ fn play_trajectory(
     trajectory: &Trajectory,
     positions: &mut [f32; NUM_MOTORS],
     torques: &mut [f32; NUM_MOTORS],
+    grasp_check_enabled: bool,
 ) -> eyre::Result<PlaybackResult> {
     if trajectory.timesteps.is_empty() {
         println!("Empty trajectory, nothing to play");
@@ -327,16 +336,27 @@ fn play_trajectory(
             }
         }
 
-        // At grasp check waypoint: check close-phase max torque and abort if failed
+        // At grasp check waypoint: check if object is still held.
+        // Two signals: sustained torque (motor pushing against object) and
+        // gripper position (near fully closed = nothing held).
+        // Either one failing means the grasp failed.
+        const GRASP_FAIL_POS: f32 = -0.10; // rad; above this = gripper closed on nothing
         if let Some(check_wp) = trajectory.grasp_check_waypoint {
-            if i == check_wp {
+            if grasp_check_enabled && i == check_wp {
+                let check_tau = torques[7].abs();
+                let check_pos = positions[7];
                 gripper_check_torque = Some(torques[7]);
-                println!("  Grasp check at wp {}: gripper_torque={:.2}Nm pos={:.3} (close_max={:.2}Nm)",
-                    i, torques[7], positions[7], gripper_max_torque);
-                if gripper_max_torque < GRASP_TORQUE_MIN {
+                println!("  Grasp check at wp {}: torque={:.2}Nm pos={:.3} (close_max={:.2}Nm)",
+                    i, check_tau, check_pos, gripper_max_torque);
+                if check_tau < GRASP_TORQUE_MIN || check_pos > GRASP_FAIL_POS {
                     grasp_failed = true;
-                    println!("  GRASP FAILED: close_max={:.2}Nm < {:.1}Nm — switching to abort path ({} steps)",
-                        gripper_max_torque, GRASP_TORQUE_MIN, trajectory.abort_timesteps.len());
+                    let reason = if check_pos > GRASP_FAIL_POS {
+                        format!("gripper closed (pos={:.3} > {:.2})", check_pos, GRASP_FAIL_POS)
+                    } else {
+                        format!("low torque ({:.2}Nm < {:.1}Nm)", check_tau, GRASP_TORQUE_MIN)
+                    };
+                    println!("  GRASP FAILED: {} — switching to abort path ({} steps)",
+                        reason, trajectory.abort_timesteps.len());
                     break;
                 }
             }
@@ -374,6 +394,45 @@ fn play_trajectory(
 
     // On grasp failure, play the pre-computed abort trajectory (safe path home)
     if grasp_failed && !trajectory.abort_timesteps.is_empty() {
+        // Transition ramp: interpolate from actual positions to first abort frame
+        // to avoid discontinuity (actual position may differ from planned).
+        let ramp_steps = 30;
+        let ramp_dt = Duration::from_secs_f64(1.0 / 36.0); // same as playback Hz
+        let first_abort = &trajectory.abort_timesteps[0];
+        // Decode target positions from first abort frame
+        let mut abort_targets = [0.0f32; NUM_MOTORS];
+        for cmd in &first_abort.frames {
+            if (0x01..=0x08).contains(&cmd.can_id) && cmd.data.len() >= 2 {
+                let idx = (cmd.can_id - 0x01) as usize;
+                abort_targets[idx] = decode_command_pos(&cmd.data);
+            }
+        }
+        println!("Transition ramp ({} steps) from actual to abort start...", ramp_steps);
+        let ramp_start = Instant::now();
+        let actual_start = positions.clone();
+        for step in 1..=ramp_steps {
+            let target_time = ramp_dt * step as u32;
+            let elapsed = ramp_start.elapsed();
+            if target_time > elapsed {
+                thread::sleep(target_time - elapsed);
+            }
+            let alpha = step as f32 / ramp_steps as f32;
+            // Send interpolated frames using first abort frame as template (has correct KP/KD)
+            for cmd in &first_abort.frames {
+                if (0x01..=0x08).contains(&cmd.can_id) && cmd.data.len() >= 2 {
+                    let idx = (cmd.can_id - 0x01) as usize;
+                    let interp_pos = actual_start[idx] * (1.0 - alpha) + abort_targets[idx] * alpha;
+                    let mut frame_data = cmd.data.clone();
+                    encode_command_pos(&mut frame_data, interp_pos);
+                    if let Ok(frame) = CanFrame::new(cmd.can_id, &frame_data) {
+                        let _ = socket.write_frame(&frame);
+                    }
+                }
+            }
+            drain_responses(socket, positions, torques);
+        }
+        println!("Transition ramp done ({:.1}s)", ramp_start.elapsed().as_secs_f64());
+
         println!("Playing abort trajectory ({} steps)...", trajectory.abort_timesteps.len());
         let abort_start = Instant::now();
         let abort_t_offset = trajectory.abort_timesteps[0].t;
@@ -461,6 +520,13 @@ fn main() -> eyre::Result<()> {
             .as_str(),
         "true" | "1" | "yes"
     );
+    let grasp_check_enabled = matches!(
+        env::var("GRASP_CHECK")
+            .unwrap_or_else(|_| "true".into())
+            .to_lowercase()
+            .as_str(),
+        "true" | "1" | "yes"
+    );
 
     println!(
         "dora-openarm-playback: server={}, arm={}, timeout={}ms, auto_enable={}",
@@ -536,7 +602,7 @@ fn main() -> eyre::Result<()> {
                     node.send_output("trajectory_status".into(), Default::default(), status)?;
 
                     // Play back the trajectory (blocking)
-                    match play_trajectory(&mut socket, &trajectory, &mut positions, &mut torques) {
+                    match play_trajectory(&mut socket, &trajectory, &mut positions, &mut torques, grasp_check_enabled) {
                         Ok(result) => {
                             // Save playback log as JSON
                             let records = &result.records;

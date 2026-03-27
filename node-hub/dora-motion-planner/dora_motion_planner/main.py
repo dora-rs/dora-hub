@@ -877,7 +877,8 @@ def plan_grasp_from_pixels(
         floor_height=FLOOR_HEIGHT,
         approach_margin=APPROACH_MARGIN,
         jaw_contact_depth=JAW_CONTACT_DEPTH,
-        approach_angle_deg=APPROACH_ANGLE_DEG,
+        approach_angle_deg=70.0 if action == "pour" else APPROACH_ANGLE_DEG,
+        pick_mask=pick_mask,
     )
     if result is None:
         print("[motion-planner] grasp: invalid depth at jaw points, skipping")
@@ -938,6 +939,17 @@ def plan_grasp_from_pixels(
         print("[motion-planner] grasp: IK failed for grasp, skipping")
         return None, "IK failed for grasp pose (unreachable)"
 
+    # FK verification: check where the IK solution actually places the EE
+    if trac_ik_solver is not None:
+        fk_pos, fk_rot = trac_ik_solver._solver.fk(q_grasp.cpu().numpy().astype(np.float64))
+        fk_err = np.linalg.norm(fk_pos - grasp_xyzrpy[:3]) * 1000
+        print(f"[motion-planner] FK verify grasp: target={np.round(grasp_xyzrpy[:3], 4)} "
+              f"fk={np.round(fk_pos, 4)} err={fk_err:.1f}mm")
+        fk_pregrasp_pos, _ = trac_ik_solver._solver.fk(q_pregrasp.cpu().numpy().astype(np.float64))
+        fk_pre_err = np.linalg.norm(fk_pregrasp_pos - pregrasp_xyzrpy[:3]) * 1000
+        print(f"[motion-planner] FK verify pregrasp: target={np.round(pregrasp_xyzrpy[:3], 4)} "
+              f"fk={np.round(fk_pregrasp_pos, 4)} err={fk_pre_err:.1f}mm")
+
     # --- Pick-and-place: solve IK for place/preplace poses ---
     q_place = None
     q_preplace = None
@@ -946,7 +958,7 @@ def plan_grasp_from_pixels(
     # Pre-compute flipped RPY: Rz_local(90°) = roll around approach/finger axis
     # Done at a closer position for workspace, then move back to place.
     flipped_rpy = None
-    if action == "flip" and q_grasp is not None:
+    if action in ("flip", "pour") and q_grasp is not None:
         from scipy.spatial.transform import Rotation as R_flip_rot
         R_grasp_mat = R_flip_rot.from_euler("XYZ", grasp_xyzrpy[3:6]).as_matrix()
         # Start with 90° roll for validation
@@ -958,8 +970,8 @@ def plan_grasp_from_pixels(
 
     if place_uv is not None:
         place_u, place_v = place_uv
-        # For flip: use FK-computed flipped orientation (J6 at opposite limit)
-        if action == "flip" and flipped_rpy is not None:
+        # For flip/pour: use FK-computed flipped orientation (J6 at opposite limit)
+        if action in ("flip", "pour") and flipped_rpy is not None:
             place_rpy = flipped_rpy
             print(f"[motion-planner] flip: place_rpy={np.round(np.degrees(place_rpy), 1)} (from FK J6 flip)")
             place_approach_margin = APPROACH_MARGIN
@@ -976,15 +988,15 @@ def plan_grasp_from_pixels(
             floor_height=FLOOR_HEIGHT,
             approach_margin=place_approach_margin,
             jaw_contact_depth=JAW_CONTACT_DEPTH,
-            mask_bbox=None if action == "flip" else place_mask_bbox,
-            place_mask=None if action == "flip" else place_mask,
+            mask_bbox=None if action in ("flip", "pour") else place_mask_bbox,
+            place_mask=None if action in ("flip", "pour") else place_mask,
             pick_mask=pick_mask,
         )
         if place_result is not None:
             place_xyzrpy, preplace_xyzrpy = place_result
             place_xyzrpy = place_xyzrpy + cal_offset
             preplace_xyzrpy = preplace_xyzrpy + cal_offset
-            if action != "flip":
+            if action not in ("flip", "pour"):
                 q_preplace = solve_ik(
                     ik_chain, preplace_xyzrpy, q_grasp, joint_limits, device,
                     num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
@@ -1002,10 +1014,10 @@ def plan_grasp_from_pixels(
             return None, "Place target has invalid depth"
 
 
-    # Flip waypoints: move to closer position, do the roll, move back
+    # Flip/pour waypoints: move to closer position, do the roll, move back
     q_flip_waypoints = []
     descent_waypoints = []
-    if action == "flip" and place_xyzrpy is not None and flipped_rpy is not None:
+    if action in ("flip", "pour") and place_xyzrpy is not None and flipped_rpy is not None:
         from scipy.spatial.transform import Rotation as R_flip_rot
         # Build travel orientation (90° = fully horizontal at -135° heading)
         heading_rad = np.radians(-135.0)
@@ -1023,18 +1035,36 @@ def plan_grasp_from_pixels(
         import torch as _torch
 
         # Strategy: try (angle, height_extra) combinations until one works
-        # Prefer: 180° at low height > 160° > 135° > go higher
-        # Try 180° at increasing heights — baby steps will reach as far as possible
-        strategies = [
-            (180, 0.04), (180, 0.08), (180, 0.12),
-        ]
+        # Prefer: target angle at low height, then go higher
+        if action == "pour":
+            strategies = [
+                (130, 0.06), (130, 0.10), (130, 0.14),
+            ]
+        else:
+            # Flip: 180° at increasing heights
+            strategies = [
+                (180, 0.04), (180, 0.08), (180, 0.12),
+            ]
 
         q_close = None
         q_rolled = None
         rolled_rpy = None
         for roll_deg, height_extra in strategies:
-            close_pos = pregrasp_xyzrpy[:3].copy()
-            close_pos[2] += height_extra
+            # Pour: tilt above the pour target (place), not the pick position
+            if action == "pour" and place_xyzrpy is not None:
+                close_pos = place_xyzrpy[:3].copy()
+                # Offset pour position slightly toward the arm for better reach
+                if arm == "left":
+                    close_pos[0] += 0.01   # slightly forward
+                    close_pos[1] -= 0.01   # slightly left (toward left arm)
+                else:
+                    close_pos[0] += 0.01
+                    close_pos[1] += 0.01   # slightly right (toward right arm)
+                # Use pregrasp Z as base (higher than place surface)
+                close_pos[2] = max(pregrasp_xyzrpy[2], place_xyzrpy[2]) + height_extra
+            else:
+                close_pos = pregrasp_xyzrpy[:3].copy()
+                close_pos[2] += height_extra
 
             # Solve travel orientation IK at this height
             # close_pos already includes cal_offset from pregrasp_xyzrpy
@@ -1112,10 +1142,11 @@ def plan_grasp_from_pixels(
                 q_flip_waypoints = [q_close, q_rolled]
 
         else:
-            return None, "Flip failed: no angle/height combination worked"
+            return None, f"{'Pour' if action == 'pour' else 'Flip'} failed: no angle/height combination worked"
 
         # Descent: TracIK baby steps, each seeded from previous.
         # On joint jump or IK failure, subdivide into smaller steps before giving up.
+        # Pour stays at height (no descent needed).
         q_rolled_wp = q_flip_waypoints[-1]
         q_preplace = q_rolled_wp
         q_place = q_rolled_wp  # default: drop from height
@@ -1125,7 +1156,7 @@ def plan_grasp_from_pixels(
         current_z = close_pos[2]
         base_step_z = 0.01
         stop_descent = False
-        while current_z - base_step_z >= target_z and not stop_descent:
+        while action != "pour" and current_z - base_step_z >= target_z and not stop_descent:
             next_z = current_z - base_step_z
             # Try the full step first, then subdivide on failure
             for n_sub in [1, 2, 4]:
@@ -1182,6 +1213,7 @@ def plan_grasp_from_pixels(
         trac_ik_dist=trac_ik_dist,
         q_flip_waypoints=q_flip_waypoints,
         descent_waypoints=descent_waypoints if action == "flip" else [],
+        action=action,
     )
     if result is None:
         return None, "Trajectory planning failed"
@@ -1364,6 +1396,7 @@ def _build_pick_place_trajectory(
     trac_ik_dist=None,
     q_flip_waypoints=None,
     descent_waypoints=None,
+    action="",
 ):
     """Build a full pick-and-place trajectory with dwell waypoints and gripper actions.
 
@@ -1599,7 +1632,7 @@ def _build_pick_place_trajectory(
     # Phase 1: start → pre-grasp
     if q_pregrasp_travel is not None:
         # Travel at 70° orientation (reliable), then interpolate to actual pre-grasp
-        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp (travel)", q_start, q_pregrasp_travel, safe_z=True, position_only=True)
+        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp (travel)", q_start, q_pregrasp_travel, safe_z=True, staging=(action == "pour"), position_only=True)
         q_prev = _append(seg1, skip_first=False)
         # Phase 1b: simultaneous rotation + descent from travel to pre-grasp.
         # Slerp orientation and interpolate XYZ in one pass (65 baby-steps).
@@ -1637,7 +1670,7 @@ def _build_pick_place_trajectory(
         print(f"  Phase 1b: rotate + descend to pre-grasp ({N_ROTATE} steps, {drop_mm:.0f}mm drop)")
         q_prev = _append(seg1b)
     else:
-        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, safe_z=True, position_only=True)
+        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, safe_z=True, staging=(action == "pour"), position_only=True)
         q_prev = _append(seg1, skip_first=False)
 
     # Phase 2: pre-grasp → grasp (short descent, slow)
@@ -1650,8 +1683,63 @@ def _build_pick_place_trajectory(
     segments.append(grasp_dwell)
 
     if q_place is not None:
-        # Phase 3: grasp → [flip waypoints →] pre-place
-        if q_flip_waypoints:
+        # Phase 3: grasp → [flip/pour waypoints →] pre-place
+        if q_flip_waypoints and action == "pour":
+            # === POUR trajectory ===
+            # Phase 3a: transfer from grasp to above pour target (q_close)
+            q_pour_travel = q_flip_waypoints[0]  # q_close at pour target height
+            seg_transfer = _cartesian_segment("Phase 3 pour: transfer to pour target",
+                                              q_prev, q_pour_travel, safe_z=True, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0)
+            q_prev = _append(seg_transfer)
+
+            # Phase 3b: tilt waypoints (baby-step roll 130°)
+            for i, q_wp in enumerate(q_flip_waypoints[1:], start=1):
+                N_STEPS = 2
+                alphas = torch.linspace(0, 1, N_STEPS + 1)[1:].unsqueeze(1)
+                seg = (q_prev.cpu() * (1 - alphas) + q_wp.cpu() * alphas)
+                print(f"  Phase 3 pour tilt {i}/{len(q_flip_waypoints)-1}: "
+                      f"joint interp ({N_STEPS} steps)")
+                q_prev = _append(seg)
+
+            # Pour dwell: hold at tilted position for ~2s (keep gripper closed!)
+            POUR_DWELL_STEPS = 60  # ~2s at 30Hz
+            pour_dwell = q_prev.unsqueeze(0).expand(POUR_DWELL_STEPS, -1).cpu()
+            segments.append(pour_dwell)
+            print(f"  Phase 3 pour dwell: {POUR_DWELL_STEPS} steps (~{POUR_DWELL_STEPS / PLAYBACK_HZ:.1f}s)")
+
+            # Un-tilt: reverse through baby-step waypoints back to q_close
+            for i, q_wp in enumerate(reversed(q_flip_waypoints[1:])):
+                N_STEPS = 2
+                alphas = torch.linspace(0, 1, N_STEPS + 1)[1:].unsqueeze(1)
+                seg = (q_prev.cpu() * (1 - alphas) + q_wp.cpu() * alphas)
+                q_prev = _append(seg)
+            # Back to q_close (travel orientation above pour target)
+            N_STEPS = 2
+            alphas = torch.linspace(0, 1, N_STEPS + 1)[1:].unsqueeze(1)
+            seg = (q_prev.cpu() * (1 - alphas) + q_pour_travel.cpu() * alphas)
+            q_prev = _append(seg)
+            print(f"  Phase 3 pour un-tilt: {len(q_flip_waypoints)-1} waypoints")
+
+            # Return cup to original pick position: move back to pre-grasp, then descend to grasp
+            seg_return = _cartesian_segment("Phase 4 pour: return to pre-grasp",
+                                            q_prev, q_pregrasp, safe_z=True, horiz_grip=True)
+            q_prev = _append(seg_return)
+
+            seg_descend = _cartesian_segment("Phase 4 pour: descend to grasp (place cup)",
+                                             q_prev, q_grasp, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0)
+            q_prev = _append(seg_descend)
+
+            # Place dwell: open gripper to release cup at original position
+            place_dwell_start = sum(s.shape[0] for s in segments)
+            place_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
+            segments.append(place_dwell)
+
+            # Lift back to pre-grasp
+            seg_lift = _cartesian_segment("Phase 4 pour: lift from place", q_prev, q_pregrasp, horiz_grip=True)
+            q_prev = _append(seg_lift)
+
+        elif q_flip_waypoints:
+            # === FLIP trajectory ===
             # Flip waypoints: joint interp (for the roll)
             for i, q_wp in enumerate(q_flip_waypoints):
                 N_STEPS = 15 if i == 0 else 2  # first step (grasp→travel) needs more time
@@ -1780,7 +1868,7 @@ def _build_pick_place_trajectory(
             print(f"  Phase 4b: travel orientation IK failed at current pos, skipping rotation")
     # Go home (always Cartesian with safe_z to avoid table collisions)
     home_phase_start = sum(s.shape[0] for s in segments)
-    seg5 = _cartesian_segment("Phase 5: place -> home", q_prev, q_home, safe_z=True, position_only=True)
+    seg5 = _cartesian_segment("Phase 5: place -> home", q_prev, q_home, staging=True, position_only=True)
     _append(seg5)
 
     full_traj = torch.cat(segments, dim=0)
@@ -1789,8 +1877,8 @@ def _build_pick_place_trajectory(
     # waypoints with large joint jumps, progressively relaxing the threshold.
     traj_np = full_traj.numpy().copy()
     total_fixed = 0
-    for threshold in [0.12, 0.10, 0.08]:
-        for _pass in range(3):
+    for threshold in [0.12, 0.10, 0.08, 0.06, 0.04]:
+        for _pass in range(5):
             diffs = np.abs(np.diff(traj_np, axis=0))
             n_fixed = 0
             for t in range(2, traj_np.shape[0] - 2):
@@ -1804,6 +1892,26 @@ def _build_pick_place_trajectory(
                 break
     if total_fixed > 0:
         print(f"[motion-planner] Smoothed {total_fixed} discontinuities (multi-pass)")
+
+    # Gaussian smoothing: low-pass filter to remove jerk spikes at phase boundaries.
+    # Uses a small kernel to smooth velocity transitions without distorting the path.
+    # Skip dwell regions (consecutive identical waypoints) to preserve hold positions.
+    from scipy.ndimage import uniform_filter1d
+    SMOOTH_WINDOW = 7  # ~0.2s at 36Hz — enough to smooth phase transitions
+    smoothed = uniform_filter1d(traj_np, size=SMOOTH_WINDOW, axis=0, mode='nearest')
+    # Protect dwell regions: don't smooth where waypoints are static
+    diffs_smooth = np.max(np.abs(np.diff(traj_np, axis=0)), axis=1)
+    is_moving = np.ones(traj_np.shape[0], dtype=bool)
+    for t in range(1, traj_np.shape[0]):
+        if t - 1 < len(diffs_smooth) and diffs_smooth[t - 1] < 1e-7:
+            is_moving[t] = False
+    # Also protect first and last 3 waypoints
+    is_moving[:3] = False
+    is_moving[-3:] = False
+    n_smoothed_gauss = int(np.sum(is_moving))
+    traj_np[is_moving] = smoothed[is_moving]
+    print(f"[motion-planner] Gaussian smoothed {n_smoothed_gauss}/{traj_np.shape[0]} moving waypoints (window={SMOOTH_WINDOW})")
+
     full_traj = torch.tensor(traj_np, dtype=full_traj.dtype)
     total_waypoints = full_traj.shape[0]
     t_plan = time.perf_counter() - t0
@@ -1833,6 +1941,9 @@ def _build_pick_place_trajectory(
 
     close_rad = compute_gripper_close_rad(object_width)
     approach_rad = compute_gripper_approach_rad(object_width)
+    # Pour: open jaw fully for easier cup grab
+    if action == "pour":
+        approach_rad = GRIPPER_OPEN_RAD
     gripper_actions = [
         {"waypoint": 0, "rad": float(approach_rad)},  # open just wider than object
         {"waypoint": grasp_dwell_start, "rad": float(close_rad)},
@@ -1846,10 +1957,18 @@ def _build_pick_place_trajectory(
     # either stalls on the object or closes fully — giving a clear signal.
     # Close ramp ends at grasp_dwell_start + 30, squeeze ramp starts there
     # and runs another 30 steps, then allow ~15 steps for motor to settle.
+    # Pour: skip full squeeze — just hold at close_rad to avoid crushing the cup.
     squeeze_waypoint = grasp_dwell_start + 30
-    gripper_actions.append(
-        {"waypoint": squeeze_waypoint, "rad": float(GRIPPER_CLOSED_RAD)}
-    )
+    if action == "pour":
+        # Gentle squeeze: halfway between close_rad and fully closed
+        pour_squeeze_rad = close_rad * 0.5
+        gripper_actions.append(
+            {"waypoint": squeeze_waypoint, "rad": float(pour_squeeze_rad)}
+        )
+    else:
+        gripper_actions.append(
+            {"waypoint": squeeze_waypoint, "rad": float(GRIPPER_CLOSED_RAD)}
+        )
     grasp_check_waypoint = squeeze_waypoint + 30 + 15  # after squeeze ramp + settle
 
     traj_np = full_traj.numpy().astype(np.float32)
@@ -1870,6 +1989,7 @@ def _build_pick_place_trajectory(
         "abort_trajectory": abort_traj_np,
         "expected_close_rad": float(close_rad),
         "approach_rad": float(approach_rad),
+        "action": action,
     }
     node.send_output(
         "joint_trajectory",
@@ -2104,6 +2224,7 @@ def _set_playback(state, traj_np, traj_meta, node=None):
         dt=state["play_dt"],
         gripper=gripper_array,
         extra_metadata=extra,
+        gripper_kp_scale=1.0,
     )
     # Build abort trajectory commands (for grasp failure → home)
     abort_traj = traj_meta.get("abort_trajectory")

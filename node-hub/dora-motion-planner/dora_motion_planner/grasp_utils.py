@@ -99,6 +99,7 @@ def grasp_pose_from_jaw_pixels(
     jaw_contact_depth: float = 0.02,
     approach_angle_deg: float = 0.0,
     mask_bbox: tuple[float, float, float, float] | None = None,
+    pick_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Compute a grasp pose from two jaw pixel positions.
 
@@ -212,28 +213,43 @@ def grasp_pose_from_jaw_pixels(
     scan_src = "mask bbox" if mask_bbox is not None else "jaw line"
     print(f"[grasp] object top z={object_top_z:.4f}m (scanned {n_scanned} pixels from {scan_src})")
 
-    # Grasp center = deproject the center pixel (midpoint of jaw pixels in
-    # image space).  This is more robust than averaging the 3D jaw endpoints,
-    # because when the jaws are wider than the object the endpoint depths
-    # may land on the background surface and their 3D midpoint drifts away
-    # from the actual object.
-    u_center = (u1 + u2) / 2.0
-    v_center = (v1 + v2) / 2.0
-    p_center_cam = pixel_to_3d(
-        u_center, v_center, depth_map, fx, fy, cx, cy, width, height,
-        patch_size=11,  # smaller patch to avoid depth bleed from surface below
-        cam_translation=cam_translation, cam_rotation=cam_rotation,
-        table_z=floor_height,
-    )
-    if p_center_cam is not None:
-        center = R_cam @ p_center_cam + cam_translation
-        center_scene = np.array([center[0], center[2], -center[1]])
-        print(f"[grasp] center from pixel ({u_center:.0f},{v_center:.0f}): "
-              f"robot={np.round(center, 4)}, scene(Y-up)={np.round(center_scene, 4)}")
+    # Grasp center XY = centroid of the SAM3 mask deprojected to 3D.
+    # This gives the true object center regardless of where the grasp line
+    # crosses the object or perspective distortion on tall objects.
+    # Fallback: 3D midpoint of jaw endpoints.
+    center_3d_jaw = (p1_rob + p2_rob) / 2.0
+    center = center_3d_jaw.copy()
+
+    if pick_mask is not None:
+        mask_2d = pick_mask if pick_mask.ndim == 2 else pick_mask.reshape(height, width)
+        mask_ys, mask_xs = np.where(mask_2d > 0)
+        if len(mask_ys) > 0:
+            # Deproject all mask pixels to 3D
+            d_mask = depth_2d[mask_ys, mask_xs].astype(np.float32)
+            valid = (d_mask > 100) & (d_mask < 5000)
+            if np.any(valid):
+                d_valid = d_mask[valid] * 0.001
+                xs_valid = mask_xs[valid].astype(np.float32)
+                ys_valid = mask_ys[valid].astype(np.float32)
+                pts_cam = np.stack([
+                    (xs_valid - cx) * d_valid / fx,
+                    (ys_valid - cy) * d_valid / fy,
+                    d_valid,
+                ], axis=1)
+                pts_rob = (R_cam @ pts_cam.T).T + cam_translation
+                mask_centroid = pts_rob[:, :2].mean(axis=0)  # XY only
+                drift = np.linalg.norm(mask_centroid - center_3d_jaw[:2]) * 1000
+                center[:2] = mask_centroid
+                print(f"[grasp] center from mask 3D centroid: "
+                      f"xy={np.round(mask_centroid, 4)}, "
+                      f"jaw midpoint drift={drift:.1f}mm "
+                      f"({len(d_valid)} mask pts)")
+            else:
+                print(f"[grasp] center: mask has no valid depth, using jaw midpoint")
+        else:
+            print(f"[grasp] center: empty mask, using jaw midpoint")
     else:
-        center = (p1_rob + p2_rob) / 2.0
-        print(f"[grasp] center from jaw midpoint (fallback): "
-              f"{np.round(center, 4)}")
+        print(f"[grasp] center from jaw 3D midpoint: {np.round(center, 4)}")
     grasp_z = object_top_z + grasp_depth_offset
     grasp_z = max(grasp_z, floor_height)
     center[2] = grasp_z

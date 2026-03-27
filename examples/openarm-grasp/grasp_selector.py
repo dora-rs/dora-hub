@@ -1022,6 +1022,9 @@ def _emit_best_geo(node, img, cands, fc):
         frame_count += 1
         state = STATE_IDLE
     elif PLACE_CONTAINER:
+        # Pour: tag action so motion planner knows
+        if ACTION == "pour":
+            grasp["action"] = "pour"
         if place_center is not None:
             # VLM located the place target — segment with SAM3 for proper mask
             place_cx, place_cy = place_center
@@ -1437,6 +1440,11 @@ for event in node:
                         continue
                     else:
                         print(f"[SAM3] VLM locate failed after 3 retries, giving up")
+                        node.send_output("status", pa.array([f"Could not find '{TARGET_OBJECT}' in the image"]))
+                        node.send_output("grasp_result", pa.array([json.dumps({
+                            "status": "failed",
+                            "reason": f"Could not find '{TARGET_OBJECT}' in the image",
+                        })]))
                         vlm_locate_retries = 0
                         state = STATE_IDLE
                         continue
@@ -1604,6 +1612,9 @@ for event in node:
                         frame_count += 1
                         state = STATE_IDLE
                     elif PLACE_CONTAINER:
+                        # Pour: tag action so motion planner knows
+                        if ACTION == "pour":
+                            grasp["action"] = "pour"
                         best_grasp_result = grasp
                         if place_center is not None:
                             # Have VLM-estimated place coords — refine with SAM3
@@ -1686,6 +1697,10 @@ for event in node:
                         print(f"  [Place] VLM locate failed after 3 retries, aborting")
                         place_locate_retries = 0
                         node.send_output("status", pa.array([f"Failed: place target '{PLACE_CONTAINER}' not found"]))
+                        node.send_output("grasp_result", pa.array([json.dumps({
+                            "status": "failed",
+                            "reason": f"Could not find '{PLACE_CONTAINER}' in the image",
+                        })]))
                         best_grasp_result = None
                         frame_count += 1
                         state = STATE_IDLE

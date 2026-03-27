@@ -43,11 +43,13 @@ VLM_PARSE_PROMPT = (
     "Output ONLY JSON:\n"
     '- Pick and place: {{"pick": "full object description", "place": "target"}}\n'
     '- Flip: {{"pick": "full object description", "action": "flip"}}\n'
-    "- If no place/flip, just: {{\"pick\": \"full object description\"}}\n"
+    '- Pour: {{"pick": "container to pour from", "place": "target to pour into", "action": "pour"}}\n'
+    "- If no place/flip/pour, just: {{\"pick\": \"full object description\"}}\n"
     "IMPORTANT: Keep the FULL object description in 'pick', including location/color/size qualifiers. "
     "These help identify the correct object when there are multiple similar ones.\n"
     "Examples:\n"
     '- "flip the sausage in the pan" → {{"pick": "sausage in the pan", "action": "flip"}}\n'
+    '- "pour the cup into the pan" → {{"pick": "cup", "place": "pan", "action": "pour"}}\n'
     '- "pick the red cube on the left" → {{"pick": "red cube on the left"}}\n'
     '- "put the big plate in the sink" → {{"pick": "big plate", "place": "sink"}}\n'
     'If this is NOT a robot command, output exactly: {{"chat": true}}\n'
@@ -216,6 +218,7 @@ def main():
                             "  @robot pick the <object> — pick up an object\n"
                             "  @robot pick the <object> and put in the <target> — pick and place\n"
                             "  @robot flip the <object> — flip an object in place\n"
+                            "  @robot pour the <container> into the <target> — pour contents\n"
                             "  @robot <command> x5 — repeat a command 5 times\n"
                             "  @robot loop: <step1>, <step2>, and <step3> — loop steps forever\n"
                             "  cancel / stop — cancel current action or loop"
@@ -259,10 +262,13 @@ def main():
                         total_cycles = count
                         cmd["command_ts"] = time.time()
                         last_cmd = cmd.copy()
+                        retries = 0
                         print(f"[chat] Direct JSON command: {cmd} (×{count})")
                         cycle_suffix = f" (×{count}, cycle 1)" if count > 1 else ""
                         if cmd.get("action") == "flip":
                             chat.send(f"Got it: flip '{cmd.get('pick', '')}'{cycle_suffix}. Planning...")
+                        elif cmd.get("action") == "pour":
+                            chat.send(f"Got it: pour '{cmd.get('pick', '')}' into '{cmd.get('place', '')}'{cycle_suffix}. Planning...")
                         else:
                             chat.send(f"Got it: pick '{cmd.get('pick', '')}'"
                                       + (f", place in '{cmd['place']}'" if cmd.get("place") else "")
@@ -272,6 +278,7 @@ def main():
                         continue
 
                     # Free-text: send to VLM for parsing
+                    retries = 0
                     print(f"[chat] Sending to VLM for parsing: {text}")
                     last_user_message = text
                     prompt = VLM_PARSE_PROMPT.format(command=text)
@@ -320,6 +327,8 @@ def main():
                     cycle_suffix = f" (×{count}, cycle 1)" if count > 1 else ""
                     if cmd.get("action") == "flip":
                         chat.send(f"Understood: flip '{cmd.get('pick', '')}'{cycle_suffix}. Planning trajectory...")
+                    elif cmd.get("action") == "pour":
+                        chat.send(f"Understood: pour '{cmd.get('pick', '')}' into '{cmd.get('place', '')}'{cycle_suffix}. Planning trajectory...")
                     else:
                         chat.send(f"Understood: pick '{cmd.get('pick', '')}'"
                                   + (f", place in '{cmd['place']}'" if cmd.get("place") else "")
@@ -358,7 +367,6 @@ def main():
                 s = status.get("status", "")
                 print(f"[chat] trajectory_status: {s} (state={state})")
                 if s == "ready" and state == STATE_PLANNING:
-                    retries = 0
                     wp = status.get("waypoints", "?")
                     dur = status.get("duration", "?")
                     arm = status.get("arm", "?")
