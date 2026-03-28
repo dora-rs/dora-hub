@@ -753,14 +753,31 @@ def validate_trajectory(ik_chain, capsule_model, trajectory, point_cloud, margin
 
 
 def _log_collision_check(collisions, total_waypoints):
-    """Log collision validation results."""
-    if collisions:
-        colliding_waypoints = len(set(c[0] for c in collisions))
-        worst = min(collisions, key=lambda c: c[2])
-        print(
-            f"[motion-planner] Collision: {colliding_waypoints}/{total_waypoints} wp, "
-            f"worst penetration={-worst[2]*1000:.1f}mm"
-        )
+    """Log collision validation results, split by source."""
+    if not collisions:
+        print(f"[motion-planner] Collision: 0/{total_waypoints} wp — clear")
+        return
+
+    pole_col = [(t, n, d) for t, n, d in collisions if "[body]" in n]
+    table_col = [(t, n, d) for t, n, d in collisions if "[table]" in n]
+    pc_col = [(t, n, d) for t, n, d in collisions if "[body]" not in n and "[table]" not in n]
+
+    parts = []
+    if pole_col:
+        pole_wps = len(set(c[0] for c in pole_col))
+        pole_worst = min(pole_col, key=lambda c: c[2])
+        parts.append(f"pole: {pole_wps}wp/{-pole_worst[2]*1000:.1f}mm")
+    if pc_col:
+        pc_wps = len(set(c[0] for c in pc_col))
+        pc_worst = min(pc_col, key=lambda c: c[2])
+        parts.append(f"pointcloud: {pc_wps}wp/{-pc_worst[2]*1000:.1f}mm")
+    if table_col:
+        tbl_wps = len(set(c[0] for c in table_col))
+        tbl_worst = min(table_col, key=lambda c: c[2])
+        parts.append(f"table: {tbl_wps}wp/{-tbl_worst[2]*1000:.1f}mm")
+
+    total_wps = len(set(c[0] for c in collisions))
+    print(f"[motion-planner] Collision: {total_wps}/{total_waypoints} wp — {', '.join(parts)}")
 
 
 def plan_and_send(node, optimizer, q_start, q_goal, pc_tensor, num_joints,
@@ -859,55 +876,121 @@ def plan_grasp_from_pixels(
     w, h = latest_image_size
     fx, fy, cx, cy = latest_intrinsics
 
-    result = grasp_pose_from_jaw_pixels(
-        u1,
-        v1,
-        u2,
-        v2,
-        latest_depth,
-        fx,
-        fy,
-        cx,
-        cy,
-        cam_t,
-        cam_rot,
-        width=w,
-        height=h,
-        grasp_depth_offset=GRASP_DEPTH_OFFSET,
-        floor_height=FLOOR_HEIGHT,
-        approach_margin=APPROACH_MARGIN,
-        jaw_contact_depth=JAW_CONTACT_DEPTH,
-        approach_angle_deg=70.0 if action == "pour" else APPROACH_ANGLE_DEG,
-        pick_mask=pick_mask,
-    )
-    if result is None:
-        print("[motion-planner] grasp: invalid depth at jaw points, skipping")
-        return None, "Invalid depth at grasp point"
+    # --- Heading sweep: try multiple approach headings until IK succeeds ---
+    if arm == "left":
+        heading_candidates = [-135, -120, -105, -90, -75, -60, -45, -30, -15, 0, 15, 30, 45, 60, 75, 90, -150, -165, -180]
+    else:
+        heading_candidates = [-135, -150, -165, -180, -195, -210, -225, -240, -255, -270, -120, -105, -90]
 
-    grasp_xyzrpy, pregrasp_xyzrpy, object_top_z, object_width = result
+    grasp_approach_angle = 70.0 if action == "pour" else APPROACH_ANGLE_DEG
 
-    # Per-arm calibration offset (metres)
-    # URDF frame: X=forward, Y=left/right, Z=up
-    cal_offset = np.array([0.015, -0.035, 0.0, 0.0, 0.0, 0.0])
-    grasp_xyzrpy = grasp_xyzrpy + cal_offset
-    pregrasp_xyzrpy = pregrasp_xyzrpy + cal_offset
+    # Per-arm calibration offset (metres), calibrated at -135° heading.
+    # Rotate the XY component when using a different heading so the
+    # correction stays aligned with the gripper frame.
+    CAL_OFFSET_XY = np.array([0.03, -0.03])  # at reference heading -135°
+    CAL_REF_HEADING = -135.0
 
-    q_pregrasp = solve_ik(
-        ik_chain, pregrasp_xyzrpy, current_joints, joint_limits, device,
-        num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
-    )
-    if q_pregrasp is None:
-        print("[motion-planner] grasp: IK failed for pre-grasp, skipping")
-        return None, "IK failed for pre-grasp pose (unreachable)"
+    grasp_xyzrpy = None
+    pregrasp_xyzrpy = None
+    object_top_z = None
+    object_width = None
+    q_pregrasp = None
+    q_grasp = None
+    q_pregrasp_travel = None
+    chosen_heading = None
+
+    for heading in heading_candidates:
+        result = grasp_pose_from_jaw_pixels(
+            u1,
+            v1,
+            u2,
+            v2,
+            latest_depth,
+            fx,
+            fy,
+            cx,
+            cy,
+            cam_t,
+            cam_rot,
+            width=w,
+            height=h,
+            grasp_depth_offset=GRASP_DEPTH_OFFSET,
+            floor_height=FLOOR_HEIGHT,
+            approach_margin=APPROACH_MARGIN,
+            jaw_contact_depth=JAW_CONTACT_DEPTH,
+            approach_angle_deg=grasp_approach_angle,
+            approach_heading_deg=float(heading),
+            pick_mask=pick_mask,
+        )
+        if result is None:
+            if heading == heading_candidates[0]:
+                print("[motion-planner] grasp: invalid depth at jaw points, skipping")
+                return None, "Invalid depth at grasp point"
+            continue
+
+        g_xyzrpy, pg_xyzrpy, obj_top_z, obj_w = result
+        # Rotate calibration offset XY by heading difference from reference
+        delta_rad = np.radians(float(heading) - CAL_REF_HEADING)
+        cos_d, sin_d = np.cos(delta_rad), np.sin(delta_rad)
+        rotated_xy = np.array([
+            cos_d * CAL_OFFSET_XY[0] - sin_d * CAL_OFFSET_XY[1],
+            sin_d * CAL_OFFSET_XY[0] + cos_d * CAL_OFFSET_XY[1],
+        ])
+        cal_offset = np.array([rotated_xy[0], rotated_xy[1], 0.0, 0.0, 0.0, 0.0])
+        g_xyzrpy = g_xyzrpy + cal_offset
+        pg_xyzrpy = pg_xyzrpy + cal_offset
+
+        q_pg = solve_ik(
+            ik_chain, pg_xyzrpy, current_joints, joint_limits, device,
+            num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
+        )
+        if q_pg is None:
+            print(f"[motion-planner] heading {heading}° pre-grasp IK failed, trying next")
+            continue
+
+        # Baby-step IK from pre-grasp down to grasp (~2mm per step)
+        descent_mm = np.linalg.norm(g_xyzrpy[:3] - pg_xyzrpy[:3]) * 1000
+        n_baby = max(int(descent_mm / 2.0), 5)
+        q_prev_baby = q_pg
+        q_g = None
+        last_good_alpha = 0.0
+        for bi in range(1, n_baby + 1):
+            alpha = bi / n_baby
+            baby_xyzrpy = pg_xyzrpy * (1 - alpha) + g_xyzrpy * alpha
+            q_baby = solve_ik(ik_chain, baby_xyzrpy, q_prev_baby, joint_limits, device,
+                              num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver)
+            if q_baby is None:
+                break
+            q_prev_baby = q_baby
+            last_good_alpha = alpha
+            if bi == n_baby:
+                q_g = q_baby
+        if q_g is None:
+            remaining_mm = descent_mm * (1.0 - last_good_alpha)
+            print(f"[motion-planner] heading {heading}° grasp IK failed at {remaining_mm:.0f}mm from target ({n_baby} steps, {descent_mm:.0f}mm descent), trying next")
+            continue
+
+        # Both IK succeeded
+        grasp_xyzrpy = g_xyzrpy
+        pregrasp_xyzrpy = pg_xyzrpy
+        object_top_z = obj_top_z
+        object_width = obj_w
+        q_pregrasp = q_pg
+        q_grasp = q_g
+        chosen_heading = heading
+        if heading != heading_candidates[0]:
+            print(f"[motion-planner] heading {heading}° succeeded (default {heading_candidates[0]}° failed)")
+        break
+
+    if q_grasp is None:
+        print(f"[motion-planner] grasp: IK failed for all headings {heading_candidates}, skipping")
+        return None, "IK failed for grasp pose (all headings unreachable)"
 
     # Solve a travel pre-grasp at 70° orientation for smooth transit from home.
-    # The actual pre-grasp may use a different approach angle (e.g. 30°) which
-    # causes IK failures along the travel path.  We transit to q_pregrasp_travel
-    # first, then do a short joint interpolation to q_pregrasp at the same position.
-    q_pregrasp_travel = None
+    # Uses the same heading that succeeded for the grasp.
     if APPROACH_ANGLE_DEG < 60.0:
         travel_angle = 70.0
-        heading_rad = np.radians(-135.0)
+        heading_rad = np.radians(float(chosen_heading))
         horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
         angle_rad = np.radians(travel_angle)
         travel_approach = np.sin(angle_rad) * horiz + np.cos(angle_rad) * np.array([0.0, 0.0, -1.0])
@@ -932,12 +1015,6 @@ def plan_grasp_from_pixels(
             print(f"[motion-planner] travel pre-grasp at 70° OK")
         else:
             print(f"[motion-planner] travel pre-grasp at 70° failed, using direct")
-
-    q_grasp = solve_ik(ik_chain, grasp_xyzrpy, q_pregrasp, joint_limits, device,
-                       num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver)
-    if q_grasp is None:
-        print("[motion-planner] grasp: IK failed for grasp, skipping")
-        return None, "IK failed for grasp pose (unreachable)"
 
     # FK verification: check where the IK solution actually places the EE
     if trac_ik_solver is not None:
@@ -1214,6 +1291,7 @@ def plan_grasp_from_pixels(
         q_flip_waypoints=q_flip_waypoints,
         descent_waypoints=descent_waypoints if action == "flip" else [],
         action=action,
+        chosen_heading=chosen_heading,
     )
     if result is None:
         return None, "Trajectory planning failed"
@@ -1397,6 +1475,7 @@ def _build_pick_place_trajectory(
     q_flip_waypoints=None,
     descent_waypoints=None,
     action="",
+    chosen_heading=-135.0,
 ):
     """Build a full pick-and-place trajectory with dwell waypoints and gripper actions.
 
@@ -1423,7 +1502,7 @@ def _build_pick_place_trajectory(
 
     # Staging XY to route around the center pole between arms
     if arm == "left":
-        STAGING_XY = (-0.2, -0.3)
+        STAGING_XY = (-0.3, -0.3)
     else:
         STAGING_XY = (-0.3, 0.1)
 
@@ -1632,7 +1711,7 @@ def _build_pick_place_trajectory(
     # Phase 1: start → pre-grasp
     if q_pregrasp_travel is not None:
         # Travel at 70° orientation (reliable), then interpolate to actual pre-grasp
-        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp (travel)", q_start, q_pregrasp_travel, safe_z=True, staging=(action == "pour"), position_only=True)
+        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp (travel)", q_start, q_pregrasp_travel, safe_z=True, staging=True, position_only=True)
         q_prev = _append(seg1, skip_first=False)
         # Phase 1b: simultaneous rotation + descent from travel to pre-grasp.
         # Slerp orientation and interpolate XYZ in one pass (65 baby-steps).
@@ -1670,7 +1749,7 @@ def _build_pick_place_trajectory(
         print(f"  Phase 1b: rotate + descend to pre-grasp ({N_ROTATE} steps, {drop_mm:.0f}mm drop)")
         q_prev = _append(seg1b)
     else:
-        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, safe_z=True, staging=(action == "pour"), position_only=True)
+        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, safe_z=True, staging=True, position_only=True)
         q_prev = _append(seg1, skip_first=False)
 
     # Phase 2: pre-grasp → grasp (short descent, slow)
@@ -1786,7 +1865,7 @@ def _build_pick_place_trajectory(
                 q_prev = _append(seg)
             print(f"  Phase 4b (flip): roll back through {len(q_flip_waypoints)} waypoints")
         else:
-            seg3 = _cartesian_segment("Phase 3: grasp -> pre-place", q_prev, q_preplace, safe_z=True, horiz_grip=True)
+            seg3 = _cartesian_segment("Phase 3: grasp -> pre-place", q_prev, q_preplace, safe_z=True, staging=True, horiz_grip=True)
             q_prev = _append(seg3)
 
             # Phase 4: pre-place → place (descent, slow)
@@ -1837,7 +1916,7 @@ def _build_pick_place_trajectory(
         # Solve IK for 70° travel orientation at the lifted position
         p_cur = _fk_pos(q_prev)
         travel_angle = 70.0
-        heading_rad = np.radians(-135.0)
+        heading_rad = np.radians(float(chosen_heading))
         horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
         angle_rad = np.radians(travel_angle)
         travel_approach = np.sin(angle_rad) * horiz + np.cos(angle_rad) * np.array([0.0, 0.0, -1.0])
@@ -1917,6 +1996,23 @@ def _build_pick_place_trajectory(
     t_plan = time.perf_counter() - t0
 
     print(f"[motion-planner] Trajectory: {total_waypoints} wp ({t_plan:.1f}s)")
+
+    # FK Z analysis for home return phase
+    if trac_ik_solver is not None and home_phase_start < total_waypoints:
+        z_vals = []
+        for i in range(home_phase_start, total_waypoints, max(1, (total_waypoints - home_phase_start) // 20)):
+            fk_pos, _ = trac_ik_solver._solver.fk(full_traj[i].cpu().numpy().astype(np.float64))
+            z_vals.append((i, fk_pos[0], fk_pos[1], fk_pos[2]))
+        # Also last waypoint
+        fk_pos, _ = trac_ik_solver._solver.fk(full_traj[-1].cpu().numpy().astype(np.float64))
+        z_vals.append((total_waypoints - 1, fk_pos[0], fk_pos[1], fk_pos[2]))
+        z_arr = [v[3] for v in z_vals]
+        min_z_idx = int(np.argmin(z_arr))
+        print(f"[motion-planner] === Home phase Z profile (wp {home_phase_start}-{total_waypoints}) ===")
+        for i, x, y, z in z_vals:
+            marker = " <-- MIN" if z == z_arr[min_z_idx] else ""
+            print(f"  wp {i:5d}: X={x:+.3f} Y={y:+.3f} Z={z:.3f}{marker}")
+        print(f"  Z range: {min(z_arr)*1000:.0f}mm - {max(z_arr)*1000:.0f}mm (dip={( max(z_arr)-min(z_arr))*1000:.0f}mm)")
 
     # Post-optimization collision validation
     if capsule_model is not None:

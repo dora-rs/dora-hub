@@ -98,6 +98,7 @@ def grasp_pose_from_jaw_pixels(
     approach_margin: float = 0.03,
     jaw_contact_depth: float = 0.02,
     approach_angle_deg: float = 0.0,
+    approach_heading_deg: float = -135.0,
     mask_bbox: tuple[float, float, float, float] | None = None,
     pick_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray] | None:
@@ -270,8 +271,6 @@ def grasp_pose_from_jaw_pixels(
     # object.  horiz points from the arm base toward the object in XY.
     # 0° = straight down, 90° = fully horizontal facing the object.
     if abs(approach_angle_deg) > 0.1:
-        # Fixed approach heading: -135° from X axis = (-1, -1) direction in XY
-        approach_heading_deg = -135.0
         heading_rad = np.radians(approach_heading_deg)
         horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
         angle_rad = np.radians(approach_angle_deg)

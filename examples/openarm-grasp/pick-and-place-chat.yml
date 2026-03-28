@@ -165,6 +165,7 @@ nodes:
       ARM_SIDE: "left"
       AUTO_ENABLE: "true"
       TIMEOUT_MS: "5"
+      GRASP_CHECK: "true"
 
   # --- Right Arm (real CAN) ---
   - id: right_arm
@@ -180,6 +181,7 @@ nodes:
       ARM_SIDE: "right"
       AUTO_ENABLE: "true"
       TIMEOUT_MS: "5"
+      GRASP_CHECK: "true"
 
   # --- Visualizer (draws grasp points) ---
   - id: viz
