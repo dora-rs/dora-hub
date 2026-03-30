@@ -972,6 +972,8 @@ latest_image = None
 latest_depth = None
 latest_intrinsics = None
 pending_trigger = False
+state_entered_at = 0.0  # time.time() when state changed to a pending state
+STATE_TIMEOUT = 30.0    # seconds to wait in any pending state before giving up
 candidates = []
 locate_center = None
 rating_idx = 0
@@ -1088,6 +1090,19 @@ def _start_rating(node, img, cands, fc):
     state = STATE_RATING_PENDING
 
 for event in node:
+    # Track state entry time and timeout stale pending states
+    import time as _time_mod
+    if state == STATE_IDLE:
+        state_entered_at = 0.0
+    elif state_entered_at == 0.0:
+        state_entered_at = _time_mod.time()
+    elif _time_mod.time() - state_entered_at > STATE_TIMEOUT:
+        elapsed = _time_mod.time() - state_entered_at
+        print(f"[selector] TIMEOUT: stuck in {state} for {elapsed:.0f}s, resetting to IDLE")
+        node.send_output("status", pa.array([f"Timeout in {state} after {elapsed:.0f}s"]))
+        state = STATE_IDLE
+        state_entered_at = 0.0
+
     if event["type"] == "INPUT":
         event_id = event["id"]
 

@@ -1292,6 +1292,7 @@ def plan_grasp_from_pixels(
         descent_waypoints=descent_waypoints if action == "flip" else [],
         action=action,
         chosen_heading=chosen_heading,
+        place_uv=place_uv,
     )
     if result is None:
         return None, "Trajectory planning failed"
@@ -1476,6 +1477,7 @@ def _build_pick_place_trajectory(
     descent_waypoints=None,
     action="",
     chosen_heading=-135.0,
+    place_uv=None,
 ):
     """Build a full pick-and-place trajectory with dwell waypoints and gripper actions.
 
@@ -1502,7 +1504,7 @@ def _build_pick_place_trajectory(
 
     # Staging XY to route around the center pole between arms
     if arm == "left":
-        STAGING_XY = (-0.3, -0.3)
+        STAGING_XY = (0.0, -0.3)
     else:
         STAGING_XY = (-0.3, 0.1)
 
@@ -1804,11 +1806,18 @@ def _build_pick_place_trajectory(
                                             q_prev, q_pregrasp, safe_z=True, horiz_grip=True)
             q_prev = _append(seg_return)
 
-            seg_descend = _cartesian_segment("Phase 4 pour: descend to grasp (place cup)",
-                                             q_prev, q_grasp, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0)
+            # Descend to 2cm above grasp for release (avoid table contact)
+            release_xyzrpy = grasp_xyzrpy.copy()
+            release_xyzrpy[2] += 0.02
+            q_release = solve_ik(ik_chain, release_xyzrpy, q_prev, joint_limits, device,
+                                 num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver)
+            if q_release is None:
+                q_release = q_grasp  # fallback to original grasp height
+            seg_descend = _cartesian_segment("Phase 4 pour: descend to release (place cup)",
+                                             q_prev, q_release, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0)
             q_prev = _append(seg_descend)
 
-            # Place dwell: open gripper to release cup at original position
+            # Place dwell: open gripper to release cup
             place_dwell_start = sum(s.shape[0] for s in segments)
             place_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
             segments.append(place_dwell)
@@ -1880,8 +1889,12 @@ def _build_pick_place_trajectory(
             # Phase 4a: lift back to pre-place height
             seg4a = _cartesian_segment("Phase 4a: place -> pre-place", q_prev, q_preplace, horiz_grip=True)
             q_prev = _append(seg4a)
+    elif place_uv is not None:
+        # Place was requested but IK failed — should not reach here
+        print("[motion-planner] ERROR: place_uv provided but q_place is None, rejecting")
+        return None
     else:
-        # Grasp-only: lift back to pre-grasp
+        # Grasp-only (no place requested)
         seg3a = _cartesian_segment("Phase 3a: grasp -> pre-grasp", q_prev, q_pregrasp, safe_z=True, horiz_grip=True)
         q_prev = _append(seg3a)
 
