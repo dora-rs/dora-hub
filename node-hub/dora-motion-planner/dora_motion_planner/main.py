@@ -1083,8 +1083,55 @@ def plan_grasp_from_pixels(
                         ik_chain, place_xyzrpy, q_preplace, joint_limits, device,
                         num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
                     )
+                # Fallback: try straight-down orientation if grasp orientation fails
                 if q_place is None:
-                    print("[motion-planner] grasp: Place IK failed, rejecting")
+                    print("[motion-planner] Place IK failed with grasp orientation, trying straight-down")
+                    from .grasp_utils import place_pose_from_pixel as _ppfp
+                    straight_heading = np.radians(-135.0)
+                    horiz_s = np.array([np.cos(straight_heading), np.sin(straight_heading), 0.0])
+                    angle_s = np.radians(APPROACH_ANGLE_DEG)
+                    z_ee_s = np.sin(angle_s) * horiz_s + np.cos(angle_s) * np.array([0.0, 0.0, -1.0])
+                    z_ee_s = z_ee_s / np.linalg.norm(z_ee_s)
+                    up = np.array([0.0, 0.0, 1.0])
+                    y_ee_s = np.cross(z_ee_s, up)
+                    y_ee_s = y_ee_s / np.linalg.norm(y_ee_s)
+                    x_ee_s = np.cross(y_ee_s, z_ee_s)
+                    x_ee_s = x_ee_s / np.linalg.norm(x_ee_s)
+                    y_ee_s = np.cross(z_ee_s, x_ee_s)
+                    from scipy.spatial.transform import Rotation as _R_place
+                    straight_rot = np.stack([x_ee_s, y_ee_s, z_ee_s], axis=1)
+                    straight_rpy = _R_place.from_matrix(straight_rot).as_euler("XYZ").astype(np.float32)
+                    place_result_s = _ppfp(
+                        place_u, place_v,
+                        latest_depth, fx, fy, cx, cy,
+                        cam_t, cam_rot,
+                        grasp_rpy=straight_rpy,
+                        width=w, height=h,
+                        place_depth_offset=PLACE_DEPTH_OFFSET,
+                        floor_height=FLOOR_HEIGHT,
+                        approach_margin=APPROACH_MARGIN,
+                        jaw_contact_depth=JAW_CONTACT_DEPTH,
+                        mask_bbox=place_mask_bbox,
+                        place_mask=place_mask,
+                        pick_mask=pick_mask,
+                    )
+                    if place_result_s is not None:
+                        place_xyzrpy, preplace_xyzrpy = place_result_s
+                        place_xyzrpy = place_xyzrpy + cal_offset
+                        preplace_xyzrpy = preplace_xyzrpy + cal_offset
+                        q_preplace = solve_ik(
+                            ik_chain, preplace_xyzrpy, q_grasp, joint_limits, device,
+                            num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
+                        )
+                        if q_preplace is not None:
+                            q_place = solve_ik(
+                                ik_chain, place_xyzrpy, q_preplace, joint_limits, device,
+                                num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
+                            )
+                        if q_place is not None:
+                            print("[motion-planner] Place IK succeeded with straight-down orientation")
+                if q_place is None:
+                    print("[motion-planner] grasp: Place IK failed (both orientations), rejecting")
                     return None, "Place target unreachable (IK failed)"
         else:
             print("[motion-planner] grasp: Place depth invalid, rejecting")
@@ -1508,7 +1555,7 @@ def _build_pick_place_trajectory(
     else:
         STAGING_XY = (-0.3, 0.1)
 
-    def _cartesian_segment(label, q_s, q_g, safe_z=False, staging=False, target_rot=None, speed=None, horiz_grip=False, position_only=False):
+    def _cartesian_segment(label, q_s, q_g, safe_z=False, staging=False, target_rot=None, speed=None, horiz_grip=False, position_only=False, ik_skip=None):
         """Cartesian-space linear interpolation with IK at keypoints.
 
         Interpolates EE position linearly in Cartesian space, solves IK at
@@ -1617,7 +1664,7 @@ def _build_pick_place_trajectory(
             # Track last successful rotation for fallback
             _, prev_rot_np = trac_ik_solver._solver.fk(q_prev_np.astype(np.float64)) if trac_ik_solver is not None else (None, None)
             failed = 0
-            IK_SKIP = 3  # solve every Nth keypoint, joint-lerp between
+            IK_SKIP = ik_skip if ik_skip is not None else 3
             for i in range(1, n_keypoints):
                 if i == n_keypoints - 1:
                     key_qs.append(q_g.clone())
@@ -1628,7 +1675,7 @@ def _build_pick_place_trajectory(
                 target_xyz = cart_targets[i]
                 alpha_r = i / (n_keypoints - 1)
                 if position_only:
-                    # Use FK rotation from joint-space lerp — guaranteed achievable
+                    # Use FK rotation from joint-space lerp — stays close in joint space
                     q_lerp = q_s.cpu().numpy() * (1 - alpha_r) + q_g.cpu().numpy() * alpha_r
                     if trac_ik_solver is not None:
                         _, kp_rot = trac_ik_solver._solver.fk(q_lerp.astype(np.float64))
@@ -1668,10 +1715,23 @@ def _build_pick_place_trajectory(
                             q_prev_np = q_np
                             solved = True
 
+                # Fallback 2: try Speed solver (more aggressive, may find solutions Distance misses)
+                if not solved and trac_ik_solver is not None and kp_solver is not trac_ik_solver:
+                    q_np, err = trac_ik_solver.solve(
+                        np.array(target_xyz, dtype=np.float64),
+                        q_init=q_prev_np,
+                        target_rot=kp_rot,
+                    )
+                    if q_np is not None and err <= 0.005:
+                        key_qs.append(torch.tensor(q_np, dtype=torch.float32, device=device))
+                        q_prev_np = q_np
+                        prev_rot_np = kp_rot
+                        solved = True
+
                 if not solved:
                     failed += 1
-                    # Skip — interpolation between adjacent successful
-                    # keypoints will cover the gap smoothly.
+                    # Advance seed with joint-lerp so next solve stays close
+                    q_prev_np = q_s.cpu().numpy() * (1 - alpha_r) + q_g.cpu().numpy() * alpha_r
 
             if failed > 0:
                 print(f"[motion-planner] {label}: {failed}/{n_keypoints-1} keypoint IK failures")
@@ -1755,7 +1815,7 @@ def _build_pick_place_trajectory(
         q_prev = _append(seg1, skip_first=False)
 
     # Phase 2: pre-grasp → grasp (short descent, slow)
-    seg2 = _cartesian_segment("Phase 2: pre-grasp -> grasp", q_prev, q_grasp, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0)
+    seg2 = _cartesian_segment("Phase 2: pre-grasp -> grasp", q_prev, q_grasp, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0, ik_skip=1)
     q_prev = _append(seg2)
 
     # Dwell at grasp (hold for gripper close)
@@ -1878,7 +1938,7 @@ def _build_pick_place_trajectory(
             q_prev = _append(seg3)
 
             # Phase 4: pre-place → place (descent, slow)
-            seg4 = _cartesian_segment("Phase 4: pre-place -> place", q_prev, q_place, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0)
+            seg4 = _cartesian_segment("Phase 4: pre-place -> place", q_prev, q_place, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0, ik_skip=1)
             q_prev = _append(seg4)
 
             # Dwell at place (hold for gripper open)
@@ -1887,7 +1947,7 @@ def _build_pick_place_trajectory(
             segments.append(place_dwell)
 
             # Phase 4a: lift back to pre-place height
-            seg4a = _cartesian_segment("Phase 4a: place -> pre-place", q_prev, q_preplace, horiz_grip=True)
+            seg4a = _cartesian_segment("Phase 4a: place -> pre-place", q_prev, q_preplace, horiz_grip=True, ik_skip=1)
             q_prev = _append(seg4a)
     elif place_uv is not None:
         # Place was requested but IK failed — should not reach here
@@ -1895,7 +1955,7 @@ def _build_pick_place_trajectory(
         return None
     else:
         # Grasp-only (no place requested)
-        seg3a = _cartesian_segment("Phase 3a: grasp -> pre-grasp", q_prev, q_pregrasp, safe_z=True, horiz_grip=True)
+        seg3a = _cartesian_segment("Phase 3a: grasp -> pre-grasp", q_prev, q_pregrasp, safe_z=True, horiz_grip=True, ik_skip=1)
         q_prev = _append(seg3a)
 
     # Phase 5: place → above-home (staging transit)
