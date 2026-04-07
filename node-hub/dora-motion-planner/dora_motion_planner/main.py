@@ -1276,7 +1276,7 @@ def plan_grasp_from_pixels(
         q_place = q_rolled_wp  # default: drop from height
         descent_waypoints = []
         q_prev_descent = q_rolled_wp
-        target_z = grasp_xyzrpy[2] + 0.02
+        target_z = grasp_xyzrpy[2] + 0.04
         current_z = close_pos[2]
         base_step_z = 0.01
         stop_descent = False
@@ -1317,7 +1317,7 @@ def plan_grasp_from_pixels(
         if descent_waypoints:
             q_place = descent_waypoints[-1]
             print(f"[motion-planner] flip: descended {len(descent_waypoints)}cm "
-                  f"to z={current_z:.3f}m")
+                  f"to z={current_z:.3f}m (target_z={target_z:.3f}m)")
         else:
             print(f"[motion-planner] flip: no descent possible, dropping from height")
 
@@ -1715,23 +1715,10 @@ def _build_pick_place_trajectory(
                             q_prev_np = q_np
                             solved = True
 
-                # Fallback 2: try Speed solver (more aggressive, may find solutions Distance misses)
-                if not solved and trac_ik_solver is not None and kp_solver is not trac_ik_solver:
-                    q_np, err = trac_ik_solver.solve(
-                        np.array(target_xyz, dtype=np.float64),
-                        q_init=q_prev_np,
-                        target_rot=kp_rot,
-                    )
-                    if q_np is not None and err <= 0.005:
-                        key_qs.append(torch.tensor(q_np, dtype=torch.float32, device=device))
-                        q_prev_np = q_np
-                        prev_rot_np = kp_rot
-                        solved = True
-
                 if not solved:
                     failed += 1
-                    # Advance seed with joint-lerp so next solve stays close
-                    q_prev_np = q_s.cpu().numpy() * (1 - alpha_r) + q_g.cpu().numpy() * alpha_r
+                    # Skip — interpolation between adjacent successful
+                    # keypoints will cover the gap.
 
             if failed > 0:
                 print(f"[motion-planner] {label}: {failed}/{n_keypoints-1} keypoint IK failures")
