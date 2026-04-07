@@ -4,3 +4,6 @@
 [submodule "node-hub/dora-magma/dora_magma/Magma"]
 	path = dora-magma/dora_magma/Magma
 	url = https://github.com/microsoft/Magma
+[submodule "node-hub/dora-smolagents"]
+	path = node-hub/dora-smolagents
+	url = https://github.com/DEFAULTE-R/dora-smolagents.git
