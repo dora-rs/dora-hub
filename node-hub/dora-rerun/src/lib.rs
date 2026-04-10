@@ -24,6 +24,15 @@ pub mod urdf;
 use series::update_series;
 use urdf::{init_urdf, update_visualization};
 
+// checks if keyword is a whole word in the id (separated by underscores)
+// needed because "log" would match "analog", "dialog" etc with plain contains()
+fn contains_keyword(id: &str, keyword: &str) -> bool {
+    id == keyword
+        || id.starts_with(&format!("{}_", keyword))
+        || id.ends_with(&format!("_{}", keyword))
+        || id.contains(&format!("_{}_", keyword))
+}
+
 pub fn lib_main() -> Result<()> {
     // rerun `serve()` requires to have a running Tokio runtime in the current context.
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -123,10 +132,20 @@ pub fn lib_main() -> Result<()> {
                     "series",
                     "points3d",
                     "points2d",
+                    "debug",
+                    "log",
                 ];
                 let matches: Vec<&str> = keywords
                     .iter()
-                    .filter(|&&key| id_str.contains(key))
+                    .filter(|&&key| {
+                        // "log" and "debug" need word boundary matching
+                        // otherwise "analog" would match "log" etc
+                        if key == "debug" || key == "log" {
+                            contains_keyword(id_str, key)
+                        } else {
+                            id_str.contains(key)
+                        }
+                    })
                     .copied()
                     .collect();
 
@@ -160,6 +179,10 @@ pub fn lib_main() -> Result<()> {
                     Some("points3d")
                 } else if id_str.contains("points2d") {
                     Some("points2d")
+                } else if contains_keyword(id_str, "debug") {
+                    Some("debug")
+                } else if contains_keyword(id_str, "log") {
+                    Some("log")
                 } else {
                     None
                 };
@@ -171,7 +194,7 @@ pub fn lib_main() -> Result<()> {
                     bail!(
                         "No visualization primitive specified in metadata for input '{}'. \
                         Please add 'primitive: <type>' to metadata, where <type> is one of: \
-                        image, depth, text, boxes2d, boxes3d, masks, jointstate, pose, series, points3d, points2d",
+                        image, depth, text, boxes2d, boxes3d, masks, jointstate, pose, series, points3d, points2d, debug, log",
                         id
                     );
                 }
@@ -645,6 +668,55 @@ pub fn lib_main() -> Result<()> {
                         )
                         .context("could not log line strips")?;
                     }
+                }
+                "debug" => {
+                    // default to DEBUG level, but let user override via metadata
+                    let level =
+                        if let Some(Parameter::String(lvl)) = metadata.parameters.get("level") {
+                            lvl.to_uppercase()
+                        } else {
+                            "DEBUG".to_string()
+                        };
+
+                    let buffer: StringArray = data.to_data().into();
+                    buffer.iter().try_for_each(|string| -> Result<()> {
+                        if let Some(str) = string {
+                            // put all debug/log msgs under logs/ so they're grouped in rerun
+                            let entity_path = format!("logs/{}", id.as_str());
+                            rec.log(
+                                entity_path.as_str(),
+                                &rerun::TextLog::new(str)
+                                    .with_level(rerun::TextLogLevel::from(level.as_str())),
+                            )
+                            .wrap_err("Could not log debug message")
+                        } else {
+                            Ok(())
+                        }
+                    })?;
+                }
+                "log" => {
+                    // same as debug but defaults to INFO level
+                    let level =
+                        if let Some(Parameter::String(lvl)) = metadata.parameters.get("level") {
+                            lvl.to_uppercase()
+                        } else {
+                            "INFO".to_string()
+                        };
+
+                    let buffer: StringArray = data.to_data().into();
+                    buffer.iter().try_for_each(|string| -> Result<()> {
+                        if let Some(str) = string {
+                            let entity_path = format!("logs/{}", id.as_str());
+                            rec.log(
+                                entity_path.as_str(),
+                                &rerun::TextLog::new(str)
+                                    .with_level(rerun::TextLogLevel::from(level.as_str())),
+                            )
+                            .wrap_err("Could not log message")
+                        } else {
+                            Ok(())
+                        }
+                    })?;
                 }
                 _ => bail!("Unknown visualization primitive: {}", primitive),
             }
