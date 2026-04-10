@@ -494,43 +494,30 @@ pub fn lib_main() -> Result<()> {
                     }
                 }
                 "pose" => {
-                    let encoding = if let Some(Parameter::String(encoding)) =
-                        metadata.parameters.get("encoding")
-                    {
-                        encoding
-                    } else {
-                        "jointstate"
-                    };
-                    if encoding != "jointstate" {
-                        warn!("Got unexpected encoding: {encoding} on position pose");
+                    let values: Vec<f32> =
+                        into_vec(&data).context("Could not parse pose as Vec<f32>")?;
+
+                    if values.len() != 7 {
+                        warn!(
+                            "Unsupported pose format (len = {}). Expected xyz + quaternion \
+                             [x, y, z, qx, qy, qz, qw]; skipping.",
+                            values.len()
+                        );
                         continue;
                     }
-                    // Convert to Vec<f32>
-                    let mut positions: Vec<f32> =
-                        into_vec(&data).context("Could not parse jointstate as vec32")?;
 
-                    // Match file name
-                    let mut urdf_id = id.as_str().replace("pose_", "");
-                    urdf_id.push_str(".urdf");
+                    let translation = rerun::Vec3D::new(values[0], values[1], values[2]);
 
-                    if let Some(chain) = chains.get(&urdf_id) {
-                        let dof = chain.dof();
+                    let rotation =
+                        rerun::Quaternion::from_xyzw([values[3], values[4], values[5], values[6]]);
 
-                        // Truncate or pad positions to match the chain's dof
-                        if dof < positions.len() {
-                            positions.truncate(dof);
-                        } else {
-                            #[allow(clippy::same_item_push)]
-                            for _ in 0..(dof - positions.len()) {
-                                positions.push(0.);
-                            }
-                        }
+                    let transform =
+                        rerun::Transform3D::from_translation_rotation(translation, rotation);
 
-                        update_visualization(&rec, chain, &urdf_id, &positions)?;
-                    } else {
-                        println!("Could not find chain for {urdf_id}. You may not have set its");
-                    }
+                    rec.log(id.as_str(), &transform)
+                        .context("Could not log pose Transform3D")?;
                 }
+
                 "series" => {
                     update_series(&rec, id, data).context("update series")?;
                 }
