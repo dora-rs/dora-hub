@@ -1,0 +1,27 @@
+nodes:
+  - id: demo
+    build: pip install numpy dora-rs pyarrow torch pytorch-kinematics
+    path: demo_up_forward.py
+    inputs:
+      tick: dora/timer/millis/100     # 10Hz playback
+    outputs:
+      - joint_command
+    env:
+      STEPS_PER_PHASE: "60"
+      LIFT_HEIGHT: "0.08"
+      FORWARD_DIST: "0.08"
+
+  - id: arm
+    build: pip install -e ../../node-hub/dora-openarm
+    path: dora-openarm
+    inputs:
+      tick: dora/timer/millis/100     # 10Hz state query
+      joint_command: demo/joint_command
+    outputs:
+      - joint_state
+    env:
+      CAN_INTERFACE: "537074820a4fb3b0b08fa321734736c44999c2aa20e754d51863f06582b089e7"
+      ARM_SIDE: "left"
+      KP: "30"                        # position gain
+      KD: "1"                         # damping gain
+      AUTO_ENABLE: "true"

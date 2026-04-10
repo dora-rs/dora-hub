@@ -1,0 +1,193 @@
+nodes:
+  # --- Chat orchestrator ---
+  - id: chat
+    build: pip install --break-system-packages -e ../../node-hub/dora-xoq-chat
+    path: dora-xoq-chat
+    inputs:
+      tick: dora/timer/millis/200
+      vlm_response: vlm/text
+      trajectory_status: motion_planner/trajectory_status
+      selector_status: selector/status
+    outputs:
+      - vlm_request
+      - command
+      - execute
+    env:
+      CHAT_CHANNEL: "anon/openarm-chat"
+      CHAT_RELAY: "https://cdn.1ms.ai"
+      CHAT_USERNAME: "robot-baguette"
+
+  # --- Camera (xoq-realsense relay) ---
+  - id: camera
+    build: pip install --break-system-packages -e ../../node-hub/dora-pyrealsense xoq-realsense
+    path: dora-pyrealsense
+    inputs:
+      tick: dora/timer/millis/200  # 5Hz
+    outputs:
+      - image
+      - depth
+    env:
+      RELAY_PATH: "anon/7e58263812ba/realsense-243222073892"
+      IMAGE_WIDTH: "1280"
+      IMAGE_HEIGHT: "720"
+      ENCODING: "rgb8"
+      CAMERA_INTRINSICS: "905.6,904.5,648.8,387.8"
+
+  # --- SAM3 text-prompted segmentation ---
+  # NOTE: LD_LIBRARY_PATH must include PyTorch's bundled NVRTC (12.8) to override
+  # baguette's system NVRTC (12.0), which can't compile for sm_120 (RTX 5090).
+  # Set this at coordinator startup: export LD_LIBRARY_PATH=~/.local/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:$LD_LIBRARY_PATH
+  - id: sam3
+    build: pip install --break-system-packages -e ../../node-hub/dora-sam3
+    path: dora-sam3
+    inputs:
+      image:
+        source: camera/image
+        queue_size: 1
+      text: selector/sam3_text
+      points: selector/sam3_points
+    outputs:
+      - masks
+    env:
+      SAM3_CONFIDENCE: "0.3"
+      SAM3_FP16: "true"
+
+  # --- Grasp selector (SAM3 + VLM, with place detection) ---
+  - id: selector
+    build: pip install --break-system-packages numpy opencv-python-headless dora-rs pyarrow
+    path: grasp_selector.py
+    inputs:
+      image:
+        source: camera/image
+        queue_size: 1
+      depth:
+        source: camera/depth
+        queue_size: 1
+      command: chat/command
+      vlm_response: vlm/text
+      mask: sam3/masks
+    outputs:
+      - vlm_request
+      - grasp_result
+      - sam3_text
+      - sam3_points
+      - status
+    env:
+      IMAGE_WIDTH: "1280"
+      IMAGE_HEIGHT: "720"
+      TARGET_OBJECT: "the yellow block"
+      PLACE_CONTAINER: ""
+      USE_THINK: "true"
+      OUTPUT_DIR: "."
+      USE_SAM2: "false"
+      USE_SAM3: "true"
+      SKIP_VLM_RATING: "true"
+
+  # --- VLM (serves both chat parsing and selector rating) ---
+  - id: vlm
+    path: ../../target/release/dora-qwen-omni
+    args: >-
+      --model /home/baguette/models/qwen3.5-35b-a3b/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf
+      --mmproj /home/baguette/models/qwen3.5-35b-a3b/mmproj-F16.gguf
+      --prompt Output:
+      -t 24
+      --n-predict 8192
+    inputs:
+      text: selector/vlm_request
+      chat_text: chat/vlm_request
+    outputs:
+      - text
+
+  # --- Motion Planner (confirm mode — waits for execute signal) ---
+  - id: motion_planner
+    build: pip install --break-system-packages -e ../../node-hub/dora-motion-planner
+    path: dora-motion-planner
+    inputs:
+      image:
+        source: camera/image
+        queue_size: 1
+      depth:
+        source: camera/depth
+        queue_size: 1
+      left_joint_state: left_arm/joint_state
+      right_joint_state: right_arm/joint_state
+      left_trajectory_status: left_arm/trajectory_status
+      right_trajectory_status: right_arm/trajectory_status
+      grasp_result: selector/grasp_result
+      execute: chat/execute
+      tick: dora/timer/millis/16  # 60Hz playback
+    outputs:
+      - joint_trajectory
+      - joint_command
+      - gripper_command
+      - trajectory_status
+      - trajectory_json
+    env:
+      URDF_PATH: "../openarm/openarm_v10.urdf"
+      LEFT_END_EFFECTOR_LINK: "openarm_left_hand_tcp"
+      RIGHT_END_EFFECTOR_LINK: "openarm_right_hand_tcp"
+      CAMERA_TRANSFORM: "-0.26 0.78 0.25 94.9 -2.2 -47"
+      IMAGE_WIDTH: "1280"
+      IMAGE_HEIGHT: "720"
+      DOWNSAMPLE_STRIDE: "8"
+      SAFETY_MARGIN: "0.02"
+      NUM_WAYPOINTS: "300"
+      NUM_SEEDS: "8"
+      MAX_ITERS: "500"
+      DEVICE: "cuda"
+      GRASP_DEPTH_OFFSET: "0.0"
+      PLACE_DEPTH_OFFSET: "0.10"
+      FLOOR_HEIGHT: "0.005"
+      APPROACH_MARGIN: "0.10"
+      PLAYBACK: "true"
+      DWELL_STEPS: "45"
+      EXPORT_DIR: "./trajectories"
+
+  # --- Left Arm (fake-can-server via xoq-can) ---
+  # Baguette fake CAN iroh node IDs (from ~/.config/xoq/machine.json):
+  #   can0: c0586060974c638dc9db92f2bc44b59264f305387e62250b1a1bfc986bfe8fc0
+  #   can1: 28f34b9e8c51de7876c042874bb635ebb4f8008fee90c930f2756ca25e7c3d6b
+  # Real CAN (baguette): left=c0586060974c638dc9db92f2bc44b59264f305387e62250b1a1bfc986bfe8fc0
+  #                       right=28f34b9e8c51de7876c042874bb635ebb4f8008fee90c930f2756ca25e7c3d6b
+  - id: left_arm
+    path: ../../target/release/dora-openarm-playback
+    inputs:
+      tick: dora/timer/millis/100
+      trajectory: motion_planner/trajectory_json
+    outputs:
+      - joint_state
+      - trajectory_status
+    env:
+      CAN_INTERFACE: "d3cd5a3b4e5e877b1092333559b2673ca29b2f9e3257cd0945049dd1627f9b24"
+      ARM_SIDE: "left"
+      AUTO_ENABLE: "true"
+      TIMEOUT_MS: "5"
+
+  # --- Right Arm (real CAN) ---
+  - id: right_arm
+    path: ../../target/release/dora-openarm-playback
+    inputs:
+      tick: dora/timer/millis/100
+      trajectory: motion_planner/trajectory_json
+    outputs:
+      - joint_state
+      - trajectory_status
+    env:
+      CAN_INTERFACE: "d1c0840bab8324b50dfc67b5c3c736629000ff7b3d269f79cda321feb1f79824"
+      ARM_SIDE: "right"
+      AUTO_ENABLE: "true"
+      TIMEOUT_MS: "5"
+
+  # --- Visualizer (draws grasp points) ---
+  - id: viz
+    build: pip install --break-system-packages numpy opencv-python-headless dora-rs pyarrow
+    path: test_visualize_grasp.py
+    inputs:
+      image:
+        source: camera/image
+        queue_size: 1
+      vlm_response: selector/grasp_result
+    env:
+      IMAGE_WIDTH: "1280"
+      IMAGE_HEIGHT: "720"
+      OUTPUT_DIR: "."
