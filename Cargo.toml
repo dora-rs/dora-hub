@@ -28,12 +28,12 @@ license = "Apache-2.0"
 repository = "https://github.com/dora-rs/dora-hub/"
 
 [workspace.dependencies]
-dora-node-api = { version = "0.4.1", default-features = false }
+dora-node-api = { version = "0.5.0", default-features = false }
 dora-operator-api = { version = "0.4.1", default-features = false }
 dora-operator-api-macros = { version = "0.4.1" }
 dora-operator-api-types = { version = "0.4.1" }
 dora-operator-api-c = { version = "0.4.1" }
-dora-node-api-c = { version = "0.4.1" }
+dora-node-api-c = { version = "0.5.0" }
 dora-core = { version = "0.4.1" }
 dora-arrow-convert = { version = "0.4.1" }
 dora-tracing = { version = "0.4.1" }
