@@ -65,29 +65,6 @@ fn get_entity_path(link: &k::Node<f32>, urdf_path: &str) -> String {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::normalize_urdf_entity_root;
-
-    #[test]
-    fn strips_urdf_suffix_from_root_entity_name() {
-        let root = normalize_urdf_entity_root("robot.urdf");
-        assert_eq!(root, "robot");
-    }
-
-    #[test]
-    fn keeps_root_when_no_suffix() {
-        let root = normalize_urdf_entity_root("robot");
-        assert_eq!(root, "robot");
-    }
-
-    #[test]
-    fn keeps_non_urdf_extensions_without_crashing() {
-        let root = normalize_urdf_entity_root("robot.foo");
-        assert_eq!(root, "robot");
-    }
-}
-
 pub fn init_urdf(rec: &RecordingStream) -> Result<HashMap<String, Chain<f32>>> {
     // Get all env variable that end with urdf
     let urdfs = std::env::vars()
@@ -211,4 +188,27 @@ pub fn update_visualization(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_urdf_entity_root;
+
+    #[test]
+    fn strips_urdf_suffix_from_root_entity_name() {
+        let root = normalize_urdf_entity_root("robot.urdf");
+        assert_eq!(root, "robot");
+    }
+
+    #[test]
+    fn keeps_root_when_no_suffix() {
+        let root = normalize_urdf_entity_root("robot");
+        assert_eq!(root, "robot");
+    }
+
+    #[test]
+    fn keeps_non_urdf_extensions_without_crashing() {
+        let root = normalize_urdf_entity_root("robot.foo");
+        assert_eq!(root, "robot");
+    }
 }

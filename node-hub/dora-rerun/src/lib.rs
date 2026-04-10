@@ -438,17 +438,13 @@ pub fn lib_main() -> Result<()> {
                 }
                 "masks" => {
                     let masks = if let Some(data) = data.as_primitive_opt::<Float32Type>() {
-                        let data = data
-                            .iter()
+                        data.iter()
                             .map(|x| if let Some(x) = x { x > 0. } else { false })
-                            .collect::<Vec<_>>();
-                        data
+                            .collect::<Vec<_>>()
                     } else if let Some(data) = data.as_boolean_opt() {
-                        let data = data
-                            .iter()
+                        data.iter()
                             .map(|x| x.unwrap_or_default())
-                            .collect::<Vec<_>>();
-                        data
+                            .collect::<Vec<_>>()
                     } else {
                         println!("Got unexpected data type: {}", data.data_type());
                         continue;

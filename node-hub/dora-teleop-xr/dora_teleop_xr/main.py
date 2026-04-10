@@ -163,9 +163,7 @@ def reorder_joint_state_for_rerun(
         return q_current
 
     ordered = [
-        q_current[name_to_idx[name]]
-        for name in joint_order
-        if name in name_to_idx
+        q_current[name_to_idx[name]] for name in joint_order if name in name_to_idx
     ]
     if len(ordered) != len(q_current):
         return q_current
@@ -298,7 +296,9 @@ def main():
                         )
 
                     q_current = state_container["q"]
-                    q_rerun = reorder_joint_state_for_rerun(robot, q_current, joint_order)
+                    q_rerun = reorder_joint_state_for_rerun(
+                        robot, q_current, joint_order
+                    )
                     node.send_output(
                         "joint_state",
                         pa.array(q_rerun, type=pa.float32()),
