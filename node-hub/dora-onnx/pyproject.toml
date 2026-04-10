@@ -1,0 +1,35 @@
+[project]
+name = "dora-onnx"
+version = "0.0.1"
+authors = [
+  { name = "Leonardo Galgano", email = "leo.gal.03@gmail.com" },
+]
+description = "Generic ONNX inference node for dora-rs"
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.8"
+
+dependencies = [
+  "dora-rs >= 0.3.9", 
+  "numpy>=1.24.4,<2; python_version == '3.8'",
+  "numpy>=2.0.0; python_version >= '3.9'",
+  "onnxruntime >= 1.18.0"
+]
+
+[dependency-groups]
+dev = ["pytest >=8.1.1", "ruff >=0.9.1"]
+
+[project.scripts]
+dora-onnx = "dora_onnx.main:main"
+
+[tool.ruff.lint]
+extend-select = [
+  "D",    # pydocstyle
+  "UP",   # Ruff's UP rule
+  "PERF", # Ruff's PERF rule
+  "RET",  # Ruff's RET rule
+  "RSE",  # Ruff's RSE rule
+  "NPY",  # Ruff's NPY rule
+  "N",    # Ruff's N rule
+  "I",    # Ruff's I rule
+]
