@@ -281,6 +281,14 @@ def main():
 
         event_type = event["type"]
 
+        if event_type == "STOP":
+            break
+
+        if event_type == "INPUT_CLOSED":
+            if event.get("id") == "tick":
+                break
+            continue
+
         if event_type == "INPUT":
             event_id = event["id"]
 
