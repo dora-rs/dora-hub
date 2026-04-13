@@ -1,6 +1,6 @@
 [project]
 name = "dora-policy-inference"
-version = "0.0.0"
+version = "0.5.0"
 authors = [{ name = "Shashwat Patil", email = "email@email.com" }]
 description = "dora-policy-inference"
 license = { text = "MIT" }

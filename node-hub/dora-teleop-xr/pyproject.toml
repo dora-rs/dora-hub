@@ -1,6 +1,6 @@
 [project]
 name = "dora-teleop-xr"
-version = "0.1.0"
+version = "0.5.0"
 description = "dora-teleop-xr node"
 readme = "README.md"
 requires-python = ">=3.10"
