@@ -10,4 +10,4 @@ edition = "2024"
 serialport = "4.2.0"
 rustypot = { git = "https://github.com/haixuanTao/rustypot", branch = "angular-conversion" }
 eyre = "0.6.12"
-dora-node-api = "0.3.4"
+dora-node-api = "0.5.0"
