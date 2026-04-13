@@ -20,6 +20,7 @@ from teleop_xr.messages import XRState
 
 
 def load_robot_class(class_path: str):
+    """Load a robot class from a 'module:ClassName' path string."""
     if ":" not in class_path:
         raise ValueError(
             f"Invalid ROBOT_CLASS format: '{class_path}'. Expected 'module:ClassName'"
@@ -30,23 +31,32 @@ def load_robot_class(class_path: str):
 
 
 def get_robot_joint_order(robot_class) -> tuple[str, ...] | None:
+    """Return the robot's default joint order for rerun visualization, if defined."""
     if hasattr(robot_class, "DEFAULT_RERUN_JOINT_ORDER"):
         return robot_class.DEFAULT_RERUN_JOINT_ORDER
     return None
 
 
 class JointNamesProvider(Protocol):
+    """Protocol for objects that provide actuated joint names."""
+
     @property
-    def actuated_joint_names(self) -> list[str]: ...
+    def actuated_joint_names(self) -> list[str]:
+        """Return the list of actuated joint names."""
+        ...
 
 
 class IKStateContainer(TypedDict):
+    """Shared state container for IK worker thread."""
+
     q: NDArray[np.float32]
     active: bool
     xr_state: XRState | None
 
 
 class IKWorker(threading.Thread):
+    """Background thread that runs IK solving at XR update rate."""
+
     def __init__(
         self,
         controller: IKController,
@@ -54,6 +64,7 @@ class IKWorker(threading.Thread):
         teleop: Teleop,
         state_container: IKStateContainer,
     ):
+        """Initialize IK worker with controller, robot, teleop, and shared state."""
         super().__init__(daemon=True)
         self.controller = controller
         self.robot = robot
@@ -65,10 +76,12 @@ class IKWorker(threading.Thread):
         self.teleop_loop = None
 
     def update_state(self, state: XRState):
+        """Push a new XR state and signal the worker thread."""
         self.latest_xr_state = state
         self.new_state_event.set()
 
     def set_teleop_loop(self, loop: asyncio.AbstractEventLoop):
+        """Set the asyncio event loop used by the teleop server."""
         if self.teleop_loop is None:
             self.teleop_loop = loop
             if "q" in self.state_container:
@@ -84,6 +97,7 @@ class IKWorker(threading.Thread):
                 )
 
     def run(self):
+        """Run the IK solving loop until stopped."""
         while self.running:
             if not self.new_state_event.wait(timeout=0.1):
                 continue
@@ -128,6 +142,7 @@ class IKWorker(threading.Thread):
 
 
 def pose_to_array(pose):
+    """Convert an XR pose (position + quaternion) to a 7-element float32 array."""
     if not pose or not pose.position or not pose.orientation:
         return None
     pos = pose.position
@@ -151,6 +166,7 @@ def reorder_joint_state_for_rerun(
     q_current: NDArray[np.float32],
     joint_order: tuple[str, ...] | None,
 ) -> NDArray[np.float32]:
+    """Reorder joint values to match the expected URDF traversal order for rerun."""
     if joint_order is None:
         return q_current
 
@@ -173,6 +189,7 @@ def reorder_joint_state_for_rerun(
 
 
 def main():
+    """Run the dora-teleop-xr node."""
     jax.config.update("jax_platform_name", "cpu")
 
     robot_class_path = os.environ.get(
