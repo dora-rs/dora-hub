@@ -14,14 +14,19 @@ examples/**/*.txt
 # Remove hdf and stl files
 *.stl
 *.dae
+*.glb
+*.onnx
 *.STL
 *.hdf5
 
-# Removing images.
+# Removing images and media.
 *.jpg
 *.mp3
 *.wav
 *.png
+*.gif
+*.csv
+*.json
 !docs/src/latency.png
 
 # Remove *.html. Likely be outputed mermaid graph.

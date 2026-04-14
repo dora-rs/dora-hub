@@ -1,0 +1,25 @@
+[project]
+name = "dora-motion-planner"
+version = "0.1.0"
+authors = [{ name = "Your Name", email = "email@email.com" }]
+description = "Collision-aware motion planning for OpenArm using gradient-based trajectory optimization"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+
+dependencies = [
+  "dora-rs >= 0.3.9",
+  "numpy",
+  "pin",
+  "pytracik",
+  "pytorch-kinematics>=0.7.5",
+  "torch",
+  "scipy",
+  "pyarrow",
+]
+
+[dependency-groups]
+dev = ["pytest >=8.1.1"]
+
+[project.scripts]
+dora-motion-planner = "dora_motion_planner.main:main"
+analyze-trajectory = "dora_motion_planner.analyze_trajectory:main"
