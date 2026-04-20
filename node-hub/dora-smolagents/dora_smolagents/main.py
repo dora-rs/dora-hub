@@ -20,7 +20,7 @@ class StopTool(Tool):
     output_type = "object"
 
     def forward(self):
-        return {"action": "stop"}
+        return {"action": "stop_motion"}
 
 # --- Agent setup ---
 model = LiteLLMModel(
@@ -43,6 +43,22 @@ def handle_event(event):
         import time
         start = time.perf_counter()
         result = agent.run(command)
+        # Safe handling of result
+        try:
+            if isinstance(result, str):
+                parsed = json.loads(result)
+                action = parsed if isinstance(parsed, dict) else {"action": "unknown"}
+            elif isinstance(result, dict):
+                action = result
+            else:
+                action = {"action": "unknown"}
+        except Exception:
+            action = {"action": "unknown"}
+
+        try:
+            trace_output = json.dumps(result)
+        except Exception:
+            trace_output = str(result)
         trace_output = json.dumps(result) if isinstance(result, dict) else result
         print(f"[TRACE] agent.output: {trace_output}")
         end = time.perf_counter()

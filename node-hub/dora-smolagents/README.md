@@ -3,10 +3,10 @@
 A minimal Dora node integrating smolagents with a local LLM (Ollama).
 
 ## Features
-- Accepts natural language commands (agent/command)
+- Accepts natural language commands (input/command)
 - Uses smolagents for reasoning
 - Executes tool-based actions
-- Outputs structured JSON (agent/action)
+- Outputs structured JSON (output/action)
 - LLM-agnostic via LiteLLM
 
 ## Example
@@ -25,7 +25,7 @@ ollama pull mistral
 dora run dataflow.yml
 
 ## Architecture
-agent/command -> smolagents node -> agent/action
+input/command -> smolagents node -> output/action
 
 ## Notes
 - Uses local LLM (Ollama), no API key required
