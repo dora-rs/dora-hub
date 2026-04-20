@@ -1,3 +1,4 @@
+import os
 import json
 from smolagents import CodeAgent, Tool
 from smolagents.models import LiteLLMModel
@@ -23,8 +24,8 @@ class StopTool(Tool):
 
 # --- Agent setup ---
 model = LiteLLMModel(
-    model="ollama/mistral",
-    api_base="http://localhost:11434"
+    model=os.getenv("SMOLAGENTS_MODEL", "ollama/mistral"),
+    api_base=os.getenv("OLLAMA_API_BASE", "http://localhost:11434")
 )
 
 agent = CodeAgent(
@@ -40,10 +41,11 @@ def handle_event(event):
         print(f"[TRACE] agent.input: {command}")
 
         import time
-        start = time.time()
+        start = time.perf_counter()
         result = agent.run(command)
-        print(f"[TRACE] agent.output: {result}")
-        end = time.time()
+        trace_output = json.dumps(result) if isinstance(result, dict) else result
+        print(f"[TRACE] agent.output: {trace_output}")
+        end = time.perf_counter()
         print(f"[TRACE] agent.latency: {end - start:.3f}s")
 
         # Extract clean action (fallback safe)
@@ -57,3 +59,18 @@ def handle_event(event):
             "id": "action",
             "value": json.dumps(action)
         }
+
+from dora import Node
+
+def main():
+    node = Node("smol_agent")
+
+    for event in node:
+        result = handle_event(event)
+
+        if result:
+            node.send_output(result["id"], result["value"])
+
+
+if __name__ == "__main__":
+    main()
