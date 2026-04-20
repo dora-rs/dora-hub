@@ -31,5 +31,5 @@ def test_dtype_cast():
 
 def test_import_main():
     """Smoke test: main() should raise SystemExit or RuntimeError outside Dora dataflow."""
-    with pytest.raises((SystemExit, RuntimeError, Exception)):
+    with pytest.raises((SystemExit, RuntimeError)):
         main()

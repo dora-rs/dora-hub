@@ -16,9 +16,10 @@ dependencies = [
 [project.optional-dependencies]
 tflite = ["tflite-runtime >= 2.14.0"]
 
-[dependency-groups]
-dev = ["pytest >=8.1.1", "ruff >=0.9.1"]
-
+dev = [
+  "pytest>=8.1.1",
+  "ruff>=0.9.1"
+]
 [project.scripts]
 dora-tflite = "dora_tflite.main:main"
 
