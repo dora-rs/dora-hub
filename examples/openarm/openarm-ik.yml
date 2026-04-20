@@ -1,0 +1,24 @@
+nodes:
+  - id: arm
+    build: pip install -e ../../node-hub/dora-openarm
+    path: dora-openarm
+    inputs:
+      tick: dora/timer/millis/100   # 10Hz state query
+      joint_command: ik/joint_state
+    outputs:
+      - joint_state
+    env:
+      CAN_INTERFACE: "can2"       # can2=left, can3=right
+      ARM_SIDE: "left"
+      # KP and KD default to 0 (read-only / zero-torque queries)
+
+  - id: ik
+    build: pip install -e ../../node-hub/dora-pytorch-kinematics
+    path: dora-pytorch-kinematics
+    inputs:
+      joint_state: arm/joint_state
+    outputs:
+      - joint_state
+    env:
+      URDF_PATH: "./openarm_v10.urdf"
+      END_EFFECTOR_LINK: "openarm_left_link8"

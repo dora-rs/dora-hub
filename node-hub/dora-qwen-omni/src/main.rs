@@ -76,15 +76,18 @@ pub struct MtmdCliParams {
     /// Media marker. If not provided, the default marker will be used.
     #[arg(long = "marker", value_name = "TEXT")]
     pub media_marker: Option<String>,
+    /// Batch size for prompt processing
+    #[arg(long = "n-batch", value_name = "N", default_value = "256")]
+    pub n_batch: u32,
 }
 
 /// State of the MTMD CLI application.
 #[allow(missing_debug_implementations)]
-pub struct MtmdCliContext {
+pub struct MtmdCliContext<'a> {
     /// The MTMD context for multimodal processing.
     pub mtmd_ctx: MtmdContext,
     /// The batch used for processing tokens.
-    pub batch: LlamaBatch,
+    pub batch: LlamaBatch<'a>,
     /// The list of loaded bitmaps (images/audio).
     pub bitmaps: Vec<MtmdBitmap>,
     /// The number of past tokens processed.
@@ -95,7 +98,7 @@ pub struct MtmdCliContext {
     pub chat: Vec<LlamaChatMessage>,
 }
 
-impl MtmdCliContext {
+impl<'a> MtmdCliContext<'a> {
     /// Creates a new MTMD CLI context
     ///
     /// # Errors
@@ -168,6 +171,7 @@ impl MtmdCliContext {
         context: &mut LlamaContext,
         msg: LlamaChatMessage,
         add_bos: bool,
+        n_batch: i32,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.chat.push(msg);
 
@@ -182,13 +186,11 @@ impl MtmdCliContext {
 
         let bitmap_refs: Vec<&MtmdBitmap> = self.bitmaps.iter().collect();
 
-        let batch = if bitmap_refs.is_empty() {
+        if bitmap_refs.is_empty() {
             println!("No bitmaps provided, only tokenizing text");
-            1
         } else {
             println!("Tokenizing with {} bitmaps", bitmap_refs.len());
-            1
-        };
+        }
 
         // Tokenize the input
         let chunks = self.mtmd_ctx.tokenize(input_text, &bitmap_refs)?;
@@ -196,7 +198,7 @@ impl MtmdCliContext {
         // Clear bitmaps after tokenization
         self.bitmaps.clear();
 
-        self.n_past = chunks.eval_chunks(&self.mtmd_ctx, context, self.n_past, 0, batch, true)?;
+        self.n_past = chunks.eval_chunks(&self.mtmd_ctx, context, self.n_past, 0, n_batch, true)?;
         Ok(())
     }
 
@@ -214,7 +216,7 @@ impl MtmdCliContext {
         let mut text = String::new();
         for _i in 0..max_predict {
             // Sample next token
-            let token = sampler.sample(context, 0);
+            let token = sampler.sample(context, -1);
 
             generated_tokens.push(token);
 
@@ -244,6 +246,31 @@ impl MtmdCliContext {
     }
 }
 
+fn run_standalone(
+    model: &LlamaModel,
+    context: &mut LlamaContext,
+    sampler: &mut LlamaSampler,
+    params: &MtmdCliParams,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut ctx = MtmdCliContext::new(params, model)?;
+
+    let default_marker = llama_cpp_2::mtmd::mtmd_default_marker().to_string();
+    let mut prompt = String::new();
+    for image_path in &params.images {
+        ctx.load_media(image_path)?;
+        prompt.push_str(&default_marker);
+    }
+    prompt.push_str(&params.prompt);
+
+    let instant = std::time::Instant::now();
+    let msg = LlamaChatMessage::new("user".to_string(), prompt)?;
+    ctx.eval_message(model, context, msg, true, params.n_batch as i32)?;
+    let text = ctx.generate_response(model, context, sampler, params.n_predict)?;
+    let elapsed = instant.elapsed();
+    println!("\n--- Response ({elapsed:.2?}) ---\n{text}");
+    Ok(())
+}
+
 fn run_single_turn(
     model: &LlamaModel,
     context: &mut LlamaContext,
@@ -253,7 +280,7 @@ fn run_single_turn(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Add media marker if not present
     let (mut node, mut events) = DoraNode::init_from_env().unwrap();
-    let mut ctx = MtmdCliContext::new(&params, &model)?;
+    let mut ctx = MtmdCliContext::new(params, model)?;
     let mut never_debounced = true;
     loop {
         match events.recv() {
@@ -324,10 +351,11 @@ fn run_single_turn(
 
                 // Evaluate the message (prefill)
                 let instant2 = std::time::Instant::now();
-                ctx.eval_message(model, context, msg, true)?;
+                ctx.eval_message(model, context, msg, true, params.n_batch as i32)?;
                 let text = ctx.generate_response(model, context, sampler, params.n_predict)?;
                 let elapsed = instant2.elapsed();
                 println!("got token in {:.2?}", elapsed);
+                println!(">>> VLM response: {text}");
                 ctx.clear_chat().unwrap();
                 context.clear_kv_cache();
 
@@ -376,15 +404,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create context
     let context_params = LlamaContextParams::default()
         .with_n_threads(params.n_threads)
-        .with_n_batch(64)
+        .with_n_batch(params.n_batch)
         .with_n_ctx(Some(params.n_tokens));
 
     let mut context = model.new_context(&backend, context_params)?;
     // Create sampler
     let mut sampler = LlamaSampler::chain_simple([LlamaSampler::greedy()]);
 
-    // Create the MTMD context
-    run_single_turn(&model, &mut context, &mut sampler, &params, &backend)?;
+    // Run standalone if not in dora, otherwise run as dora node
+    if std::env::var("DORA_NODE_CONFIG").is_ok() {
+        run_single_turn(&model, &mut context, &mut sampler, &params, &backend)?;
+    } else {
+        run_standalone(&model, &mut context, &mut sampler, &params)?;
+    }
 
     Ok(())
 }

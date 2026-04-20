@@ -1,0 +1,33 @@
+nodes:
+  - id: camera
+    build: pip install -e ../../node-hub/opencv-video-capture
+    path: opencv-video-capture
+    inputs:
+      tick: dora/timer/millis/3000
+    outputs:
+      - image
+    env:
+      CAPTURE_PATH: 0
+      IMAGE_WIDTH: 640
+      IMAGE_HEIGHT: 480
+
+  - id: formatter
+    path: qwen3_vl_formatter.py
+    inputs:
+      image:
+        source: camera/image
+        queue_size: 1
+    outputs:
+      - text
+    env:
+      IMAGE_WIDTH: 640
+      IMAGE_HEIGHT: 480
+      DEFAULT_QUESTION: "Output the bounding box [x1,y1,x2,y2] of the green object. Only output the coordinates, nothing else. Format: [x1,y1,x2,y2]"
+
+  - id: dora-qwen-omni
+    path: ../../target/release/dora-qwen-omni
+    args: --model /home/champagne/models/qwen3.5-35b-a3b/Qwen3.5-35B-A3B-UD-Q4_K_M.gguf --mmproj /home/champagne/models/qwen3.5-35b-a3b/mmproj-F16.gguf --prompt "Output:" -t 24 --n-predict 30
+    inputs:
+      text: formatter/text
+    outputs:
+      - text
