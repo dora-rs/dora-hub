@@ -22,7 +22,7 @@ def get_macos_cameras() -> list[dict]:
 
     Returns:
         List of dicts with 'name', 'model_id', and 'unique_id' keys
-        
+
     """
     cameras = []
     if platform.system() != "Darwin":
@@ -61,7 +61,7 @@ def get_windows_cameras() -> list[dict]:
 
     Returns:
         List of dicts with 'name' and 'device_id' keys
-        
+
     """
     cameras = []
     if platform.system() != "Windows":
@@ -82,8 +82,8 @@ def get_windows_cameras() -> list[dict]:
             # Handle single device (dict) or multiple devices (list)
             if isinstance(data, dict):
                 data = [data]
-            for item in data: 
-                cameras.append( # noqa: PERF401
+            for item in data:
+                cameras.append(  # noqa: PERF401
                     {
                         "name": item.get("FriendlyName", "Unknown"),
                         "device_id": item.get("InstanceId", ""),
@@ -106,7 +106,7 @@ def find_camera_by_id(unique_id: str) -> int | None:
 
     Returns:
         Camera index if found, None otherwise
-        
+
     """
     if platform.system() == "Darwin":
         cameras = get_macos_cameras()
@@ -191,7 +191,7 @@ def main():
         type=int,
         required=False,
         help="The JPEG quality. (0-100) Default is 95.",
-        default=95, # Same as OpenCV's one
+        default=95,  # Same as OpenCV's one
     )
 
     args = parser.parse_args()
@@ -204,8 +204,7 @@ def main():
         if video_capture_path is None:
             if platform.system() == "Darwin":
                 hint = (
-                    "Run 'system_profiler SPCameraDataType' to list available "
-                    "cameras."
+                    "Run 'system_profiler SPCameraDataType' to list available cameras."
                 )
             elif platform.system() == "Windows":
                 hint = (
@@ -214,9 +213,7 @@ def main():
                 )
             else:
                 hint = "Check /dev/v4l/by-id/ for available camera IDs."
-            raise RuntimeError(
-                f"Could not find camera with ID '{camera_id}'. {hint}"
-            )
+            raise RuntimeError(f"Could not find camera with ID '{camera_id}'. {hint}")
     else:
         video_capture_path = os.getenv("CAPTURE_PATH", args.path)
         if isinstance(video_capture_path, str) and video_capture_path.isnumeric():
@@ -235,18 +232,14 @@ def main():
         else:
             cameras = []
 
-        if isinstance(video_capture_path, int) and video_capture_path < len(
-            cameras
-        ):
+        if isinstance(video_capture_path, int) and video_capture_path < len(cameras):
             cam_info = cameras[video_capture_path]
             print(
                 f"Opened camera at index {video_capture_path}: "
                 f"{cam_info.get('name', 'Unknown')}"
             )
             # Print the appropriate ID field per platform
-            cam_id = cam_info.get("unique_id") or cam_info.get(
-                "device_id", "N/A"
-            )
+            cam_id = cam_info.get("unique_id") or cam_info.get("device_id", "N/A")
             print(f"  Unique ID: {cam_id}")
         else:
             print(f"Opened camera at index {video_capture_path}")
@@ -305,8 +298,7 @@ def main():
                     frame = np.zeros((480, 640, 3), dtype=np.uint8)
                     cv2.putText(
                         frame,
-                        f"Error: no frame for camera at path "
-                        f"{video_capture_path}.",
+                        f"Error: no frame for camera at path {video_capture_path}.",
                         (30, 30),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.50,
@@ -327,8 +319,7 @@ def main():
                     image_width is not None
                     and image_height is not None
                     and (
-                        frame.shape[1] != image_width
-                        or frame.shape[0] != image_height
+                        frame.shape[1] != image_width or frame.shape[0] != image_height
                     )
                 ):
                     frame = cv2.resize(frame, (image_width, image_height))

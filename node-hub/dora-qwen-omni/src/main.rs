@@ -3,8 +3,6 @@
 use base64::Engine;
 use clap::Parser;
 use eyre::{Context, Result};
-use image::DynamicImage;
-use img_hash::{HashBytes, HasherConfig, ImageHash};
 use std::ffi::CString;
 use std::io::Cursor;
 use std::num::NonZeroU32;
@@ -13,7 +11,7 @@ use std::path::Path;
 use dora_node_api::arrow::array::AsArray;
 use dora_node_api::dora_core::config::DataId;
 use dora_node_api::{DoraNode, Event, IntoArrow};
-use image::{io::Reader, Rgba};
+use image::io::Reader;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_batch::LlamaBatch;
@@ -25,10 +23,6 @@ use llama_cpp_2::mtmd::{
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::model::{LlamaChatMessage, LlamaChatTemplate, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
-use llm_json::{repair_json, RepairOptions};
-use rusttype::{Font, Scale};
-use serde::{Deserialize, Serialize};
-use text_on_image::{text_on_image_with_background, FontBundle};
 
 /// Command line parameters for the MTMD CLI application
 #[derive(clap::Parser, Debug)]
@@ -249,12 +243,12 @@ fn run_single_turn(
     context: &mut LlamaContext,
     sampler: &mut LlamaSampler,
     params: &MtmdCliParams,
-    backend: &LlamaBackend,
+    _backend: &LlamaBackend,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Add media marker if not present
     let (mut node, mut events) = DoraNode::init_from_env().unwrap();
-    let mut ctx = MtmdCliContext::new(&params, &model)?;
-    let mut never_debounced = true;
+    let mut ctx = MtmdCliContext::new(params, model)?;
+    let _never_debounced = true;
     loop {
         match events.recv() {
             Some(Event::Input {
@@ -264,59 +258,54 @@ fn run_single_turn(
             }) => {
                 ctx.clear_chat().unwrap();
                 context.clear_kv_cache();
-                let instant = std::time::Instant::now();
+                let _instant = std::time::Instant::now();
                 let default_marker = llama_cpp_2::mtmd::mtmd_default_marker().to_string();
                 let texts = data.as_string::<i32>();
                 let mut prompt = "".to_string();
                 let mut img = None;
-                for text in texts {
-                    match text {
-                        Some(text) => {
-                            if text.starts_with("<|user|>\n<|im_start|>\n") {
-                                prompt.push_str(&text.replace("<|user|>\n<|im_start|>\n", ""));
-                            } else if text.starts_with("<|user|>\n<|vision_start|>\n") {
-                                let string = text.replace("<|user|>\n<|vision_start|>\n", "");
-                                println!("got image string: {}", string);
-                                if string.starts_with("data:image/") {
-                                    let mut string = string.split(",");
-                                    let _encoding = string.next().unwrap();
-                                    let data = string.next().unwrap();
-                                    let engine = base64::engine::general_purpose::STANDARD;
-                                    let decoded_data = engine.decode(data)?;
+                for text in texts.into_iter().flatten() {
+                    if text.starts_with("<|user|>\n<|im_start|>\n") {
+                        prompt.push_str(&text.replace("<|user|>\n<|im_start|>\n", ""));
+                    } else if text.starts_with("<|user|>\n<|vision_start|>\n") {
+                        let string = text.replace("<|user|>\n<|vision_start|>\n", "");
+                        println!("got image string: {}", string);
+                        if string.starts_with("data:image/") {
+                            let mut string = string.split(",");
+                            let _encoding = string.next().unwrap();
+                            let data = string.next().unwrap();
+                            let engine = base64::engine::general_purpose::STANDARD;
+                            let decoded_data = engine.decode(data)?;
+                            img = Some(
+                                Reader::new(Cursor::new(decoded_data.clone()))
+                                    .with_guessed_format()?
+                                    .decode()?,
+                            );
+                            ctx.load_base64_image(&decoded_data)?;
+                            prompt.push_str(&default_marker);
+                            println!("got base64 image----------------------------");
+                        } else if url::Url::parse(&string).is_ok() {
+                            let resp = reqwest::blocking::get(&string);
+                            match resp {
+                                Ok(resp) => {
+                                    let bytes = resp.bytes().unwrap();
                                     img = Some(
-                                        Reader::new(Cursor::new(decoded_data.clone()))
+                                        Reader::new(Cursor::new(bytes.clone()))
                                             .with_guessed_format()?
                                             .decode()?,
                                     );
-                                    ctx.load_base64_image(&decoded_data)?;
+                                    let _engine = base64::engine::general_purpose::STANDARD;
+                                    ctx.load_base64_image(&bytes)?;
                                     prompt.push_str(&default_marker);
-                                    println!("got base64 image----------------------------");
-                                } else if url::Url::parse(&string).is_ok() {
-                                    let resp = reqwest::blocking::get(&string);
-                                    match resp {
-                                        Ok(resp) => {
-                                            let bytes = resp.bytes().unwrap();
-                                            img = Some(
-                                                Reader::new(Cursor::new(bytes.clone()))
-                                                    .with_guessed_format()?
-                                                    .decode()?,
-                                            );
-                                            let engine = base64::engine::general_purpose::STANDARD;
-                                            ctx.load_base64_image(&bytes)?;
-                                            prompt.push_str(&default_marker);
-                                        }
-                                        Err(e) => {
-                                            println!("failed to fetch image from url: {}", e);
-                                        }
-                                    }
                                 }
-                            } else if text.starts_with("<|system|>\n") {
-                                continue;
-                            } else {
-                                prompt.push_str(&text.replace("<|user|>\n<|im_start|>\n", ""));
+                                Err(e) => {
+                                    println!("failed to fetch image from url: {}", e);
+                                }
                             }
                         }
-                        None => {}
+                    } else if text.starts_with("<|system|>\n") {
+                        continue;
+                    } else {
+                        prompt.push_str(&text.replace("<|user|>\n<|im_start|>\n", ""));
                     }
                 }
                 // Create user message

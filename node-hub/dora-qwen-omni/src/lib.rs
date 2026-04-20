@@ -677,7 +677,7 @@ mod tests {
         match result {
             Ok(boxes) => {
                 // If parsing succeeds, should have at least the first complete object
-                assert!(boxes.len() >= 1);
+                assert!(!boxes.is_empty());
                 assert_eq!(boxes[0].bbox_2d, [110, 194, 291, 235]);
                 assert_eq!(
                     boxes[0].text_content,
@@ -706,7 +706,7 @@ mod tests {
         let result = parse_bounding_boxes(json);
         match result {
             Ok(boxes) => {
-                assert!(boxes.len() >= 1);
+                assert!(!boxes.is_empty());
                 assert_eq!(boxes[0].bbox_2d, [110, 194, 291, 235]);
             }
             Err(_) => {
@@ -724,7 +724,7 @@ mod tests {
         let result = parse_bounding_boxes(json);
         match result {
             Ok(boxes) => {
-                assert!(boxes.len() >= 1);
+                assert!(!boxes.is_empty());
                 assert_eq!(boxes[0].bbox_2d, [110, 194, 291, 235]);
             }
             Err(_) => {
@@ -1197,7 +1197,7 @@ Additional notes: The parsing was successful and all text elements were extracte
         match result {
             Ok(boxes) => {
                 // Should at least parse the complete entry
-                assert!(boxes.len() >= 1);
+                assert!(!boxes.is_empty());
                 assert_eq!(boxes[0].text_content, Some("Complete Entry".to_string()));
             }
             Err(_) => {
@@ -1308,7 +1308,7 @@ Additional notes: The parsing was successful and all text elements were extracte
         // Should either succeed with repair or fail gracefully
         match result {
             Ok(boxes) => {
-                assert!(boxes.len() >= 1);
+                assert!(!boxes.is_empty());
                 assert_eq!(boxes[0].text_content, Some("health".to_string()));
                 // Second entry might be truncated but should not cause a panic
             }

@@ -145,15 +145,15 @@ async fn handle_client(
                     };
                     item_id += 1;
 
-                    let frame = Frame::text(Payload::Bytes(
+                    Frame::text(Payload::Bytes(
                         Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
-                    ));
-                    frame
+                    ))
                 } else if data.data_type() == &DataType::Utf8 && id.contains("text") {
                     let data = data.as_string::<i32>();
                     let orig_str = data.value(0);
                     // If response start and finish with <tool_call> parse it.
-                    let frame = if orig_str.contains("<tool_call>") {
+
+                    if orig_str.contains("<tool_call>") {
                         let str = orig_str
                             .split("<tool_call>")
                             .nth(1)
@@ -195,7 +195,7 @@ async fn handle_client(
                                 OpenAIRealtimeResponse::ResponseFunctionCallArgumentsDelta {
                                     item_id: item_id.to_string(),
                                     output_index: 123,
-                                    call_id: call_id.to_string().into(),
+                                    call_id: call_id.to_string(),
                                     response_id: "123".to_string(),
                                     delta: tool_call.arguments.to_string(),
                                 };
@@ -211,40 +211,38 @@ async fn handle_client(
                                 OpenAIRealtimeResponse::ResponseFunctionCallArgumentsDone {
                                     item_id: item_id.to_string(),
                                     output_index: 123,
-                                    call_id: call_id.to_string().into(),
+                                    call_id: call_id.to_string(),
                                     sequence_number: 123,
                                     name: tool_call.name,
                                     arguments: tool_call.arguments.to_string(),
                                 };
                             call_id += 1;
                             item_id += 1;
+
+                            Frame::text(Payload::Bytes(
+                                Bytes::from(serde_json::to_string(&serialized_data).unwrap())
+                                    .into(),
+                            ))
+                        } else if let Ok(tool_call) = serde_json::from_str::<ToolCall>(orig_str) {
+                            let serialized_data =
+                                OpenAIRealtimeResponse::ResponseFunctionCallArgumentsDone {
+                                    item_id: item_id.to_string(),
+                                    output_index: 123,
+                                    call_id: "123".to_string(),
+                                    sequence_number: 123,
+                                    name: tool_call.name,
+                                    arguments: tool_call.arguments.to_string(),
+                                };
+                            item_id += 1;
                             let frame = Frame::text(Payload::Bytes(
                                 Bytes::from(serde_json::to_string(&serialized_data).unwrap())
                                     .into(),
                             ));
+                            println!("Sending tool call: {:?}", serialized_data);
                             frame
                         } else {
-                            if let Ok(tool_call) = serde_json::from_str::<ToolCall>(&orig_str) {
-                                let serialized_data =
-                                    OpenAIRealtimeResponse::ResponseFunctionCallArgumentsDone {
-                                        item_id: item_id.to_string(),
-                                        output_index: 123,
-                                        call_id: "123".to_string(),
-                                        sequence_number: 123,
-                                        name: tool_call.name,
-                                        arguments: tool_call.arguments.to_string(),
-                                    };
-                                item_id += 1;
-                                let frame = Frame::text(Payload::Bytes(
-                                    Bytes::from(serde_json::to_string(&serialized_data).unwrap())
-                                        .into(),
-                                ));
-                                println!("Sending tool call: {:?}", serialized_data);
-                                frame
-                            } else {
-                                println!("Failed to parse tool call: {}", str);
-                                continue;
-                            }
+                            println!("Failed to parse tool call: {}", str);
+                            continue;
                         }
                     } else {
                         let serialized_data = OpenAIRealtimeResponse::ResponseTextDelta {
@@ -255,12 +253,11 @@ async fn handle_client(
                             delta: orig_str.to_string(),
                         };
                         item_id += 1;
-                        let frame = Frame::text(Payload::Bytes(
+
+                        Frame::text(Payload::Bytes(
                             Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
-                        ));
-                        frame
-                    };
-                    frame
+                        ))
+                    }
                 } else if id.contains("audio") {
                     let data: Vec<f32> = into_vec(&ArrowData(data)).unwrap();
                     let data = convert_f32_to_pcm16(&data);
@@ -288,8 +285,8 @@ async fn handle_client(
                         Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
                     );
                     println!("Sending response done: {:?}", serialized_data);
-                    let frame = Frame::text(payload);
-                    frame
+
+                    Frame::text(payload)
                 } else if id.contains("speech_started") {
                     let serialized_data = OpenAIRealtimeResponse::InputAudioBufferSpeechStarted {
                         audio_start_ms: 123,
@@ -297,10 +294,9 @@ async fn handle_client(
                     };
                     item_id += 1;
 
-                    let frame = Frame::text(Payload::Bytes(
+                    Frame::text(Payload::Bytes(
                         Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
-                    ));
-                    frame
+                    ))
                 } else if id.contains("speech_stopped") {
                     let serialized_data = OpenAIRealtimeResponse::InputAudioBufferSpeechStopped {
                         audio_end_ms: 123,
@@ -308,10 +304,9 @@ async fn handle_client(
                     };
                     item_id += 1;
 
-                    let frame = Frame::text(Payload::Bytes(
+                    Frame::text(Payload::Bytes(
                         Bytes::from(serde_json::to_string(&serialized_data).unwrap()).into(),
-                    ));
-                    frame
+                    ))
                 } else {
                     unimplemented!()
                 };
@@ -359,7 +354,7 @@ async fn handle_client(
                             OpenAIRealtimeMessage::InputAudioBufferCommit => break,
                             OpenAIRealtimeMessage::ResponseCreate { response } => {
                                 if let Some(text) = response.instructions {
-                                    let mut parameter = MetadataParameters::default();
+                                    let parameter = MetadataParameters::default();
                                     tx.send(BroadcastMessage::Output(
                                         DataId::from("response.create".to_string()),
                                         parameter,
@@ -372,7 +367,7 @@ async fn handle_client(
                                 println!("New conversation item: {:?}", item);
                                 match item.item_type.as_str() {
                                     "function_call_output" => {
-                                        let mut parameter = MetadataParameters::default();
+                                        let parameter = MetadataParameters::default();
                                         tx.send(BroadcastMessage::Output(
                                             DataId::from("function_call_output".to_string()),
                                             parameter,
@@ -641,71 +636,68 @@ async fn chat_completions_handler(
         ))
         .context("failed to send request")?;
     let res = loop {
-        match rx.recv().await {
-            Ok(BroadcastMessage::Input(id, _metadata, data)) => {
-                let s = if data.data_type() == &DataType::Utf8 && id.contains("text") {
-                    let data = data.as_string::<i32>();
-                    let str = data.iter().fold("".to_owned(), |mut acc, x| {
-                        if let Some(x) = x {
-                            acc.push('\n');
-                            acc.push_str(x);
-                        }
-                        acc
-                    });
-                    str.to_owned()
-                } else {
-                    "".to_owned()
-                };
-                println!("Got the following chat completion text: {}", s);
-                let chat_completion_object = ChatCompletionObject {
-                    id: "123".to_string(),
-                    object: "chat.completion".to_string(),
-                    created: 123,
-                    model: "gpt-5".to_string(),
-                    choices: vec![ChatCompletionObjectChoice {
-                        index: 0,
-                        message: ChatCompletionObjectMessage {
-                            content: Some(s),
-                            role: message::ChatCompletionRole::Assistant,
-                            tool_calls: vec![],
-                            function_call: None,
-                        },
-                        finish_reason: FinishReason::stop,
-                        logprobs: None,
-                    }],
-                    usage: Usage {
-                        prompt_tokens: 0,
-                        completion_tokens: 0,
-                        total_tokens: 0,
+        if let Ok(BroadcastMessage::Input(id, _metadata, data)) = rx.recv().await {
+            let s = if data.data_type() == &DataType::Utf8 && id.contains("text") {
+                let data = data.as_string::<i32>();
+                let str = data.iter().fold("".to_owned(), |mut acc, x| {
+                    if let Some(x) = x {
+                        acc.push('\n');
+                        acc.push_str(x);
+                    }
+                    acc
+                });
+                str.to_owned()
+            } else {
+                "".to_owned()
+            };
+            println!("Got the following chat completion text: {}", s);
+            let chat_completion_object = ChatCompletionObject {
+                id: "123".to_string(),
+                object: "chat.completion".to_string(),
+                created: 123,
+                model: "gpt-5".to_string(),
+                choices: vec![ChatCompletionObjectChoice {
+                    index: 0,
+                    message: ChatCompletionObjectMessage {
+                        content: Some(s),
+                        role: message::ChatCompletionRole::Assistant,
+                        tool_calls: vec![],
+                        function_call: None,
                     },
-                };
-                let s = serde_json::to_string(&chat_completion_object)
-                    .context("Failed to serialize response")?;
-                let streaming = chat_request.stream.unwrap_or(false);
-                if streaming {
-                    println!("Streaming not supported yet, returning full response");
-                    let result = Response::builder()
-                        .header("Access-Control-Allow-Origin", "*")
-                        .header("Access-Control-Allow-Methods", "*")
-                        .header("Access-Control-Allow-Headers", "*")
-                        .header("Content-Type", "application/json")
-                        .header("Cache-Control", "no-cache")
-                        .header("Connection", "keep-alive")
-                        .header("dora", "no-streaming")
-                        .body(s.into());
+                    finish_reason: FinishReason::stop,
+                    logprobs: None,
+                }],
+                usage: Usage {
+                    prompt_tokens: 0,
+                    completion_tokens: 0,
+                    total_tokens: 0,
+                },
+            };
+            let s = serde_json::to_string(&chat_completion_object)
+                .context("Failed to serialize response")?;
+            let streaming = chat_request.stream.unwrap_or(false);
+            if streaming {
+                println!("Streaming not supported yet, returning full response");
+                let result = Response::builder()
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Access-Control-Allow-Methods", "*")
+                    .header("Access-Control-Allow-Headers", "*")
+                    .header("Content-Type", "application/json")
+                    .header("Cache-Control", "no-cache")
+                    .header("Connection", "keep-alive")
+                    .header("dora", "no-streaming")
+                    .body(s.into());
 
-                    break result;
-                } else {
-                    let result = Response::builder()
-                        .header("Access-Control-Allow-Origin", "*")
-                        .header("Access-Control-Allow-Methods", "*")
-                        .header("Access-Control-Allow-Headers", "*")
-                        .header("Content-Type", "application/json")
-                        .body(s.into());
-                    break result;
-                }
+                break result;
+            } else {
+                let result = Response::builder()
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Access-Control-Allow-Methods", "*")
+                    .header("Access-Control-Allow-Headers", "*")
+                    .header("Content-Type", "application/json")
+                    .body(s.into());
+                break result;
             }
-            _ => {}
         }
     };
 
