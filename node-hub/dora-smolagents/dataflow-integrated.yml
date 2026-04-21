@@ -1,0 +1,22 @@
+nodes:
+  - id: dummy_input
+    build: pip install -e ../../node-hub/pyarrow-sender
+    path: pyarrow-sender
+    outputs:
+      - data
+    env:
+      DATA: '["move forward"]'
+
+  - id: smol_agent
+    path: dora_smolagents/main.py
+    inputs:
+      command: dummy_input/data
+    outputs:
+      - action
+
+  - id: safety_node
+    path: ../dora-safety-node/dora_safety_node/main.py
+    inputs:
+      cmd_vel: smol_agent/action
+    outputs:
+      - safe_cmd_vel
