@@ -828,6 +828,211 @@ def plan_and_send(node, optimizer, q_start, q_goal, pc_tensor, num_joints,
     return traj_np, out_metadata
 
 
+def _solve_grasp_ik(
+    u1, v1, u2, v2,
+    ik_chain, joint_limits, device, current_joints,
+    latest_depth, latest_intrinsics, latest_image_size,
+    cam_t, cam_rot,
+    action="", arm="left",
+    trac_ik_solver=None,
+    pick_mask=None,
+):
+    """Heading sweep + IK solve for grasp and pre-grasp.
+
+    Tries multiple approach headings, solves IK for each, returns the first
+    that succeeds.  Also computes a travel pre-grasp orientation for smooth
+    transit from home.
+
+    Returns a dict on success::
+
+        {
+            "grasp_xyzrpy": np.ndarray,
+            "pregrasp_xyzrpy": np.ndarray,
+            "q_pregrasp": torch.Tensor,
+            "q_grasp": torch.Tensor,
+            "q_pregrasp_travel": torch.Tensor or None,
+            "object_width": float,
+            "object_top_z": float,
+            "chosen_heading": float,
+            "cal_offset": np.ndarray,
+        }
+
+    Returns ``(None, reason_string)`` on failure.
+    """
+    if latest_depth is None or latest_intrinsics is None:
+        return None, "No depth/intrinsics data"
+
+    w, h = latest_image_size
+    fx, fy, cx, cy = latest_intrinsics
+
+    # --- Heading candidates based on action ---
+    if action in ("screw_hold", "screw_rotation"):
+        all_headings = list(range(-180, 181, 15))
+        if arm == "right":
+            preferred = -45
+        else:
+            preferred = 45
+        all_headings.sort(key=lambda h: min(abs(h - preferred), 360 - abs(h - preferred)))
+        heading_candidates = all_headings
+    elif arm == "left":
+        heading_candidates = [-135, -120, -105, -90, -75, -60, -45, -30, -15,
+                              0, 15, 30, 45, 60, 75, 90, -150, -165, -180]
+    else:
+        heading_candidates = [-135, -150, -165, -180, -195, -210, -225, -240,
+                              -255, -270, -120, -105, -90]
+
+    # --- Approach angle based on action ---
+    if action == "pour":
+        grasp_approach_angle = 70.0
+    elif action == "screw_hold":
+        grasp_approach_angle = 90.0  # fully horizontal to avoid collision
+    elif action == "screw_rotation":
+        grasp_approach_angle = 70.0  # tilted for wrist rotation freedom
+    else:
+        grasp_approach_angle = APPROACH_ANGLE_DEG
+
+    CAL_OFFSET_XY = np.array([0.03, -0.03])
+    CAL_REF_HEADING = -135.0
+
+    # Disable horiz_grip for screw_rotation (needs wrist freedom)
+    use_horiz_grip = action != "screw_rotation"
+
+    grasp_xyzrpy = None
+    pregrasp_xyzrpy = None
+    object_top_z = None
+    object_width = None
+    q_pregrasp = None
+    q_grasp = None
+    q_pregrasp_travel = None
+    chosen_heading = None
+    cal_offset = None
+
+    for heading in heading_candidates:
+        result = grasp_pose_from_jaw_pixels(
+            u1, v1, u2, v2,
+            latest_depth, fx, fy, cx, cy, cam_t, cam_rot,
+            width=w, height=h,
+            grasp_depth_offset=GRASP_DEPTH_OFFSET,
+            floor_height=FLOOR_HEIGHT,
+            approach_margin=APPROACH_MARGIN,
+            jaw_contact_depth=JAW_CONTACT_DEPTH,
+            approach_angle_deg=grasp_approach_angle,
+            approach_heading_deg=float(heading),
+            pick_mask=pick_mask,
+        )
+        if result is None:
+            if heading == heading_candidates[0]:
+                return None, "Invalid depth at grasp point"
+            continue
+
+        g_xyzrpy, pg_xyzrpy, obj_top_z, obj_w = result
+        # Apply calibration offset (skip for screw — both arms must target same XY)
+        if action not in ("screw_hold", "screw_rotation"):
+            delta_rad = np.radians(float(heading) - CAL_REF_HEADING)
+            cos_d, sin_d = np.cos(delta_rad), np.sin(delta_rad)
+            rotated_xy = np.array([
+                cos_d * CAL_OFFSET_XY[0] - sin_d * CAL_OFFSET_XY[1],
+                sin_d * CAL_OFFSET_XY[0] + cos_d * CAL_OFFSET_XY[1],
+            ])
+            cal_off = np.array([rotated_xy[0], rotated_xy[1], 0.0, 0.0, 0.0, 0.0])
+        else:
+            cal_off = np.zeros(6)
+        g_xyzrpy = g_xyzrpy + cal_off
+        pg_xyzrpy = pg_xyzrpy + cal_off
+
+        q_pg = solve_ik(
+            ik_chain, pg_xyzrpy, current_joints, joint_limits, device,
+            num_seeds=NUM_SEEDS, horiz_grip=use_horiz_grip, trac_ik_solver=trac_ik_solver,
+        )
+        if q_pg is None:
+            print(f"[motion-planner] heading {heading}° pre-grasp IK failed, trying next")
+            continue
+
+        descent_mm = np.linalg.norm(g_xyzrpy[:3] - pg_xyzrpy[:3]) * 1000
+        n_baby = max(int(descent_mm / 2.0), 5)
+        q_prev_baby = q_pg
+        q_g = None
+        last_good_alpha = 0.0
+        for bi in range(1, n_baby + 1):
+            alpha = bi / n_baby
+            baby_xyzrpy = pg_xyzrpy * (1 - alpha) + g_xyzrpy * alpha
+            q_baby = solve_ik(ik_chain, baby_xyzrpy, q_prev_baby, joint_limits, device,
+                              num_seeds=NUM_SEEDS, horiz_grip=use_horiz_grip,
+                              trac_ik_solver=trac_ik_solver)
+            if q_baby is None:
+                break
+            q_prev_baby = q_baby
+            last_good_alpha = alpha
+            if bi == n_baby:
+                q_g = q_baby
+        if q_g is None:
+            remaining_mm = descent_mm * (1.0 - last_good_alpha)
+            print(f"[motion-planner] heading {heading}° grasp IK failed at "
+                  f"{remaining_mm:.0f}mm from target, trying next")
+            continue
+
+        grasp_xyzrpy = g_xyzrpy
+        pregrasp_xyzrpy = pg_xyzrpy
+        object_top_z = obj_top_z
+        object_width = obj_w
+        q_pregrasp = q_pg
+        q_grasp = q_g
+        chosen_heading = heading
+        cal_offset = cal_off
+        if heading != heading_candidates[0]:
+            print(f"[motion-planner] heading {heading}° succeeded "
+                  f"(default {heading_candidates[0]}° failed)")
+        break
+
+    if q_grasp is None:
+        return None, f"IK failed for grasp pose (all headings unreachable)"
+
+    # Travel pre-grasp at 70° for smooth transit from home
+    if APPROACH_ANGLE_DEG < 60.0:
+        travel_angle = 70.0
+        heading_rad = np.radians(float(chosen_heading))
+        horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
+        angle_rad = np.radians(travel_angle)
+        travel_approach = np.sin(angle_rad) * horiz + np.cos(angle_rad) * np.array([0, 0, -1.0])
+        travel_approach /= np.linalg.norm(travel_approach)
+        up = np.array([0.0, 0.0, 1.0])
+        travel_y = np.cross(travel_approach, up)
+        travel_y /= np.linalg.norm(travel_y)
+        travel_x = np.cross(travel_y, travel_approach)
+        travel_x /= np.linalg.norm(travel_x)
+        travel_y = np.cross(travel_approach, travel_x)
+        from scipy.spatial.transform import Rotation as R_scipy
+        travel_rot = np.stack([travel_x, travel_y, travel_approach], axis=1)
+        travel_rpy = R_scipy.from_matrix(travel_rot).as_euler("XYZ")
+        travel_pregrasp = pregrasp_xyzrpy.copy()
+        travel_pregrasp[3:6] = travel_rpy
+        q_pregrasp_travel = solve_ik(
+            ik_chain, travel_pregrasp, current_joints, joint_limits, device,
+            num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
+        )
+        if q_pregrasp_travel is not None:
+            print(f"[motion-planner] travel pre-grasp at 70° OK")
+
+    # FK verification
+    if trac_ik_solver is not None:
+        fk_pos, _ = trac_ik_solver._solver.fk(q_grasp.cpu().numpy().astype(np.float64))
+        fk_err = np.linalg.norm(fk_pos - grasp_xyzrpy[:3]) * 1000
+        print(f"[motion-planner] FK verify grasp: target={np.round(grasp_xyzrpy[:3], 4)} "
+              f"fk={np.round(fk_pos, 4)} err={fk_err:.1f}mm")
+
+    return {
+        "grasp_xyzrpy": grasp_xyzrpy,
+        "pregrasp_xyzrpy": pregrasp_xyzrpy,
+        "q_pregrasp": q_pregrasp,
+        "q_grasp": q_grasp,
+        "q_pregrasp_travel": q_pregrasp_travel,
+        "object_width": object_width,
+        "object_top_z": object_top_z,
+        "chosen_heading": chosen_heading,
+        "cal_offset": cal_offset,
+    }, None
+
+
 def plan_grasp_from_pixels(
     u1,
     v1,
@@ -876,156 +1081,28 @@ def plan_grasp_from_pixels(
     w, h = latest_image_size
     fx, fy, cx, cy = latest_intrinsics
 
-    # --- Heading sweep: try multiple approach headings until IK succeeds ---
-    if arm == "left":
-        heading_candidates = [-135, -120, -105, -90, -75, -60, -45, -30, -15, 0, 15, 30, 45, 60, 75, 90, -150, -165, -180]
-    else:
-        heading_candidates = [-135, -150, -165, -180, -195, -210, -225, -240, -255, -270, -120, -105, -90]
+    # --- Solve grasp IK (heading sweep + baby-step descent + travel) ---
+    ik_result, ik_reason = _solve_grasp_ik(
+        u1, v1, u2, v2,
+        ik_chain, joint_limits, device, current_joints,
+        latest_depth, latest_intrinsics, latest_image_size,
+        cam_t, cam_rot,
+        action=action, arm=arm,
+        trac_ik_solver=trac_ik_solver,
+        pick_mask=pick_mask,
+    )
+    if ik_result is None:
+        return None, ik_reason
 
-    grasp_approach_angle = 70.0 if action == "pour" else APPROACH_ANGLE_DEG
-
-    # Per-arm calibration offset (metres), calibrated at -135° heading.
-    # Rotate the XY component when using a different heading so the
-    # correction stays aligned with the gripper frame.
-    CAL_OFFSET_XY = np.array([0.03, -0.03])  # at reference heading -135°
-    CAL_REF_HEADING = -135.0
-
-    grasp_xyzrpy = None
-    pregrasp_xyzrpy = None
-    object_top_z = None
-    object_width = None
-    q_pregrasp = None
-    q_grasp = None
-    q_pregrasp_travel = None
-    chosen_heading = None
-
-    for heading in heading_candidates:
-        result = grasp_pose_from_jaw_pixels(
-            u1,
-            v1,
-            u2,
-            v2,
-            latest_depth,
-            fx,
-            fy,
-            cx,
-            cy,
-            cam_t,
-            cam_rot,
-            width=w,
-            height=h,
-            grasp_depth_offset=GRASP_DEPTH_OFFSET,
-            floor_height=FLOOR_HEIGHT,
-            approach_margin=APPROACH_MARGIN,
-            jaw_contact_depth=JAW_CONTACT_DEPTH,
-            approach_angle_deg=grasp_approach_angle,
-            approach_heading_deg=float(heading),
-            pick_mask=pick_mask,
-        )
-        if result is None:
-            if heading == heading_candidates[0]:
-                print("[motion-planner] grasp: invalid depth at jaw points, skipping")
-                return None, "Invalid depth at grasp point"
-            continue
-
-        g_xyzrpy, pg_xyzrpy, obj_top_z, obj_w = result
-        # Rotate calibration offset XY by heading difference from reference
-        delta_rad = np.radians(float(heading) - CAL_REF_HEADING)
-        cos_d, sin_d = np.cos(delta_rad), np.sin(delta_rad)
-        rotated_xy = np.array([
-            cos_d * CAL_OFFSET_XY[0] - sin_d * CAL_OFFSET_XY[1],
-            sin_d * CAL_OFFSET_XY[0] + cos_d * CAL_OFFSET_XY[1],
-        ])
-        cal_offset = np.array([rotated_xy[0], rotated_xy[1], 0.0, 0.0, 0.0, 0.0])
-        g_xyzrpy = g_xyzrpy + cal_offset
-        pg_xyzrpy = pg_xyzrpy + cal_offset
-
-        q_pg = solve_ik(
-            ik_chain, pg_xyzrpy, current_joints, joint_limits, device,
-            num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
-        )
-        if q_pg is None:
-            print(f"[motion-planner] heading {heading}° pre-grasp IK failed, trying next")
-            continue
-
-        # Baby-step IK from pre-grasp down to grasp (~2mm per step)
-        descent_mm = np.linalg.norm(g_xyzrpy[:3] - pg_xyzrpy[:3]) * 1000
-        n_baby = max(int(descent_mm / 2.0), 5)
-        q_prev_baby = q_pg
-        q_g = None
-        last_good_alpha = 0.0
-        for bi in range(1, n_baby + 1):
-            alpha = bi / n_baby
-            baby_xyzrpy = pg_xyzrpy * (1 - alpha) + g_xyzrpy * alpha
-            q_baby = solve_ik(ik_chain, baby_xyzrpy, q_prev_baby, joint_limits, device,
-                              num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver)
-            if q_baby is None:
-                break
-            q_prev_baby = q_baby
-            last_good_alpha = alpha
-            if bi == n_baby:
-                q_g = q_baby
-        if q_g is None:
-            remaining_mm = descent_mm * (1.0 - last_good_alpha)
-            print(f"[motion-planner] heading {heading}° grasp IK failed at {remaining_mm:.0f}mm from target ({n_baby} steps, {descent_mm:.0f}mm descent), trying next")
-            continue
-
-        # Both IK succeeded
-        grasp_xyzrpy = g_xyzrpy
-        pregrasp_xyzrpy = pg_xyzrpy
-        object_top_z = obj_top_z
-        object_width = obj_w
-        q_pregrasp = q_pg
-        q_grasp = q_g
-        chosen_heading = heading
-        if heading != heading_candidates[0]:
-            print(f"[motion-planner] heading {heading}° succeeded (default {heading_candidates[0]}° failed)")
-        break
-
-    if q_grasp is None:
-        print(f"[motion-planner] grasp: IK failed for all headings {heading_candidates}, skipping")
-        return None, "IK failed for grasp pose (all headings unreachable)"
-
-    # Solve a travel pre-grasp at 70° orientation for smooth transit from home.
-    # Uses the same heading that succeeded for the grasp.
-    if APPROACH_ANGLE_DEG < 60.0:
-        travel_angle = 70.0
-        heading_rad = np.radians(float(chosen_heading))
-        horiz = np.array([np.cos(heading_rad), np.sin(heading_rad), 0.0])
-        angle_rad = np.radians(travel_angle)
-        travel_approach = np.sin(angle_rad) * horiz + np.cos(angle_rad) * np.array([0.0, 0.0, -1.0])
-        travel_approach = travel_approach / np.linalg.norm(travel_approach)
-        travel_z_ee = travel_approach
-        up = np.array([0.0, 0.0, 1.0])
-        travel_y = np.cross(travel_z_ee, up)
-        travel_y = travel_y / np.linalg.norm(travel_y)
-        travel_x = np.cross(travel_y, travel_z_ee)
-        travel_x = travel_x / np.linalg.norm(travel_x)
-        travel_y = np.cross(travel_z_ee, travel_x)
-        from scipy.spatial.transform import Rotation as R_scipy
-        travel_rot = np.stack([travel_x, travel_y, travel_z_ee], axis=1)
-        travel_rpy = R_scipy.from_matrix(travel_rot).as_euler("XYZ")
-        travel_pregrasp = pregrasp_xyzrpy.copy()
-        travel_pregrasp[3:6] = travel_rpy
-        q_pregrasp_travel = solve_ik(
-            ik_chain, travel_pregrasp, current_joints, joint_limits, device,
-            num_seeds=NUM_SEEDS, horiz_grip=True, trac_ik_solver=trac_ik_solver,
-        )
-        if q_pregrasp_travel is not None:
-            print(f"[motion-planner] travel pre-grasp at 70° OK")
-        else:
-            print(f"[motion-planner] travel pre-grasp at 70° failed, using direct")
-
-    # FK verification: check where the IK solution actually places the EE
-    if trac_ik_solver is not None:
-        fk_pos, fk_rot = trac_ik_solver._solver.fk(q_grasp.cpu().numpy().astype(np.float64))
-        fk_err = np.linalg.norm(fk_pos - grasp_xyzrpy[:3]) * 1000
-        print(f"[motion-planner] FK verify grasp: target={np.round(grasp_xyzrpy[:3], 4)} "
-              f"fk={np.round(fk_pos, 4)} err={fk_err:.1f}mm")
-        fk_pregrasp_pos, _ = trac_ik_solver._solver.fk(q_pregrasp.cpu().numpy().astype(np.float64))
-        fk_pre_err = np.linalg.norm(fk_pregrasp_pos - pregrasp_xyzrpy[:3]) * 1000
-        print(f"[motion-planner] FK verify pregrasp: target={np.round(pregrasp_xyzrpy[:3], 4)} "
-              f"fk={np.round(fk_pregrasp_pos, 4)} err={fk_pre_err:.1f}mm")
+    grasp_xyzrpy = ik_result["grasp_xyzrpy"]
+    pregrasp_xyzrpy = ik_result["pregrasp_xyzrpy"]
+    q_pregrasp = ik_result["q_pregrasp"]
+    q_grasp = ik_result["q_grasp"]
+    q_pregrasp_travel = ik_result["q_pregrasp_travel"]
+    object_width = ik_result["object_width"]
+    object_top_z = ik_result["object_top_z"]
+    chosen_heading = ik_result["chosen_heading"]
+    cal_offset = ik_result["cal_offset"]
 
     # --- Pick-and-place: solve IK for place/preplace poses ---
     q_place = None
@@ -1509,6 +1586,450 @@ def _smooth_dwell_boundaries(traj, max_step, ramp_waypoints=8):
     return torch.tensor(traj_np, dtype=traj.dtype)
 
 
+def plan_screw_hold(
+    u1, v1, u2, v2,
+    node, optimizer, ik_chain, capsule_model, joint_limits, device,
+    current_joints, latest_depth, latest_intrinsics, latest_image_size,
+    cam_t, cam_rot, pc_tensor, num_joints,
+    arm="left",
+    table_plane=None, table_polygon=None,
+    pin_ik=None, trac_ik_solver=None, trac_ik_dist=None,
+    latest_image=None,
+):
+    """Plan Phase 1 of screw: hold arm grasps base and holds.
+
+    Uses _solve_grasp_ik for IK, then _build_pick_place_trajectory for the
+    approach with safe staging. Cuts the trajectory at the grasp dwell and
+    appends a long hold phase (no retract/home).
+
+    Returns ``(traj_np, metadata)`` on success, ``(None, reason)`` on failure.
+    """
+    # Solve grasp IK (heading sweep + baby-step descent)
+    ik_result, ik_reason = _solve_grasp_ik(
+        u1, v1, u2, v2,
+        ik_chain, joint_limits, device, current_joints,
+        latest_depth, latest_intrinsics, latest_image_size,
+        cam_t, cam_rot,
+        action="screw_hold", arm=arm,
+        trac_ik_solver=trac_ik_solver,
+    )
+    if ik_result is None:
+        return None, f"Screw hold IK failed: {ik_reason}"
+
+    q_pregrasp = ik_result["q_pregrasp"]
+    q_grasp = ik_result["q_grasp"]
+    q_pregrasp_travel = ik_result["q_pregrasp_travel"]
+    grasp_xyzrpy = ik_result["grasp_xyzrpy"]
+    object_width = ik_result["object_width"]
+    chosen_heading = ik_result["chosen_heading"]
+
+    # Build approach trajectory that stops at grasp (no retract/home)
+    q_start = current_joints.clone()
+    result = _build_pick_place_trajectory(
+        node, optimizer, ik_chain, capsule_model,
+        q_start, q_pregrasp, q_grasp, None, None,
+        pc_tensor, num_joints, arm, object_width,
+        grasp_xyzrpy, None,
+        q_pregrasp_travel=q_pregrasp_travel,
+        joint_limits=joint_limits, device=device,
+        table_plane=table_plane, table_polygon=table_polygon,
+        pin_ik=pin_ik, trac_ik_solver=trac_ik_solver, trac_ik_dist=trac_ik_dist,
+        action="screw_hold",
+        chosen_heading=chosen_heading,
+        stop_at_grasp=True,
+    )
+    if result is None:
+        return None, "Screw hold trajectory planning failed"
+
+    traj_np, out_metadata = result
+
+    # Short hold at grasp — motors hold position naturally after trajectory ends.
+    # Just need enough for gripper to fully close before Phase 1 "done" triggers Phase 2.
+    grasp_wp = traj_np[-1:]
+    HOLD_STEPS = 45  # ~1.25s — gripper close ramp
+    hold_wp = grasp_wp.repeat(HOLD_STEPS, axis=0)
+    traj_np = np.concatenate([traj_np, hold_wp], axis=0)
+    out_metadata["num_waypoints"] = traj_np.shape[0]
+    out_metadata["encoding"] = "screw_hold"
+    out_metadata["action"] = "screw_hold"
+
+    print(f"[screw-hold] Trajectory: {traj_np.shape[0]} wp "
+          f"(approach + {HOLD_STEPS} hold steps)")
+    return traj_np, out_metadata
+
+
+def plan_screw_rotation(
+    cap_u1, cap_v1, cap_u2, cap_v2,
+    screw_degrees,
+    node, optimizer, ik_chain, capsule_model, joint_limits, device,
+    current_joints, latest_depth, latest_intrinsics, latest_image_size,
+    cam_t, cam_rot, pc_tensor, num_joints,
+    arm="right",
+    table_plane=None, table_polygon=None,
+    pin_ik=None, trac_ik_solver=None, trac_ik_dist=None,
+    latest_image=None,
+    hold_z=0.0,
+    grasp_center=None,
+):
+    """Plan Phase 2 of screw: right arm grabs cap and ratchet-screws.
+
+    Uses plan_grasp_from_pixels for the approach (safe staging, collision
+    avoidance), then appends ratchet rotation cycles.
+    Rotation is around world Z axis (yaw change) while keeping top-down approach.
+
+    Returns ``(traj_np, metadata)`` on success, ``(None, reason)`` on failure.
+    """
+    if trac_ik_solver is None:
+        return None, "Screw rotation requires TracIK solver"
+
+    # Solve grasp IK
+    ik_result, ik_reason = _solve_grasp_ik(
+        cap_u1, cap_v1, cap_u2, cap_v2,
+        ik_chain, joint_limits, device, current_joints,
+        latest_depth, latest_intrinsics, latest_image_size,
+        cam_t, cam_rot,
+        action="screw_rotation", arm=arm,
+        trac_ik_solver=trac_ik_solver,
+    )
+    if ik_result is None:
+        return None, f"Screw rotation IK failed: {ik_reason}"
+
+    q_pregrasp = ik_result["q_pregrasp"]
+    q_grasp = ik_result["q_grasp"]
+    q_pregrasp_travel = ik_result["q_pregrasp_travel"]
+    grasp_xyzrpy = ik_result["grasp_xyzrpy"]
+    object_width = ik_result["object_width"]
+    chosen_heading = ik_result["chosen_heading"]
+
+    # Build approach trajectory that stops at grasp (no retract/home)
+    q_start = current_joints.clone()
+    grasp_result = _build_pick_place_trajectory(
+        node, optimizer, ik_chain, capsule_model,
+        q_start, q_pregrasp, q_grasp, None, None,
+        pc_tensor, num_joints, arm, object_width,
+        grasp_xyzrpy, None,
+        q_pregrasp_travel=q_pregrasp_travel,
+        joint_limits=joint_limits, device=device,
+        table_plane=table_plane, table_polygon=table_polygon,
+        pin_ik=pin_ik, trac_ik_solver=trac_ik_solver, trac_ik_dist=trac_ik_dist,
+        action="screw_rotation",
+        chosen_heading=chosen_heading,
+        stop_at_grasp=True,
+    )
+    if grasp_result is None:
+        return None, "Screw rotation approach trajectory failed"
+
+    approach_traj, approach_meta = grasp_result
+    base_traj = approach_traj
+
+    # Get the grasp joint config (last waypoint = end of dwell, since stop_at_grasp)
+    grasp_dwell_start = approach_meta.get("grasp_dwell_start", base_traj.shape[0] - DWELL_STEPS)
+    q_grasp = torch.tensor(base_traj[-1], dtype=torch.float32, device=device)
+    q_pregrasp_idx = max(0, grasp_dwell_start - 30)
+    q_pregrasp = torch.tensor(approach_traj[q_pregrasp_idx], dtype=torch.float32, device=device)
+    q_home = torch.zeros(num_joints, dtype=torch.float32, device=device)
+
+    # Get EE rotation at grasp pose (starting orientation for screw)
+    from scipy.spatial.transform import Rotation as R_screw
+    grasp_np = q_grasp.cpu().numpy().astype(np.float64)
+    _, R_start = trac_ik_solver._solver.fk(grasp_np)
+    fk_pos, _ = trac_ik_solver._solver.fk(grasp_np)
+    screw_pos = fk_pos.astype(np.float64)
+
+    # Log grasp center comparison (don't override — arm must rotate at its own FK position)
+    if grasp_center is not None:
+        gc = np.array(grasp_center, dtype=np.float64)
+        xy_off = np.linalg.norm(screw_pos[:2] - gc[:2]) * 1000
+        print(f"[screw-rotate] Shared center: [{gc[0]:.4f},{gc[1]:.4f}], "
+              f"FK pos: [{screw_pos[0]:.4f},{screw_pos[1]:.4f}], XY offset: {xy_off:.1f}mm")
+    print(f"[screw-rotate] Screw pos: [{screw_pos[0]:.4f},{screw_pos[1]:.4f},{screw_pos[2]:.4f}], "
+          f"hold Z: {hold_z:.4f}, Z diff: {(screw_pos[2] - hold_z)*1000:.1f}mm")
+
+    # Parse gripper actions from approach trajectory
+    ga_str = approach_meta.get("gripper_actions", "[]")
+    base_gripper_actions = json.loads(ga_str) if isinstance(ga_str, str) else ga_str
+
+    # Build ratchet rotation segments to append after the approach
+    segments = [torch.tensor(base_traj, dtype=torch.float32)]
+    q_prev = q_grasp
+
+    # Copy gripper actions from approach (up to our cut point)
+    gripper_actions = list(base_gripper_actions)  # copy all from approach (stop_at_grasp already trimmed)
+
+    def _append(seg, skip_first=True):
+        if skip_first and len(segments) > 0:
+            segments.append(seg[1:])
+        else:
+            segments.append(seg)
+        return seg[-1]
+
+    # ---- Solve IK for one ratchet cycle, then replay for all cycles ----
+    MAX_PER_CYCLE = 120
+    GRIP_WAIT = 35  # ~1s for gripper to fully open/close
+
+    # Solve IK for one rotation cycle (baby-step around world Z)
+    rot_sign = -1.0  # clockwise from above
+    screw_waypoints = []
+    q_prev_step = q_grasp
+    for step in range(1, MAX_PER_CYCLE + 1):
+        angle_deg = rot_sign * step
+        c, s_val = np.cos(np.radians(angle_deg)), np.sin(np.radians(angle_deg))
+        Rz = np.array([[c, -s_val, 0], [s_val, c, 0], [0, 0, 1]], dtype=np.float64)
+        R_step = Rz @ R_start
+        rpy_step = R_screw.from_matrix(R_step).as_euler("XYZ").astype(np.float32)
+        xyzrpy_step = np.concatenate([screw_pos, rpy_step]).astype(np.float32)
+
+        q_step = solve_ik(ik_chain, xyzrpy_step, q_prev_step, joint_limits, device,
+                          num_seeds=NUM_SEEDS, horiz_grip=False, trac_ik_solver=trac_ik_solver)
+        if q_step is not None:
+            q_prev_np = q_prev_step.cpu().numpy() if torch.is_tensor(q_prev_step) else np.asarray(q_prev_step)
+            q_step_np = q_step.cpu().numpy() if torch.is_tensor(q_step) else np.asarray(q_step)
+            max_jump = float(np.max(np.abs(q_step_np - q_prev_np)))
+            if max_jump > 0.1:
+                break
+            # Self-collision check
+            SELF_COLL_MARGIN = -0.025
+            SELF_COLL_SKIP = 4
+            self_collision = False
+            with torch.no_grad():
+                q_check = q_step.unsqueeze(0).to(device)
+                tf_check = ik_chain.forward_kinematics(q_check, end_only=False)
+                fk_keys_check = set(tf_check.keys())
+                cap_links = [n for n in capsule_model.link_names if n in fk_keys_check]
+                pairs = [(i, j) for i in range(len(cap_links))
+                         for j in range(i + SELF_COLL_SKIP, len(cap_links))]
+                for li, lj in pairs:
+                    p0_i, p1_i = capsule_model.capsule_endpoints_world(cap_links[li], tf_check)
+                    r_i = capsule_model.radii[cap_links[li]]
+                    p0_j, p1_j = capsule_model.capsule_endpoints_world(cap_links[lj], tf_check)
+                    r_j = capsule_model.radii[cap_links[lj]]
+                    sd = capsule_capsule_distance(p0_i, p1_i, r_i, p0_j, p1_j, r_j)
+                    if float(sd.min()) < SELF_COLL_MARGIN:
+                        self_collision = True
+                        break
+                if not self_collision and capsule_model.body_capsule is not None:
+                    body_p0 = capsule_model.body_p0.unsqueeze(0)
+                    body_p1 = capsule_model.body_p1.unsqueeze(0)
+                    body_r = capsule_model.body_radius
+                    for ln in cap_links[capsule_model.body_skip_links:]:
+                        p0_w, p1_w = capsule_model.capsule_endpoints_world(ln, tf_check)
+                        r = capsule_model.radii[ln]
+                        sd = capsule_capsule_distance(p0_w, p1_w, r, body_p0, body_p1, body_r)
+                        if float(sd.min()) < SELF_COLL_MARGIN:
+                            self_collision = True
+                            break
+            if self_collision:
+                break
+            screw_waypoints.append(q_step)
+            q_prev_step = q_step
+        else:
+            break
+
+    if not screw_waypoints:
+        return None, "Screw rotation: no rotation achievable (IK/collision at 1°)"
+
+    deg_per_cycle = len(screw_waypoints)
+    num_cycles = int(np.ceil(screw_degrees / deg_per_cycle))
+    print(f"[screw-rotate] IK solved: {deg_per_cycle}° per cycle, "
+          f"{num_cycles} cycles for {screw_degrees}°")
+
+    # Build all ratchet cycles by replaying the solved waypoints
+    total_rotated = 0.0
+    for cycle in range(1, num_cycles + 1):
+        remaining = screw_degrees - total_rotated
+        use_deg = min(remaining, deg_per_cycle)
+        use_wps = screw_waypoints[:int(use_deg)]
+
+        # Forward rotation
+        for q_wp in use_wps:
+            segments.append(q_wp.cpu().unsqueeze(0))
+            q_prev = q_wp
+
+        total_rotated += len(use_wps)
+
+        # Hold + open gripper
+        release_wp = sum(s.shape[0] for s in segments)
+        segments.append(q_prev.unsqueeze(0).expand(GRIP_WAIT, -1).cpu())
+        gripper_actions.append({"waypoint": release_wp, "rad": float(GRIPPER_OPEN_RAD)})
+
+        if total_rotated >= screw_degrees:
+            break
+
+        # Return to start (reverse waypoints)
+        for q_wp in reversed(use_wps):
+            segments.append(q_wp.cpu().unsqueeze(0))
+            q_prev = q_wp
+
+        # Hold + close gripper
+        regrip_wp = sum(s.shape[0] for s in segments)
+        segments.append(q_prev.unsqueeze(0).expand(GRIP_WAIT, -1).cpu())
+        gripper_actions.append({"waypoint": regrip_wp, "rad": float(GRIPPER_CLOSED_RAD)})
+
+    print(f"[screw-rotate] {num_cycles} ratchet cycles, {total_rotated:.0f}° total")
+
+    # Return home by reversing the approach trajectory — this reuses the same
+    # collision-checked, staging-aware path that brought us to the cap.
+    # First, un-rotate back to the exact grasp pose that the approach ended at,
+    # so the reverse starts from a known wp.
+    q_grasp_end = torch.tensor(base_traj[-1], dtype=torch.float32)
+    N_UNROT = 20
+    alphas_u = torch.linspace(0, 1, N_UNROT + 1)[1:].unsqueeze(1)
+    seg_unrot = q_prev.cpu() * (1 - alphas_u) + q_grasp_end.cpu() * alphas_u
+    q_prev = _append(seg_unrot)
+
+    # Reverse the approach: grasp → pre-grasp → staging → home (skip first wp
+    # since it duplicates q_grasp_end that _append just emitted).
+    reversed_traj = torch.tensor(base_traj[::-1].copy(), dtype=torch.float32)
+    segments.append(reversed_traj[1:])
+    q_prev = reversed_traj[-1]
+
+    full_traj = torch.cat(segments, dim=0)
+
+    # Smoothing pass
+    traj_np = full_traj.numpy().copy().astype(np.float32)
+    total_fixed = 0
+    for threshold in [0.12, 0.10, 0.08, 0.06, 0.04]:
+        for _pass in range(5):
+            diffs = np.abs(np.diff(traj_np, axis=0))
+            n_fixed = 0
+            for t in range(2, traj_np.shape[0] - 2):
+                max_step = max(np.max(diffs[t - 1]), np.max(diffs[t]) if t < diffs.shape[0] else 0)
+                if max_step > threshold:
+                    traj_np[t] = 0.25 * traj_np[t - 1] + 0.5 * traj_np[t] + 0.25 * traj_np[t + 1]
+                    n_fixed += 1
+            total_fixed += n_fixed
+            if n_fixed == 0:
+                break
+    if total_fixed > 0:
+        print(f"[screw-rotate] Smoothed {total_fixed} discontinuities")
+
+    # Collision validation on sampled waypoints (full trajectory too large for GPU)
+    if capsule_model is not None and pc_tensor is not None:
+        SAMPLE_STEP = max(1, traj_np.shape[0] // 500)  # check ~500 waypoints max
+        sampled = traj_np[::SAMPLE_STEP]
+        try:
+            _log_collision_check(
+                validate_trajectory(
+                    ik_chain, capsule_model, torch.tensor(sampled), pc_tensor, SAFETY_MARGIN,
+                    table_plane=table_plane, table_polygon=table_polygon,
+                ),
+                sampled.shape[0],
+            )
+        except torch.cuda.OutOfMemoryError:
+            print(f"[screw-rotate] Collision check skipped (CUDA OOM, {traj_np.shape[0]} wp)")
+
+    total_waypoints = traj_np.shape[0]
+    dt = 1.0 / PLAYBACK_HZ
+
+    object_width = float(approach_meta.get("object_width", 0.03))
+    close_rad = compute_gripper_close_rad(object_width)
+    approach_rad = compute_gripper_approach_rad(object_width)
+
+    out_metadata = {
+        "num_waypoints": total_waypoints,
+        "num_joints": num_joints,
+        "dt": dt,
+        "encoding": "screw_rotation",
+        "arm": arm,
+        "gripper_actions": json.dumps(gripper_actions),
+        "action": "screw_rotation",
+        "expected_close_rad": float(close_rad),
+        "approach_rad": float(approach_rad),
+        "screw_total_degrees": total_rotated,
+        "screw_cycles": cycle,
+    }
+
+    print(f"[screw-rotate] Trajectory: {total_waypoints} wp, "
+          f"{cycle} ratchet cycles, {total_rotated:.0f}° total rotation")
+    return traj_np, out_metadata
+
+
+def plan_screw_release(
+    node, arm_cfg, device,
+):
+    """Plan Phase 3 of screw: hold arm releases base and returns home.
+
+    Lifts to safe Z, transits via staging XY, then descends to home.
+    Returns ``(traj_np, metadata)`` on success.
+    """
+    num_joints = arm_cfg.num_joints
+    current_joints_np = arm_cfg.current_joints.cpu().numpy()[:num_joints].astype(np.float32)
+    q_home = np.zeros(num_joints, dtype=np.float32)
+
+    # Open gripper dwell
+    RELEASE_DWELL = 15
+    release_wp = np.tile(current_joints_np, (RELEASE_DWELL, 1))
+
+    segments = [release_wp]
+    q_prev = current_joints_np
+
+    # Return home via safe staging: lift → staging XY → above-home → home
+    staging_xy = (0.0, -0.3) if arm_cfg.name == "left" else (-0.3, 0.1)
+    if arm_cfg.trac_ik is not None:
+        fk_pos, fk_rot = arm_cfg.trac_ik._solver.fk(current_joints_np.astype(np.float64))
+
+        # Step 1: Lift to safe clearance height
+        lift_z = max(fk_pos[2] + 0.15, 0.40)
+        lift_pos = fk_pos.copy()
+        lift_pos[2] = lift_z
+        q_lift_np, err = arm_cfg.trac_ik.solve(
+            lift_pos, q_init=current_joints_np.astype(np.float64), target_rot=fk_rot)
+        if q_lift_np is not None and err < 0.005:
+            N_LIFT = 30
+            alphas = np.linspace(0, 1, N_LIFT).reshape(-1, 1).astype(np.float32)
+            seg_lift = q_prev * (1 - alphas) + q_lift_np.astype(np.float32) * alphas
+            segments.append(seg_lift)
+            q_prev = q_lift_np.astype(np.float32)
+
+            # Step 2: Transit via staging XY at safe Z
+            staging_pos = np.array([staging_xy[0], staging_xy[1], lift_z])
+            q_stage_np, stage_err = arm_cfg.trac_ik.solve(
+                staging_pos, q_init=q_prev.astype(np.float64), target_rot=fk_rot)
+            if q_stage_np is not None and stage_err < 0.01:
+                N_STAGE = 40
+                alphas_s = np.linspace(0, 1, N_STAGE).reshape(-1, 1).astype(np.float32)
+                seg_stage = q_prev * (1 - alphas_s) + q_stage_np.astype(np.float32) * alphas_s
+                segments.append(seg_stage)
+                q_prev = q_stage_np.astype(np.float32)
+
+            # Step 3: Transit to above-home at safe Z
+            home_fk_pos, _ = arm_cfg.trac_ik._solver.fk(q_home.astype(np.float64))
+            above_home_pos = np.array([home_fk_pos[0], home_fk_pos[1], lift_z])
+            q_above_np, above_err = arm_cfg.trac_ik.solve(
+                above_home_pos, q_init=q_prev.astype(np.float64), target_rot=fk_rot)
+            if q_above_np is not None and above_err < 0.01:
+                N_TRANSIT = 40
+                alphas_t = np.linspace(0, 1, N_TRANSIT).reshape(-1, 1).astype(np.float32)
+                seg_transit = q_prev * (1 - alphas_t) + q_above_np.astype(np.float32) * alphas_t
+                segments.append(seg_transit)
+                q_prev = q_above_np.astype(np.float32)
+
+    # Descend to home
+    max_delta = float(np.max(np.abs(q_home - q_prev)))
+    N_HOME = max(int(max(2.0, max_delta) * PLAYBACK_HZ), 60)
+    alphas = np.linspace(0, 1, N_HOME).reshape(-1, 1).astype(np.float32)
+    seg_home = q_prev * (1 - alphas) + q_home * alphas
+    segments.append(seg_home)
+
+    traj_np = np.concatenate(segments, axis=0)
+
+    gripper_actions = [
+        {"waypoint": 0, "rad": float(GRIPPER_OPEN_RAD)},
+    ]
+
+    meta = {
+        "num_waypoints": traj_np.shape[0],
+        "num_joints": num_joints,
+        "dt": 1.0 / PLAYBACK_HZ,
+        "encoding": "screw_release",
+        "arm": arm_cfg.name,
+        "gripper_actions": json.dumps(gripper_actions),
+        "action": "screw_release",
+    }
+    print(f"[screw-release] Trajectory: {traj_np.shape[0]} wp")
+    return traj_np, meta
+
+
 def _build_pick_place_trajectory(
     node, optimizer, ik_chain, capsule_model,
     q_start, q_pregrasp, q_grasp, q_preplace, q_place,
@@ -1525,6 +2046,7 @@ def _build_pick_place_trajectory(
     action="",
     chosen_heading=-135.0,
     place_uv=None,
+    stop_at_grasp=False,
 ):
     """Build a full pick-and-place trajectory with dwell waypoints and gripper actions.
 
@@ -1758,9 +2280,11 @@ def _build_pick_place_trajectory(
         return seg[-1]  # return actual last waypoint
 
     # Phase 1: start → pre-grasp
+    screw_action = action in ("screw_hold", "screw_rotation")
     if q_pregrasp_travel is not None:
         # Travel at 70° orientation (reliable), then interpolate to actual pre-grasp
-        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp (travel)", q_start, q_pregrasp_travel, safe_z=True, staging=True, position_only=True)
+        # Skip staging for screw (arms approach from different sides, no pole collision)
+        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp (travel)", q_start, q_pregrasp_travel, safe_z=True, staging=not screw_action, position_only=True)
         q_prev = _append(seg1, skip_first=False)
         # Phase 1b: simultaneous rotation + descent from travel to pre-grasp.
         # Slerp orientation and interpolate XYZ in one pass (65 baby-steps).
@@ -1798,17 +2322,46 @@ def _build_pick_place_trajectory(
         print(f"  Phase 1b: rotate + descend to pre-grasp ({N_ROTATE} steps, {drop_mm:.0f}mm drop)")
         q_prev = _append(seg1b)
     else:
-        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, safe_z=True, staging=True, position_only=True)
+        seg1 = _cartesian_segment("Phase 1: start -> pre-grasp", q_start, q_pregrasp, safe_z=True, staging=not screw_action, position_only=True)
         q_prev = _append(seg1, skip_first=False)
 
     # Phase 2: pre-grasp → grasp (short descent, slow)
     seg2 = _cartesian_segment("Phase 2: pre-grasp -> grasp", q_prev, q_grasp, horiz_grip=True, speed=CARTESIAN_SPEED / 3.0, ik_skip=1)
     q_prev = _append(seg2)
 
-    # Dwell at grasp (hold for gripper close)
+    # Dwell at grasp (hold for gripper close) — skip for screw actions
     grasp_dwell_start = sum(s.shape[0] for s in segments)
-    grasp_dwell = q_prev.unsqueeze(0).expand(DWELL_STEPS, -1).cpu()
+    dwell_steps = DWELL_STEPS
+    grasp_dwell = q_prev.unsqueeze(0).expand(dwell_steps, -1).cpu()
     segments.append(grasp_dwell)
+
+    # Early return: stop after grasp dwell (for screw hold/rotation)
+    if stop_at_grasp:
+        full_traj = torch.cat(segments, dim=0)
+        traj_np = full_traj.numpy().astype(np.float32)
+        close_rad = compute_gripper_close_rad(object_width)
+        approach_rad = compute_gripper_approach_rad(object_width)
+        gripper_actions = [
+            {"waypoint": 0, "rad": float(approach_rad)},
+            {"waypoint": grasp_dwell_start, "rad": float(close_rad)},
+        ]
+        dt = 1.0 / PLAYBACK_HZ
+        out_metadata = {
+            "num_waypoints": traj_np.shape[0],
+            "num_joints": num_joints,
+            "dt": dt,
+            "encoding": "grasp_only",
+            "arm": arm,
+            "grasp_pose": grasp_xyzrpy.tolist(),
+            "gripper_actions": json.dumps(gripper_actions),
+            "grasp_dwell_start": grasp_dwell_start,
+            "expected_close_rad": float(close_rad),
+            "approach_rad": float(approach_rad),
+            "action": action,
+        }
+        print(f"[motion-planner] Grasp-only trajectory: {traj_np.shape[0]} wp "
+              f"(grasp dwell at wp {grasp_dwell_start})")
+        return traj_np, out_metadata
 
     if q_place is not None:
         # Phase 3: grasp → [flip/pour waypoints →] pre-place
@@ -2475,6 +3028,8 @@ def main():
         "play_dt": 1.0 / PLAYBACK_HZ,
         "gripper_actions": [],  # list of {"waypoint": N, "rad": float}
         "gripper_fired": set(),
+        "screw_pending": None,           # Phase 2 data for screw action
+        "screw_release_pending": False,   # Phase 3 trigger for screw action
     }
 
     # Latest joint states per arm (for grasp verification)
@@ -2577,6 +3132,88 @@ def main():
                     tau = status_obj.get("gripper_max_torque")
                     if tau is not None:
                         print(f"[motion-planner] Grasp OK (close_max={tau:.2f}Nm)")
+
+                    # --- Screw Phase 2: trigger screw arm after hold arm done ---
+                    screw_data = playback.get("screw_pending")
+                    if screw_data is not None:
+                        playback["screw_pending"] = None
+                        screw_arm_name = screw_data.get("screw_arm", "left")
+                        hold_arm_name = screw_data.get("hold_arm", "right")
+                        screw_arm = arms.get(screw_arm_name)
+                        print(f"[motion-planner] === SCREW Phase 2: {screw_arm_name} arm ratchet screw ===")
+                        if screw_arm is not None:
+                            # Use FRESH depth data
+                            pc_tensor_p2, pc_robot_p2 = build_pointcloud(
+                                latest_depth, latest_intrinsics, latest_image_size,
+                                cam_t, cam_rot, device,
+                            )
+                            table_plane_p2, table_polygon_p2, _, pc_tensor_p2 = _setup_table_plane(
+                                screw_arm.optimizer, pc_robot_p2, cam_t, cam_rot,
+                                latest_intrinsics, latest_image_size, device,
+                            )
+
+                            screw_traj, screw_meta_or_reason = plan_screw_rotation(
+                                screw_data["cap_u1"], screw_data["cap_v1"],
+                                screw_data["cap_u2"], screw_data["cap_v2"],
+                                screw_data["screw_degrees"],
+                                node, screw_arm.optimizer, screw_arm.ik_chain,
+                                screw_arm.optimizer.capsules, screw_arm.joint_limits,
+                                device, screw_arm.current_joints,
+                                latest_depth, latest_intrinsics, latest_image_size,
+                                cam_t, cam_rot, pc_tensor_p2, screw_arm.num_joints,
+                                arm=screw_arm_name,
+                                table_plane=table_plane_p2, table_polygon=table_polygon_p2,
+                                pin_ik=screw_arm.pin_ik,
+                                trac_ik_solver=screw_arm.trac_ik,
+                                trac_ik_dist=screw_arm.trac_ik_dist,
+                                latest_image=latest_image,
+                                hold_z=screw_data.get("hold_z", 0.0),
+                                grasp_center=screw_data.get("grasp_center"),
+                            )
+
+                            if screw_traj is not None:
+                                _set_playback(playback, screw_traj, screw_meta_or_reason, node=node)
+                                playback["screw_release_pending"] = {
+                                    "arm": hold_arm_name,
+                                }
+                                node.send_output("trajectory_status", pa.array([json.dumps({
+                                    "status": "ready",
+                                    "waypoints": screw_traj.shape[0],
+                                    "arm": screw_arm_name,
+                                    "phase": "screw_rotation",
+                                    "total_degrees": screw_meta_or_reason.get("screw_total_degrees", 0),
+                                })]))
+                            else:
+                                print(f"[motion-planner] screw rotation failed: {screw_meta_or_reason}")
+                                # Still need to release hold arm
+                                hold_arm = arms.get(hold_arm_name)
+                                if hold_arm is not None:
+                                    release_traj, release_meta = plan_screw_release(
+                                        node, hold_arm, device,
+                                    )
+                                    _set_playback(playback, release_traj, release_meta, node=node)
+                                    playback["screw_release_pending"] = False
+                                node.send_output("trajectory_status", pa.array([json.dumps({
+                                    "status": "failed",
+                                    "reason": f"Screw rotation failed: {screw_meta_or_reason}",
+                                })]))
+                        continue
+
+                    # --- Screw Phase 3: release hold arm after screw arm done ---
+                    if playback.get("screw_release_pending"):
+                        release_info = playback["screw_release_pending"]
+                        playback["screw_release_pending"] = False
+                        release_arm_name = release_info["arm"]
+                        print(f"[motion-planner] === SCREW Phase 3: {release_arm_name} arm release ===")
+                        release_arm = arms.get(release_arm_name)
+                        if release_arm is not None:
+                            release_traj, release_meta = plan_screw_release(
+                                node, release_arm, device,
+                            )
+                            _set_playback(playback, release_traj, release_meta, node=node)
+                        continue
+
+                    # Normal done
                     print(f"[motion-planner] Arm reports done, signaling trajectory complete")
                     node.send_output("trajectory_status", pa.array([json.dumps({"status": "done"})]))
 
@@ -2876,6 +3513,122 @@ def main():
                 grasp_action = data.get("action", "")
                 if grasp_action:
                     print(f"[motion-planner] grasp_result: action={grasp_action}")
+
+                # --- Screw action: dual-arm, handled separately ---
+                if grasp_action == "screw":
+                    screw_p1 = data.get("screw_p1")
+                    screw_p2 = data.get("screw_p2")
+                    screw_degrees = data.get("screw_degrees", 360)
+
+                    if not screw_p1 or not screw_p2 or len(screw_p1) < 2 or len(screw_p2) < 2:
+                        print(f"[motion-planner] screw: missing screw_p1/screw_p2: {data}")
+                        node.send_output("trajectory_status", pa.array([json.dumps({
+                            "status": "failed",
+                            "reason": "Missing screw_p1/screw_p2 in grasp_result",
+                        })]))
+                        continue
+
+                    if arms.get("left") is None or arms.get("right") is None:
+                        print("[motion-planner] screw: requires both arms")
+                        node.send_output("trajectory_status", pa.array([json.dumps({
+                            "status": "failed",
+                            "reason": "Screw requires both arms",
+                        })]))
+                        continue
+
+                    # Select hold/screw arms based on object Y position:
+                    # The arm closest to the base object holds, the other screws.
+                    base_target_y = _estimate_target_y(
+                        u1, v1, u2, v2, latest_depth, latest_intrinsics,
+                        latest_image_size, cam_t, cam_rot,
+                    )
+                    if base_target_y is not None and base_target_y < 0:
+                        # Object is on right side — right arm holds, left arm screws
+                        hold_arm_name, screw_arm_name = "right", "left"
+                    else:
+                        # Object is on left side — left arm holds, right arm screws
+                        hold_arm_name, screw_arm_name = "left", "right"
+                    hold_arm = arms[hold_arm_name]
+                    screw_arm = arms[screw_arm_name]
+                    print(f"[motion-planner] Screw arm assignment: "
+                          f"hold={hold_arm_name}, screw={screw_arm_name} "
+                          f"(base Y={base_target_y:.3f})")
+
+                    # Single grasp inference: compute grasp center from jaw pixels once,
+                    # then use the same XYZ target for both arms.
+                    print(f"[motion-planner] === SCREW: single grasp inference ===")
+                    w_img, h_img = latest_image_size
+                    fx_s, fy_s, cx_s, cy_s = latest_intrinsics
+                    mid_u = (u1 + u2) / 2.0
+                    mid_v = (v1 + v2) / 2.0
+                    from .grasp_utils import pixel_to_3d
+                    grasp_center_cam = pixel_to_3d(
+                        mid_u, mid_v, latest_depth, fx_s, fy_s, cx_s, cy_s,
+                        w_img, h_img, cam_translation=cam_t,
+                        cam_rotation=cam_rot, table_z=FLOOR_HEIGHT,
+                    )
+                    if grasp_center_cam is not None:
+                        R_cam = cam_rot.as_matrix()
+                        grasp_center_robot = R_cam @ grasp_center_cam + cam_t
+                        print(f"[motion-planner] Screw grasp center: "
+                              f"[{grasp_center_robot[0]:.4f}, {grasp_center_robot[1]:.4f}, "
+                              f"{grasp_center_robot[2]:.4f}]")
+                    else:
+                        grasp_center_robot = None
+
+                    print(f"[motion-planner] === SCREW Phase 1: {hold_arm_name} arm hold base ===")
+                    pc_tensor_screw, pc_robot_screw = build_pointcloud(
+                        latest_depth, latest_intrinsics, latest_image_size,
+                        cam_t, cam_rot, device,
+                    )
+                    table_plane_screw, table_polygon_screw, _, pc_tensor_screw = _setup_table_plane(
+                        hold_arm.optimizer, pc_robot_screw, cam_t, cam_rot,
+                        latest_intrinsics, latest_image_size, device,
+                    )
+
+                    hold_traj, hold_meta_or_reason = plan_screw_hold(
+                        u1, v1, u2, v2,
+                        node, hold_arm.optimizer, hold_arm.ik_chain,
+                        hold_arm.optimizer.capsules, hold_arm.joint_limits,
+                        device, hold_arm.current_joints,
+                        latest_depth, latest_intrinsics, latest_image_size,
+                        cam_t, cam_rot, pc_tensor_screw, hold_arm.num_joints,
+                        arm=hold_arm_name,
+                        table_plane=table_plane_screw, table_polygon=table_polygon_screw,
+                        pin_ik=hold_arm.pin_ik,
+                        trac_ik_solver=hold_arm.trac_ik,
+                        trac_ik_dist=hold_arm.trac_ik_dist,
+                        latest_image=latest_image,
+                    )
+
+                    if hold_traj is not None:
+                        hold_grasp_pose = hold_meta_or_reason.get("grasp_pose")
+                        hold_z = hold_grasp_pose[2] if hold_grasp_pose else 0.0
+                        _set_playback(playback, hold_traj, hold_meta_or_reason, node=node)
+                        playback["screw_pending"] = {
+                            "cap_u1": float(screw_p1[0]),
+                            "cap_v1": float(screw_p1[1]),
+                            "cap_u2": float(screw_p2[0]),
+                            "cap_v2": float(screw_p2[1]),
+                            "screw_degrees": screw_degrees,
+                            "screw_arm": screw_arm_name,
+                            "hold_arm": hold_arm_name,
+                            "hold_z": hold_z,
+                            "grasp_center": grasp_center_robot.tolist() if grasp_center_robot is not None else None,
+                        }
+                        node.send_output("trajectory_status", pa.array([json.dumps({
+                            "status": "ready",
+                            "waypoints": hold_traj.shape[0],
+                            "arm": hold_arm_name,
+                            "phase": "screw_hold",
+                        })]))
+                    else:
+                        print(f"[motion-planner] screw hold failed: {hold_meta_or_reason}")
+                        node.send_output("trajectory_status", pa.array([json.dumps({
+                            "status": "failed",
+                            "reason": f"Screw hold failed: {hold_meta_or_reason}",
+                        })]))
+                    continue
 
                 # Load SAM3 masks from disk for free-space place targeting
                 loaded_place_mask = None

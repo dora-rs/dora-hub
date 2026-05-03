@@ -44,12 +44,14 @@ VLM_PARSE_PROMPT = (
     '- Pick and place: {{"pick": "full object description", "place": "target"}}\n'
     '- Flip: {{"pick": "full object description", "action": "flip"}}\n'
     '- Pour: {{"pick": "container to pour from", "place": "target to pour into", "action": "pour"}}\n'
-    "- If no place/flip/pour, just: {{\"pick\": \"full object description\"}}\n"
+    '- Screw: {{"pick": "base/body to hold", "screw": "cap/top to screw", "action": "screw"}}\n'
+    "- If no place/flip/pour/screw, just: {{\"pick\": \"full object description\"}}\n"
     "IMPORTANT: Keep the FULL object description in 'pick', including location/color/size qualifiers. "
     "These help identify the correct object when there are multiple similar ones.\n"
     "Examples:\n"
     '- "flip the sausage in the pan" → {{"pick": "sausage in the pan", "action": "flip"}}\n'
     '- "pour the cup into the pan" → {{"pick": "cup", "place": "pan", "action": "pour"}}\n'
+    '- "screw the black cylinder" → {{"pick": "black cylinder body", "screw": "black cylinder cap", "action": "screw"}}\n'
     '- "pick the red cube on the left" → {{"pick": "red cube on the left"}}\n'
     '- "put the big plate in the sink" → {{"pick": "big plate", "place": "sink"}}\n'
     'If this is NOT a robot command, output exactly: {{"chat": true}}\n'
@@ -269,6 +271,8 @@ def main():
                             chat.send(f"Got it: flip '{cmd.get('pick', '')}'{cycle_suffix}. Planning...")
                         elif cmd.get("action") == "pour":
                             chat.send(f"Got it: pour '{cmd.get('pick', '')}' into '{cmd.get('place', '')}'{cycle_suffix}. Planning...")
+                        elif cmd.get("action") == "screw":
+                            chat.send(f"Got it: screw '{cmd.get('pick', '')}'{cycle_suffix}. Planning...")
                         else:
                             chat.send(f"Got it: pick '{cmd.get('pick', '')}'"
                                       + (f", place in '{cmd['place']}'" if cmd.get("place") else "")
@@ -329,6 +333,8 @@ def main():
                         chat.send(f"Understood: flip '{cmd.get('pick', '')}'{cycle_suffix}. Planning trajectory...")
                     elif cmd.get("action") == "pour":
                         chat.send(f"Understood: pour '{cmd.get('pick', '')}' into '{cmd.get('place', '')}'{cycle_suffix}. Planning trajectory...")
+                    elif cmd.get("action") == "screw":
+                        chat.send(f"Understood: screw '{cmd.get('pick', '')}'{cycle_suffix}. Planning trajectory...")
                     else:
                         chat.send(f"Understood: pick '{cmd.get('pick', '')}'"
                                   + (f", place in '{cmd['place']}'" if cmd.get("place") else "")

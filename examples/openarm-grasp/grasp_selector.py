@@ -984,6 +984,7 @@ best_grasp_result = None  # stored grasp result dict while place detection runs
 place_center = None       # (cx_px, cy_px) of the container centroid
 place_vlm_point = None    # VLM-located point for connected component filtering
 command_ts = 0            # timestamp from chat for KPI
+screw_target = None       # screw cap coordinates: {"p1": [x,y], "p2": [x,y], "degrees": N}
 mask_bbox = None          # (x_min, y_min, x_max, y_max) pixel bbox of segmented object
 last_vlm_place_bbox = None  # VLM-returned bbox for place target
 vlm_locate_retries = 0     # retry counter for VLM locate failures
@@ -1018,6 +1019,37 @@ def _emit_best_geo(node, img, cands, fc):
         if mask_bbox is not None:
             grasp["place_mask_bbox"] = list(mask_bbox)
         print(f"[Flip] place_px = pick center ({cx_px:.0f},{cy_px:.0f})")
+        grasp_json = json.dumps(grasp)
+        print(f"  Grasp result: {grasp_json}")
+        node.send_output("grasp_result", pa.array([grasp_json]))
+        frame_count += 1
+        state = STATE_IDLE
+    elif ACTION == "screw":
+        # Screw: p1/p2 = base hold (lower), screw_p1/p2 = cap screw (upper).
+        # Use same X center but different Y for Z separation.
+        grasp["action"] = "screw"
+        if mask_bbox is not None:
+            x_min, y_min, x_max, y_max = mask_bbox
+            cx = (x_min + x_max) / 2.0
+            half_w = (x_max - x_min) * 0.35
+            # Base = near top of mask (further from camera = higher Z)
+            base_y = y_min + (y_max - y_min) * 0.15
+            grasp["p1"] = [int(round(cx - half_w)), int(round(base_y))]
+            grasp["p2"] = [int(round(cx + half_w)), int(round(base_y))]
+            # Cap = near bottom of mask (closer to camera = lower Z)
+            cap_y = y_min + (y_max - y_min) * 0.85
+            grasp["screw_p1"] = [int(round(cx - half_w)), int(round(cap_y))]
+            grasp["screw_p2"] = [int(round(cx + half_w)), int(round(cap_y))]
+            print(f"[Screw] mask_bbox={mask_bbox}, base_y={base_y:.0f}, cap_y={cap_y:.0f}")
+        else:
+            cx = (grasp["p1"][0] + grasp["p2"][0]) / 2.0
+            cy = (grasp["p1"][1] + grasp["p2"][1]) / 2.0
+            grasp["screw_p1"] = [int(cx - 15), int(cy - 30)]
+            grasp["screw_p2"] = [int(cx + 15), int(cy - 30)]
+            print(f"[Screw] no mask_bbox, using offset from center")
+        grasp["screw_degrees"] = screw_target.get("degrees", 45) if screw_target else 45
+        print(f"[Screw] p1={grasp['p1']}, p2={grasp['p2']} (base hold)")
+        print(f"[Screw] screw_p1={grasp['screw_p1']}, screw_p2={grasp['screw_p2']} (cap)")
         grasp_json = json.dumps(grasp)
         print(f"  Grasp result: {grasp_json}")
         node.send_output("grasp_result", pa.array([grasp_json]))
@@ -1139,6 +1171,7 @@ for event in node:
             PLACE_CONTAINER = cmd.get("place", "")
             ACTION = cmd.get("action", "")
             command_ts = cmd.get("command_ts", 0)
+            screw_target = cmd.get("screw_target", None)
             print(f"[command] pick='{TARGET_OBJECT}', place='{PLACE_CONTAINER}', action='{ACTION}'")
             # Fall through to trigger logic below
             event_id = "trigger"
@@ -1621,6 +1654,30 @@ for event in node:
                         if mask_bbox is not None:
                             grasp["place_mask_bbox"] = list(mask_bbox)
                         print(f"[Flip] place_px = pick center ({cx_px:.0f},{cy_px:.0f})")
+                        grasp_json = json.dumps(grasp)
+                        print(f"  Grasp result: {grasp_json}")
+                        node.send_output("grasp_result", pa.array([grasp_json]))
+                        frame_count += 1
+                        state = STATE_IDLE
+                    elif ACTION == "screw":
+                        grasp["action"] = "screw"
+                        if mask_bbox is not None:
+                            x_min, y_min, x_max, y_max = mask_bbox
+                            cx = (x_min + x_max) / 2.0
+                            half_w = (x_max - x_min) * 0.35
+                            base_y = y_min + (y_max - y_min) * 0.15
+                            grasp["p1"] = [int(round(cx - half_w)), int(round(base_y))]
+                            grasp["p2"] = [int(round(cx + half_w)), int(round(base_y))]
+                            cap_y = y_min + (y_max - y_min) * 0.85
+                            grasp["screw_p1"] = [int(round(cx - half_w)), int(round(cap_y))]
+                            grasp["screw_p2"] = [int(round(cx + half_w)), int(round(cap_y))]
+                        else:
+                            cx = (grasp["p1"][0] + grasp["p2"][0]) / 2.0
+                            cy = (grasp["p1"][1] + grasp["p2"][1]) / 2.0
+                            grasp["screw_p1"] = [int(cx - 15), int(cy - 30)]
+                            grasp["screw_p2"] = [int(cx + 15), int(cy - 30)]
+                        grasp["screw_degrees"] = screw_target.get("degrees", 45) if screw_target else 45
+                        print(f"[Screw] base={grasp['p1']},{grasp['p2']} cap={grasp['screw_p1']},{grasp['screw_p2']}")
                         grasp_json = json.dumps(grasp)
                         print(f"  Grasp result: {grasp_json}")
                         node.send_output("grasp_result", pa.array([grasp_json]))

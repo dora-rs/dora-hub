@@ -8,7 +8,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
-  "dora-rs >= 0.3.9",
+  "dora-rs >= 0.3.9, < 0.5",
   "huggingface-hub>=0.29.0",
   "opencv-python>=4.11.0.86",
   # sam3 must be installed separately as editable from the git repo:
