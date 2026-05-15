@@ -5,10 +5,10 @@ set -euo
 CI=${GITHUB_ACTIONS:-false}
 
 # List of ignored modules 
-ignored_folders=("dora-parler" "dora-opus" "dora-internvl" "dora-magma")
+ignored_folders=("dora-parler" "dora-opus" "dora-internvl" "dora-magma" "dora-map-anything" "dora-sam3")
 
 # Skip test
-skip_test_folders=("dora-internvl" "dora-parler" "dora-keyboard" "dora-microphone" "terminal-input" "dora-magma" "dora-phi4" "dora-qwen2-5-vl")
+skip_test_folders=("dora-internvl" "dora-parler" "dora-keyboard" "dora-microphone" "terminal-input" "dora-magma" "dora-phi4" "dora-qwen2-5-vl" "dora-openarm")
 
 # Get current working directory
 dir=$(pwd)
@@ -51,7 +51,7 @@ else
         cargo test
 
         pip install "maturin[zig, patchelf]"
-        maturin build --release --compatibility manylinux_2_28 --zig -o dist
+        maturin build --release --compatibility manylinux_2_34 --zig -o dist
         # If GITHUB_EVENT_NAME is release or workflow_dispatch, publish the wheel on multiple platforms
         if [ "$GITHUB_EVENT_NAME" == "release" ] || [ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]; then
             # Free up ubuntu space
@@ -65,7 +65,7 @@ else
 
             # aarch64-unknown-linux-gnu
             rustup target add aarch64-unknown-linux-gnu
-            maturin build --release --target aarch64-unknown-linux-gnu --zig --compatibility manylinux_2_28 -o dist
+            maturin build --release --target aarch64-unknown-linux-gnu --zig --compatibility manylinux_2_34 -o dist
 
             # armv7-unknown-linux-musleabihf
             rustup target add armv7-unknown-linux-musleabihf

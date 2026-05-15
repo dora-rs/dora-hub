@@ -1,5 +1,7 @@
 """TODO: Add docstring."""
 
+import os
+
 import cv2
 import numpy as np
 import pyarrow as pa
@@ -8,7 +10,8 @@ from dora import Node
 from PIL import Image
 from sam2.sam2_image_predictor import SAM2ImagePredictor
 
-predictor = SAM2ImagePredictor.from_pretrained("facebook/sam2-hiera-large")
+MODEL_ID = os.getenv("SAM2_MODEL_ID", "facebook/sam2-hiera-large")
+predictor = SAM2ImagePredictor.from_pretrained(MODEL_ID)
 
 
 def main():
@@ -214,7 +217,7 @@ def main():
                     ),
                 ):
                     predictor.set_image(frames[image_id])
-                    labels = [i for i in range(len(points))]
+                    labels = np.ones(len(points), dtype=np.int32)
                     masks, _scores, last_pred = predictor.predict(
                         points,
                         point_labels=labels,

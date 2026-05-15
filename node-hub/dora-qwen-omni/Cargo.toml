@@ -33,5 +33,4 @@ eyre = "0.6.12"
 [features]
 cuda = ["llama-cpp-2/cuda"]
 metal = ["llama-cpp-2/metal"]
-native = ["llama-cpp-2/native"]
 vulkan = ["llama-cpp-2/vulkan"]
