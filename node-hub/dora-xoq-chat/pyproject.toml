@@ -1,0 +1,16 @@
+[project]
+name = "dora-xoq-chat"
+version = "0.0.1"
+authors = [{ name = "Your Name", email = "email@email.com" }]
+description = "Dora node: MoQ chat-to-pick-and-place orchestrator"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+
+dependencies = [
+    "dora-rs >= 0.3.9",
+    "pyarrow",
+    "xoq-chat",
+]
+
+[project.scripts]
+dora-xoq-chat = "dora_xoq_chat.main:main"

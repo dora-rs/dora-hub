@@ -1,0 +1,16 @@
+[workspace]
+
+[package]
+name = "dora-moq-image"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+xoq = { path = "/home/baguette/wser", features = ["nvenc"] }
+dora-node-api = { version = "0.4.1", default-features = false }
+eyre = "0.6"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[[bin]]
+name = "dora-moq-image"
+path = "src/main.rs"

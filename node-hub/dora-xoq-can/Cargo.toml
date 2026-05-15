@@ -1,0 +1,18 @@
+[workspace]
+
+[package]
+name = "dora-xoq-can"
+version = "0.4.1"
+edition = "2024"
+rust-version = "1.85.0"
+
+[dependencies]
+dora-node-api = { version = "0.4.1", features = ["tracing"] }
+xoq = { path = "../../../wser", features = ["can-remote"] }
+anyhow = "1"
+eyre = "0.6.8"
+tracing = "0.1"
+
+# Pin moq crates to versions compatible with xoq's moq.rs / bridge_server.rs
+moq-native = { version = "=0.12.0", default-features = false }
+moq-transport = "=0.12.0"

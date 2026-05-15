@@ -1,0 +1,26 @@
+[project]
+name = "dora-openarm"
+version = "0.0.1"
+authors = [{ name = "Your Name", email = "email@email.com" }]
+description = "Dora node for OpenArm bimanual robot — Damiao motor CAN bus driver"
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+    "dora-rs >= 0.3.9",
+    "numpy >= 2.0.0",
+    "python-can >= 4.0.0",
+]
+
+[dependency-groups]
+dev = ["pytest >=8.1.1", "ruff >=0.9.1"]
+
+[project.scripts]
+dora-openarm = "dora_openarm.main:main"
+
+[tool.ruff.lint]
+extend-select = [
+  "D",  # pydocstyle
+  "UP",
+]
