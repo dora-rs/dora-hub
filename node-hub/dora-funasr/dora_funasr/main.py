@@ -1,16 +1,20 @@
 """TODO: Add docstring."""
 
+import os
 import re
 
 import numpy as np
 import pyarrow as pa
 from dora import Node
+from funasr.utils.postprocess_utils import rich_transcription_postprocess
 
 chunk_size = [0, 10, 5]  # [0, 10, 5] 600ms, [0, 8, 4] 480ms
 encoder_chunk_look_back = 4  # number of chunks to lookback for encoder self-attention
 decoder_chunk_look_back = (
     1  # number of encoder chunks to lookback for decoder cross-attention
 )
+
+MODEL = os.getenv("MODEL", "FunAudioLLM/SenseVoiceSmall")
 
 
 def remove_text_noise(text: str, text_noise="") -> str:
@@ -61,10 +65,10 @@ def load_model():
     from funasr import AutoModel
 
     return AutoModel(
-        model="paraformer-zh",
+        model=MODEL,
         punc_model="ct-punc",
         # spk_model="cam++",
-        disable_update=True,
+        hub="hf",
     )
 
 
@@ -176,11 +180,11 @@ def main():
 
                 result = model.generate(
                     audio,
-                )[0]
+                )
 
-                text = result["text"]
+                text = rich_transcription_postprocess(result[0]["text"])
+
                 print(f"Raw text: {text}")
-                text = text.replace(" ", "")
                 if text.strip() == "" or text.strip() == ".":
                     continue
 
