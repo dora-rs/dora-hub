@@ -9,7 +9,7 @@ This node is used to capture video from a camera using OpenCV.
   build: pip install ../../opencv-video-capture
   path: opencv-video-capture
   inputs:
-    tick: dora/timer/millis/16 # try to capture at 60fps
+    tick: dora/timer/millis/16 # how often to read a frame (~60Hz)
   outputs:
     - image: # the captured image
 
@@ -19,10 +19,35 @@ This node is used to capture video from a camera using OpenCV.
     IMAGE_WIDTH: 640 # optional, default is video capture width
     IMAGE_HEIGHT: 480 # optional, default is video capture height
 
+    # optional, default is the camera default (often 30 fps).
+    # The tick input only controls how often frames are READ; the actual
+    # capture rate is negotiated with the camera. To capture at 60 fps you
+    # must both set CAPTURE_FPS: 60 and use a tick of at most ~16ms.
+    CAPTURE_FPS: 60
+
+    # optional, default is the camera default.
+    # On Linux UVC cameras, MJPG is often required to reach high frame
+    # rates (e.g. 60 fps at 720p or above) due to USB bandwidth limits.
+    CAPTURE_FOURCC: MJPG
+
     # optional, default is 95.
     # This is used only when encoding is one of "jpeg", "jpg" or "jpe".
     JPEG_QUALITY: 95
 ```
+
+## Frame rate notes
+
+- A warning is printed at startup if the camera negotiates a frame rate
+  different from `CAPTURE_FPS`.
+- The camera only delivers the requested rate if the selected
+  resolution/pixel format supports it. Check supported modes with
+  `v4l2-ctl --list-formats-ext` (Linux) or
+  `ffmpeg -f avfoundation -framerate 1000 -i <index>` (macOS).
+- In low light, cameras with auto-exposure may halve the frame rate.
+- macOS limitation: OpenCV's AVFoundation backend can only adjust the
+  frame rate within the camera's default format, which usually tops out
+  at 30 fps. High-fps modes (e.g. 60 fps on an iPhone Continuity Camera)
+  cannot be enabled through OpenCV, even though ffmpeg can use them.
 
 # Inputs
 
