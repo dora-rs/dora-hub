@@ -39,10 +39,6 @@ This node is used to capture video from a camera using OpenCV.
 
 - A warning is printed at startup if the camera negotiates a frame rate
   different from `CAPTURE_FPS`.
-- The camera only delivers the requested rate if the selected
-  resolution/pixel format supports it. Check supported modes with
-  `v4l2-ctl --list-formats-ext` (Linux) or
-  `ffmpeg -f avfoundation -framerate 1000 -i <index>` (macOS).
 - In low light, cameras with auto-exposure may halve the frame rate.
 
 # Inputs
