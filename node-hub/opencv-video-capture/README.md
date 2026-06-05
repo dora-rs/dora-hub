@@ -44,10 +44,6 @@ This node is used to capture video from a camera using OpenCV.
   `v4l2-ctl --list-formats-ext` (Linux) or
   `ffmpeg -f avfoundation -framerate 1000 -i <index>` (macOS).
 - In low light, cameras with auto-exposure may halve the frame rate.
-- macOS limitation: OpenCV's AVFoundation backend can only adjust the
-  frame rate within the camera's default format, which usually tops out
-  at 30 fps. High-fps modes (e.g. 60 fps on an iPhone Continuity Camera)
-  cannot be enabled through OpenCV, even though ffmpeg can use them.
 
 # Inputs
 
