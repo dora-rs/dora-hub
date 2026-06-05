@@ -101,6 +101,17 @@ def test_capture_fps_sets_cap_prop_fps(monkeypatch):
     mock_cap.set.assert_any_call(cv2.CAP_PROP_FPS, 60)
 
 
+def test_capture_fps_accepts_fractional_rate(monkeypatch):
+    """Fractional rates such as 59.94 must be parsed as float, not crash."""
+    monkeypatch.setenv("CAPTURE_FPS", "59.94")
+    mock_cap = MagicMock()
+    mock_cap.isOpened.return_value = True
+    mock_cap.get.return_value = 59.94
+
+    _run_main([{"type": "STOP"}], mock_cap)
+    mock_cap.set.assert_any_call(cv2.CAP_PROP_FPS, 59.94)
+
+
 def test_capture_fps_not_set_by_default(monkeypatch):
     """Without CAPTURE_FPS, the camera fps must be left untouched."""
     monkeypatch.delenv("CAPTURE_FPS", raising=False)

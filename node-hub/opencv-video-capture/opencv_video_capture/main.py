@@ -188,7 +188,7 @@ def main():
     )
     parser.add_argument(
         "--capture-fps",
-        type=int,
+        type=float,
         required=False,
         help=(
             "The frame rate to request from the camera. Default is the "
@@ -299,13 +299,14 @@ def main():
     # negotiated with the camera here.
     capture_fps = os.getenv("CAPTURE_FPS", args.capture_fps)
     if capture_fps is not None:
-        if isinstance(capture_fps, str) and capture_fps.isnumeric():
-            capture_fps = int(capture_fps)
+        # OpenCV's FPS property is a double; fractional rates such as
+        # 29.97 or 59.94 are common camera modes.
+        capture_fps = float(capture_fps)
         video_capture.set(cv2.CAP_PROP_FPS, capture_fps)
         actual_fps = video_capture.get(cv2.CAP_PROP_FPS)
         if actual_fps > 0 and abs(actual_fps - capture_fps) > 1:
             print(
-                f"Warning: requested CAPTURE_FPS={capture_fps} but the camera "
+                f"Warning: requested CAPTURE_FPS={capture_fps:g} but the camera "
                 f"negotiated {actual_fps:g} fps. The output rate is limited "
                 f"by the camera, not by the tick rate. On Linux UVC cameras, "
                 f"try CAPTURE_FOURCC=MJPG and/or a lower resolution. On "
