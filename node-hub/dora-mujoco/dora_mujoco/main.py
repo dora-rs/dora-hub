@@ -9,7 +9,7 @@ import json
 import os
 from pathlib import Path
 import time
-from typing import Dict, Any
+from typing import Any
 from robot_descriptions.loaders.mujoco import load_robot_description
 
 
@@ -119,7 +119,7 @@ class MuJoCoSimulator:
             "sensordata": self.data.sensordata.copy() if self.model.nsensor > 0 else np.array([])  # Sensor readings
         }
     
-    def get_state(self) -> Dict[str, Any]:
+    def get_state(self) -> dict[str, Any]:
         """Get current simulation state."""
         return self.state_data.copy()
 
