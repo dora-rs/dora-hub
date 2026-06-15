@@ -187,6 +187,27 @@ def main():
         default=None,
     )
     parser.add_argument(
+        "--capture-fps",
+        type=float,
+        required=False,
+        help=(
+            "The frame rate to request from the camera. Default is the "
+            "camera default (often 30 fps)."
+        ),
+        default=None,
+    )
+    parser.add_argument(
+        "--capture-fourcc",
+        type=str,
+        required=False,
+        help=(
+            "The FOURCC pixel format to request from the camera (e.g. MJPG). "
+            "On Linux UVC cameras, MJPG is often required for high frame "
+            "rates. Default is the camera default."
+        ),
+        default=None,
+    )
+    parser.add_argument(
         "--jpeg-quality",
         type=int,
         required=False,
@@ -251,6 +272,14 @@ def main():
         else:
             print(f"Opened camera at index {video_capture_path}")
 
+    # Set the pixel format first: on Linux (V4L2), the FOURCC must be set
+    # before the resolution and frame rate for the camera to honor it.
+    capture_fourcc = os.getenv("CAPTURE_FOURCC", args.capture_fourcc)
+    if capture_fourcc:
+        video_capture.set(
+            cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*capture_fourcc)
+        )
+
     image_width = os.getenv("IMAGE_WIDTH", args.image_width)
 
     if image_width is not None:
@@ -263,6 +292,27 @@ def main():
         if isinstance(image_height, str) and image_height.isnumeric():
             image_height = int(image_height)
         video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, image_height)
+
+    # Set the frame rate last, as the supported rates depend on the
+    # resolution and pixel format chosen above. Note that the tick input
+    # only controls how often frames are read; the actual capture rate is
+    # negotiated with the camera here.
+    capture_fps = os.getenv("CAPTURE_FPS", args.capture_fps)
+    if capture_fps is not None:
+        # OpenCV's FPS property is a double; fractional rates such as
+        # 29.97 or 59.94 are common camera modes.
+        capture_fps = float(capture_fps)
+        video_capture.set(cv2.CAP_PROP_FPS, capture_fps)
+        actual_fps = video_capture.get(cv2.CAP_PROP_FPS)
+        if actual_fps > 0 and abs(actual_fps - capture_fps) > 1:
+            print(
+                f"Warning: requested CAPTURE_FPS={capture_fps:g} but the camera "
+                f"negotiated {actual_fps:g} fps. The output rate is limited "
+                f"by the camera, not by the tick rate. On Linux UVC cameras, "
+                f"try CAPTURE_FOURCC=MJPG and/or a lower resolution. On "
+                f"macOS, OpenCV's AVFoundation backend cannot enable "
+                f"high-fps camera modes."
+            )
 
     jpeg_quality = os.getenv("JPEG_QUALITY", args.jpeg_quality)
     if jpeg_quality is not None:
