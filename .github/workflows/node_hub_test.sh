@@ -4,11 +4,10 @@ set -euo
 # Check if we are running in a GitHub Actions environment
 CI=${GITHUB_ACTIONS:-false}
 
-# List of ignored modules 
-ignored_folders=("dora-parler" "dora-opus" "dora-internvl" "dora-magma")
-
-# Skip test
-skip_test_folders=("dora-internvl" "dora-parler" "dora-keyboard" "dora-microphone" "terminal-input" "dora-magma" "dora-phi4" "dora-qwen2-5-vl")
+# CI skip is declared per-node, next to the node, rather than in lists here:
+#   node-hub/<node>/.ci-skip    -> the node can't be built/tested on CI at all
+#   node-hub/<node>/.skip-test  -> build/install the node but skip its pytest
+# (a short reason belongs in each marker file).
 
 # Get current working directory
 dir=$(pwd)
@@ -38,8 +37,8 @@ if [[ " ${large_node[@]} " =~ " ${base_dir} " ]] && [[ "$CI" == "true" ]]; then
 fi
 
 # Check if the directory name is in the ignored list
-if [[ " ${ignored_folders[@]} " =~ " ${base_dir} " ]]; then
-    echo "Skipping $base_dir as we cannot test it on the CI..."
+if [[ -f ".ci-skip" ]]; then
+    echo "Skipping $base_dir (.ci-skip present) as we cannot test it on the CI..."
 else
     # IF job is mixed rust-python job and is on linux 
     if [[ -f "Cargo.toml" && -f "pyproject.toml" &&  "$(uname)" = "Linux" ]]; then
@@ -107,9 +106,9 @@ else
             echo "CI: Running Linting in $dir..."
             uv run ruff check .
             echo "CI: Running Pytest in $dir..."
-            # Skip test for some folders
-            if [[ " ${skip_test_folders[@]} " =~ " ${base_dir} " ]]; then
-                echo "Skipping tests for $base_dir..."
+            # Skip pytest when the node declares `.skip-test`
+            if [[ -f ".skip-test" ]]; then
+                echo "Skipping tests for $base_dir (.skip-test present)..."
             else
                 uv run pytest
             fi

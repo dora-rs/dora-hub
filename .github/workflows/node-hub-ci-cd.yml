@@ -26,13 +26,51 @@ jobs:
     name: Find Jobs
     outputs:
       folders: ${{ steps.jobs.outputs.folders }}
+      run_all: ${{ steps.changed.outputs.run_all }}
+      changed: ${{ steps.changed.outputs.changed }}
     steps:
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - id: jobs
         uses: kmanimaran/list-folder-action@v4
         with:
           path: node-hub
+
+      # Decide, once, which nodes a PR actually touches. The matrix below stays
+      # full (every node still reports a check), but each node job skips its
+      # heavy build/test steps unless it's in this set — so a PR only builds the
+      # nodes it changes. Non-PR events and shared-input changes fan out to all.
+      - id: changed
+        name: Determine changed nodes
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "event '$EVENT' -> test all nodes"
+            echo "run_all=true" >> "$GITHUB_OUTPUT"
+            echo "changed=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+          files="$(git diff --name-only "origin/$BASE...HEAD")"
+          echo "changed files:"; echo "$files" | sed 's/^/  /'
+          # A change to a shared build input rebuilds every node.
+          if echo "$files" | grep -qE '^(Cargo\.toml|Cargo\.lock|\.github/workflows/(node-hub-ci-cd\.yml|node_hub_test\.sh))$'; then
+            echo "shared build input changed -> test all nodes"
+            echo "run_all=true" >> "$GITHUB_OUTPUT"
+            echo "changed=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          nodes="$(echo "$files" | sed -nE 's#^node-hub/([^/]+)/.*#\1#p' | sort -u)"
+          json="$(echo "$nodes" | jq -R . | jq -s -c 'map(select(length > 0))')"
+          echo "changed nodes: $json"
+          echo "run_all=false" >> "$GITHUB_OUTPUT"
+          echo "changed=$json" >> "$GITHUB_OUTPUT"
 
   ci:
     runs-on: ${{ matrix.platform }}
@@ -46,20 +84,38 @@ jobs:
         platform: [ubuntu-24.04, macos-14]
         folder: ${{ fromJson(needs.find-jobs.outputs.folders )}}
     steps:
+      # Runs first, before checkout — node-hub/<folder> doesn't exist yet, so it
+      # uses the workspace root. Sets `run=true` when this node should be built.
+      - name: Decide whether this node needs CI
+        id: decide
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        env:
+          RUN_ALL: ${{ needs.find-jobs.outputs.run_all }}
+          CHANGED: ${{ needs.find-jobs.outputs.changed }}
+          FOLDER: ${{ matrix.folder }}
+        run: |
+          if [ "$RUN_ALL" = "true" ] || printf '%s' "$CHANGED" | jq -e --arg f "$FOLDER" 'any(. == $f)' >/dev/null; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "node-hub/$FOLDER unchanged in this PR — skipping its build/tests"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout repository
-        if: runner.os == 'Linux' || github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/'))
+        if: steps.decide.outputs.run == 'true' && (runner.os == 'Linux' || github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/')))
         uses: actions/checkout@v4
         with:
           submodules: true # Make sure to check out the sub-module
 
       - name: Update submodule
-        if: runner.os == 'Linux'
+        if: steps.decide.outputs.run == 'true' && runner.os == 'Linux'
         run: |
           git submodule update --init --recursive
           git submodule update --remote --recursive
 
       - name: Install system-level dependencies
-        if: runner.os == 'Linux'
+        if: steps.decide.outputs.run == 'true' && runner.os == 'Linux'
         run: |
           sudo apt update
           sudo apt-get install portaudio19-dev
@@ -73,23 +129,24 @@ jobs:
           sudo apt install g++-mingw-w64-x86-64 gcc-mingw-w64-x86-64
 
       - name: Install system-level dependencies for MacOS
-        if: runner.os == 'MacOS' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/')))
+        if: steps.decide.outputs.run == 'true' && runner.os == 'MacOS' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/')))
         run: |
           brew install portaudio
           brew install dav1d nasm
 
       - name: Set up Python
-        if: runner.os == 'Linux' || github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/'))
+        if: steps.decide.outputs.run == 'true' && (runner.os == 'Linux' || github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/')))
         uses: actions/setup-python@v2
         with:
           python-version: "3.10"
 
       - name: Install the latest version of uv
+        if: steps.decide.outputs.run == 'true'
         uses: astral-sh/setup-uv@v5
 
       - name: Run Linting and Tests
         ## Run Linting and testing only on Mac for release workflows.
-        if: runner.os == 'Linux' || github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/'))
+        if: steps.decide.outputs.run == 'true' && (runner.os == 'Linux' || github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && startsWith(github.ref, 'refs/tags/')))
         env:
           GITHUB_EVENT_NAME: ${{ github.event_name }}
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_PASS }}

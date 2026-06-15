@@ -1,0 +1,1 @@
+# Tests need an interactive terminal not available on CI; the node still builds.
