@@ -1,0 +1,13 @@
+# Namespaces reserved for the project / type system. A new claim (a fresh
+# `node-index/<ns>/` package.yml) for one of these requires an index admin —
+# index CI flags it for human review instead of auto-merging (spec §7.4).
+# One namespace per line; blank lines and `#` comments ignored.
+dora
+dora-rs
+dora-hub
+std
+official
+hub
+index
+node
+nodes
