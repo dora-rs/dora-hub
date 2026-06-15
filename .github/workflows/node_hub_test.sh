@@ -101,7 +101,17 @@ else
         else
             if [ -f "$dir/pyproject.toml" ]; then
             echo "CI: Installing in $dir..."
-            uv venv --seed -p 3.11
+            # Pick a Python this node supports. Default to 3.11 (what the
+            # collection has tested on); honor a HIGHER floor from
+            # requires-python (e.g. lerobot-based nodes need >=3.12). Never go
+            # below 3.11, so nodes that still ship 3.11-only wheels keep working.
+            pyver=3.11
+            req_low=$(grep -E '^[[:space:]]*requires-python' pyproject.toml | grep -oE '3\.[0-9]+' | head -1)
+            if [ -n "$req_low" ] && [ "${req_low#3.}" -gt 11 ] 2>/dev/null; then
+                pyver="$req_low"
+            fi
+            echo "CI: using Python $pyver (requires-python: ${req_low:-unset})"
+            uv venv --seed -p "$pyver"
             uv pip install .
             echo "CI: Running Linting in $dir..."
             uv run ruff check .
