@@ -83,7 +83,9 @@ jobs:
       run:
         working-directory: node-hub/${{ matrix.folder }}
     strategy:
-      fail-fast: ${{ github.event_name != 'workflow_dispatch' && !(github.event_name == 'release' && startsWith(github.ref, 'refs/tags/')) }}
+      # Nodes are independent — one broken node must not cancel the other ~60
+      # (and turn the whole run red). Report each node's status on its own.
+      fail-fast: false
       matrix:
         platform: [ubuntu-24.04, macos-14]
         folder: ${{ fromJson(needs.find-jobs.outputs.folders )}}
