@@ -4,9 +4,6 @@ This file provides guidance to Codex and other agentic coding tools working in
 this repository. It complements, but does not replace, [`CLAUDE.md`](CLAUDE.md).
 If the two documents overlap, follow the stricter rule.
 
-> Reconstructed after the original was accidentally deleted — please replace or
-> edit to match your intent.
-
 ## Start here
 
 `dora-hub` is the collection of reusable [dora](https://github.com/dora-rs/dora)
@@ -14,6 +11,10 @@ nodes (~60), and it also hosts the Dora Hub catalog (`node-index/`). Most nodes
 are Python (built/tested with **uv**, linted with **ruff**, tested with
 **pytest**); some are Rust members of the root Cargo workspace, and a few are
 Rust+Python (maturin) hybrids.
+
+> **Note:** the `node-index/` catalog and its tooling land with the catalog
+> bootstrap (PR #66). Until that merges, the catalog instructions below
+> (`make index-ci`, the "don't hand-edit the catalog" rule) don't yet apply.
 
 **Read [`CLAUDE.md`](CLAUDE.md) first** — it is the canonical reference for the
 repo map, build/test commands, the CI structure, and the pre-commit gates.
@@ -29,8 +30,9 @@ repo map, build/test commands, the CI structure, and the pre-commit gates.
 - **Verify what you change.** `make test-node NODE=<name>` runs exactly what CI
   runs for one node (uv + ruff + pytest, or cargo). For Rust workspace changes,
   `make test-rust` and `make lint`. For `node-index/` changes, `make index-ci`.
-- **Don't hand-edit the catalog.** `node-index/` entries come from
-  `dora hub publish`; published version files are immutable (append-only).
+- **Don't hand-edit the catalog** (once it exists — see the note above).
+  `node-index/` entries come from `dora hub publish`; published version files
+  are immutable (append-only).
 
 ## Before you finish
 
