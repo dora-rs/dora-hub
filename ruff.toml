@@ -1,0 +1,32 @@
+# Shared Python lint baseline for dora-hub.
+#
+# This governs repo-level Python (e.g. `scripts/`). Each `node-hub/<name>`
+# carries its own `[tool.ruff.lint]` in its `pyproject.toml` (ruff uses the
+# nearest config) — keep new nodes aligned with the `extend-select` set below so
+# the collection stays consistent.
+
+line-length = 100
+
+# Nodes are linted by their own per-node config in CI (each carries its own
+# [tool.ruff.lint]); this root config governs repo tooling (scripts/). Example,
+# test, and benchmark scripts predate this baseline and are left as-is.
+extend-exclude = ["node-hub", "node-archive", "benches", "examples", "tests"]
+
+[lint]
+extend-select = [
+  "D",    # pydocstyle (docstrings)
+  "UP",   # pyupgrade
+  "PERF", # performance
+  "RET",  # return
+  "RSE",  # raise
+  "NPY",  # numpy
+  "N",    # pep8-naming
+  "I",    # import sorting
+]
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.per-file-ignores]
+# Internal tooling and tests aren't published packages — don't force docstrings.
+"scripts/**" = ["D"]
