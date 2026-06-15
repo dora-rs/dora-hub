@@ -1,0 +1,1 @@
+# Tests need a microphone/hardware not available on CI; the node still builds.
