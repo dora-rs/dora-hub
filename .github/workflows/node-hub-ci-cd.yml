@@ -59,7 +59,11 @@ jobs:
           git fetch --no-tags origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
           files="$(git diff --name-only "origin/$BASE...HEAD")"
           echo "changed files:"; echo "$files" | sed 's/^/  /'
-          # A change to a shared build input rebuilds every node.
+          # A change to a shared build input rebuilds every node. Nodes are
+          # self-contained today (no cross-node deps). IF a shared local crate
+          # is ever added under node-hub/ that several nodes depend on via
+          # `path = `, add it here too — otherwise a change to it would not
+          # fan out and its dependents would be silently untested.
           if echo "$files" | grep -qE '^(Cargo\.toml|Cargo\.lock|\.github/workflows/(node-hub-ci-cd\.yml|node_hub_test\.sh))$'; then
             echo "shared build input changed -> test all nodes"
             echo "run_all=true" >> "$GITHUB_OUTPUT"
