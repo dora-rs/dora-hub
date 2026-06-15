@@ -75,7 +75,10 @@ on Discord first.
 
 ## Publishing to the Dora Hub
 
+> The `node-index/` catalog and its CI land with the catalog bootstrap (PR #66);
+> this section applies once that merges.
+
 The `node-index/` catalog is produced by the `dora hub publish` CLI — **don't
 hand-edit version entries**. Published version files are immutable (append-only,
 enforced by `node-index CI`); a yank is the one allowed mutation. See
-[`node-index/README.md`](node-index/README.md).
+`node-index/README.md` for the format.

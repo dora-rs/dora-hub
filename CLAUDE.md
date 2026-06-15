@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repo also hosts the **Dora Hub catalog** (`node-index/`) — the git-backed index that the `dora hub` CLI resolves `hub:` references against (spec: [`docs/plan-node-hub.md`](https://github.com/dora-rs/dora/blob/main/docs/plan-node-hub.md) in `dora-rs/dora`).
 
+> **Note:** the `node-index/` catalog, its `schemas/`, `scripts/index-ci/`, and the `node-index CI` workflow land with the catalog bootstrap (PR #66). Until that merges, the index sections below don't apply and `make index-ci` is a no-op.
+
 Two languages, one repo:
 - **Python nodes** (~55) — `pyproject.toml` + a package dir, built/tested with **uv**, linted with **ruff**, tested with **pytest**.
 - **Rust nodes** (~14) — members of the root **Cargo workspace**; some are Rust+Python (maturin) hybrids.
@@ -58,7 +60,7 @@ Run exactly what CI runs for one node, locally:
 ```bash
 make test-node NODE=dora-echo        # or: scripts/test-node.sh dora-echo
 ```
-For a Python node this does `uv venv` + `uv pip install .` + `uv run ruff check .` + `uv run pytest`; for a Rust node, `cargo check/clippy/build/test`. It reuses the same driver CI uses (`.github/workflows/node_hub_test.sh`), so local == CI.
+For a Python node this does `uv venv` + `uv pip install .` + `uv run ruff check .` + `uv run pytest`; for a Rust node, `cargo check/clippy/build/test`. A Rust+Python (maturin) hybrid additionally runs a `maturin build --release` (no publish). It reuses the same driver CI uses (`.github/workflows/node_hub_test.sh`), so local == CI.
 
 ### The node-index catalog
 ```bash
@@ -84,7 +86,7 @@ python3 scripts/index-ci/validate_entries.py
 | Workflow | Scope |
 |----------|-------|
 | `ci.yml` | Rust workspace Check/Build/Test (Linux/macOS/Windows), Clippy, rustfmt, Typos, and example dataflows end-to-end |
-| `node-hub-ci-cd.yml` | Per-node matrix: runs `node_hub_test.sh` for each `node-hub/<folder>` on Linux+macOS; publishes on release |
+| `node-hub-ci-cd.yml` | Per-node matrix (`node_hub_test.sh` for each `node-hub/<folder>`). PRs run the lint+test step on Linux only; macOS runs on release/dispatch. Publishes on release |
 | `node-index-ci.yml` | Catalog CI (schema + append-only), **path-scoped to `node-index/**`** — never gates `node-hub/` source |
 | `claude-code.yml` | `@claude` GitHub automation |
 

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Run locally exactly what CI runs for one node (lint + tests, no publish).
+# Run locally exactly what CI runs for one node (build + lint + tests; never publishes).
 #
 #   scripts/test-node.sh <node-name>        e.g. scripts/test-node.sh dora-echo
 #
 # It reuses the same driver CI uses (.github/workflows/node_hub_test.sh) from the
 # node's directory, so "passes locally" means "passes in CI". Python nodes run
-# uv + ruff + pytest; Rust nodes run cargo check/clippy/build/test.
+# uv + ruff + pytest; Rust nodes run cargo check/clippy/build/test; a Rust+Python
+# (maturin) hybrid additionally runs `maturin build --release` (no publish).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
