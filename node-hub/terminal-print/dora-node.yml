@@ -1,0 +1,26 @@
+# Node manifest (the typed Hub contract) for `terminal-print`.
+# Spec: docs/plan-node-hub.md §5 in dora-rs/dora. Published verbatim into the
+# Hub index by `dora hub publish`.
+apiVersion: 1
+name: terminal-print
+namespace: dora-rs
+description: >-
+  Print received inputs to the terminal — a debug sink that pretty-prints UTF-8
+  strings and debug-dumps any other Arrow type.
+categories: [debug]
+keywords: [debug, print, terminal, sink]
+
+runtime: rust
+entrypoint: target/release/terminal-print
+build: cargo build --release
+platforms: []
+dora: ">=0.3.9"
+
+# terminal-print is a generic debug sink: it prints whatever is wired to it,
+# under any input name, so it declares no typed input contract and no outputs.
+
+example: |
+  - id: terminal-print
+    hub: terminal-print@^0.5
+    inputs:
+      text: some-node/output
