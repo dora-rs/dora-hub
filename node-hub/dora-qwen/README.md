@@ -44,21 +44,16 @@ those words. Per-message tools can be supplied via the `tools` metadata key.
 
 ## Environment variables
 
-- `SYSTEM_PROMPT` — system prompt initializing the conversation. Default:
-  `You're a very succinct AI assistant with short answers.`
 - `MODEL_NAME_OR_PATH` — GGUF repo id / path (Darwin backend). Default:
   `Qwen/Qwen2.5-0.5B-Instruct-GGUF`.
 - `MODEL_FILE_PATTERN` — GGUF filename pattern (Darwin backend). Default:
   `*fp16.gguf`.
-- `MAX_TOKENS` (int) — parsed at startup but not currently applied; generation
-  length is hardcoded per backend. Default: `512`.
 - `N_GPU_LAYERS` (int) — GPU layers for the llama-cpp (Darwin) backend.
   Default: `0`.
 - `N_THREADS` (int) — CPU threads for the llama-cpp (Darwin) backend.
   Default: `4`.
 - `CONTEXT_SIZE` (int) — context window (`n_ctx`) for the llama-cpp (Darwin)
   backend. Default: `4096`.
-- `TOOLS_JSON` — JSON tool list applied at startup as the default tools.
 - `ACTIVATION_WORDS` — space-separated words; if set, generation only runs when
   the prompt contains one of them. Empty means always generate.
 

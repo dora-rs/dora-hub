@@ -33,19 +33,12 @@ outputs:
   text:
     description: Generated assistant response as a single-element UTF-8 string Arrow array.
 env:
-  SYSTEM_PROMPT:
-    default: "You're a very succinct AI assistant with short answers."
-    description: System prompt used to initialize the conversation.
   MODEL_NAME_OR_PATH:
     default: Qwen/Qwen2.5-0.5B-Instruct-GGUF
     description: Repo id / path of the GGUF model loaded via llama-cpp on Darwin.
   MODEL_FILE_PATTERN:
     default: "*fp16.gguf"
     description: GGUF filename pattern selected from the repo on Darwin.
-  MAX_TOKENS:
-    type: int
-    default: 512
-    description: Maximum generation tokens (parsed at startup; not currently applied — generation length is hardcoded per backend).
   N_GPU_LAYERS:
     type: int
     default: 0
@@ -58,9 +51,6 @@ env:
     type: int
     default: 4096
     description: Context window size (n_ctx) for the llama-cpp (Darwin) backend.
-  TOOLS_JSON:
-    default: ""
-    description: JSON tool list applied at startup as the default tools (overridable via the tools input or per-message metadata).
   ACTIVATION_WORDS:
     default: ""
     description: Space-separated words; if set, generation only runs when the prompt contains one of them. Empty means always generate.
