@@ -1,0 +1,37 @@
+apiVersion: 1
+name: video-encoder
+namespace: dora-rs
+description: Records incoming image frames per episode and encodes them into an H.264 MP4 video (LeRobot compatible).
+categories: [transform]
+keywords: [video, encode, codec, h264, ffmpeg, lerobot]
+runtime: python
+entrypoint: video-encoder
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+inputs:
+  image:
+    required: true
+    description: Image frame (Arrow struct with width, height, channels, data); buffered to disk as PNG while an episode is recording.
+  episode_index:
+    required: true
+    description: Episode index; a value other than -1 starts recording that episode, -1 ends it and encodes the buffered frames into an MP4.
+outputs:
+  image:
+    description: Reference to the encoded video file as an Arrow struct {path, timestamp}; emitted once at startup and per recorded frame.
+env:
+  VIDEO_NAME:
+    default: cam_up
+    description: Required. Base name used for the per-episode output directory and the resulting .mp4 file.
+  FPS:
+    type: int
+    default: 30
+    description: Required. Frames per second used to compute frame timestamps and as the ffmpeg input/encode rate.
+example: |
+  - id: video-encoder
+    hub: video-encoder@^0.5
+    inputs:
+      image: camera/image
+      episode_index: recorder/episode_index
+    outputs:
+      - image
