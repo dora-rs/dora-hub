@@ -3,7 +3,8 @@
 
 A namespace is claimed by adding `node-index/<ns>/.../package.yml`. Per §7.4
 *every* new namespace (one not present in the base branch) gets a human
-reviewer — and reserved or confusable claims escalate to an index admin:
+reviewer; only a *reserved* claim escalates to an index admin (a confusable
+claim is flagged but stays in the human-review tier):
 
   - **Reserved.** `<ns>` on the reserved list belongs to the project / type
     system and needs an index admin (`reserved_namespaces.txt`).
