@@ -17,8 +17,14 @@ matter. It produces no outputs.
 
 ## Inputs
 
-Accepts **any** input, under **any** name — it prints whatever you wire to it.
-There is no fixed or typed input contract (so `dora-node.yml` declares none).
+- `data`: the stream to print. Any Arrow value — UTF-8 is shown as text,
+  anything else is debug-dumped.
+
+The node itself prints **any** input id it receives, but a `hub:` contract must
+declare every wired input (an undeclared input fails the build), so it declares
+one generic `data` input. To print arbitrary or multiple input names, run it
+directly via `path:` (where the contract isn't enforced) or use one instance per
+stream.
 
 ## Outputs
 
@@ -30,14 +36,14 @@ None.
 
 ## Usage
 
-Wire any node's output into `terminal-print`:
+Wire a node's output into `terminal-print`:
 
 ```yaml
 nodes:
   - id: terminal-print
     hub: terminal-print@^0.5
     inputs:
-      text: some-node/output
+      data: some-node/output
 ```
 
 ## Build

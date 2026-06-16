@@ -49,7 +49,7 @@ Every node must ship a `README.md`. `dora-node.yml` is the machine contract; the
 
 - [ ] **Title + one-line description** — matches `dora-node.yml`'s `description`.
 - [ ] **Behavior** — what the node actually does (the logic), not just what it is.
-- [ ] **Inputs** — each input id + type, or "accepts any input" for generic sinks.
+- [ ] **Inputs** — each input id + type. **Declare every input a dataflow will wire**: a `hub:` build fails on any wired input not in the manifest (an empty map is *not* a wildcard). A generic sink that prints "any input" must still declare a concrete input (e.g. `data`) — don't leave `inputs` empty.
 - [ ] **Outputs** — each output id + type, or "None" for sinks.
 - [ ] **Environment variables** — name, type, default, meaning (mirror `dora-node.yml`'s `env`), or "None". Document only vars that **actually affect behavior**: a var the code reads with `os.getenv` but never uses is *not* part of the contract — leave it out of the manifest/README (don't imply it does something).
 - [ ] **Usage** — a copy-pasteable dataflow YAML snippet wiring the node. Prefer the `hub:` form. If you show a from-source `path:`, it is the built **executable** (the manifest `entrypoint`, e.g. `target/release/<bin>`), paired with `build:` — never the package directory.
