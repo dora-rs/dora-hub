@@ -20,7 +20,7 @@ dora: ">=0.3.9"
 platforms: []
 
 inputs:
-  tick:
+  text:
     description: >-
       Reply stream for the Dora provider. A node wired here receives the chat
       prompt on the configured output and must reply with a UTF-8 string array
@@ -29,7 +29,7 @@ inputs:
       may be wired.
 
 outputs:
-  tick:
+  text:
     description: >-
       Chat prompt forwarded to the dataflow when a request routes to the Dora
       provider. Emitted as a UTF-8 string array with a `__dora_call_id`

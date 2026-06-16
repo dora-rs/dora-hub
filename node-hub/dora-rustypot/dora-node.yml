@@ -38,8 +38,7 @@ env:
 
 example: |
   - id: dora-rustypot
-    build: cargo build --release --target-dir target
-    path: dora-rustypot
+    hub: dora-rustypot@^0.1
     inputs:
       tick: dora/timer/millis/20
       pose: planner/goal_position

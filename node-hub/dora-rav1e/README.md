@@ -28,8 +28,10 @@ The encoded frame is sent back out under the **same input id** it arrived on.
   uint16 (`mono16`, `z16`). Pixel format, width, and height are taken from the
   input metadata when present.
 
-The node re-emits under whatever id it received, so the input may be wired under
-any id; `image` is the conventional one.
+The node re-emits under whatever id it received, so when launched via `path:` the
+input may be wired under any id; `image` is the conventional one. Under a `hub:`
+contract, wire the input on the declared `image` id — the hub permits only
+declared input ids.
 
 ## Outputs
 

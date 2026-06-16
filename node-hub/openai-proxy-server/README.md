@@ -49,8 +49,7 @@ model's `text` output feeds back into this server:
 ```yaml
 nodes:
   - id: openai-proxy-server
-    build: cargo build --release --target-dir target
-    path: dora-openai-proxy-server
+    hub: dora-openai-proxy-server@^0.5
     inputs:
       text: model-node/text
     outputs:

@@ -70,7 +70,7 @@ example: |
       outputs:
         - image
     - id: dora-rerun
-      hub: dora-rerun@^1.0
+      hub: dora-rerun@^0.5
       inputs:
         image: camera/image
       env:
