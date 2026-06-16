@@ -32,9 +32,7 @@ def main():
 
     data = os.getenv("DATA", args.data)
 
-    node = Node(
-        args.name,
-    )  # provide the name to connect to the dataflow if dynamic node
+    node = Node()  # id comes from the dataflow / hub spawn (DORA_NODE_CONFIG)
 
     try:
         data = ast.literal_eval(data)

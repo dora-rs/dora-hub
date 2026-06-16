@@ -130,7 +130,7 @@ async def run_fastapi():
     while True:
         await asyncio.sleep(1)
         event = node.next(0.001)
-        if event["type"] == "STOP":
+        if event is not None and event["type"] == "STOP":
             break
 
 

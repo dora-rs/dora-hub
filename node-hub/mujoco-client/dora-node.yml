@@ -15,8 +15,6 @@ inputs:
     description: Step trigger. On each tick the node echoes a tick, advances the physics one step, and publishes the joint state.
   action:
     description: Flat actuator command array. Length must equal the model's actuator count (m.nu); values are written to data.ctrl in XML actuator order.
-  render:
-    description: Render trigger. Renders every model camera off-screen and publishes one JPEG per camera. Only honoured when camera rendering is enabled (requires the --cameras flag).
 
 outputs:
   tick:

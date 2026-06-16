@@ -29,7 +29,7 @@ class Client:
         """TODO: Add docstring."""
         self.config = config
 
-        self.node = Node(config["name"])
+        self.node = Node()
 
         dataset = pd.read_parquet(config["episode_path"] + "/dataset.parquet")
 

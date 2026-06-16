@@ -27,7 +27,11 @@ The node raises at startup if the model has no actuators (`m.nu == 0`).
 
 - `tick`: step trigger — advances the simulation and publishes joint state.
 - `action`: flat actuator command array, length `m.nu`, in XML actuator order.
-- `render`: render trigger — publishes camera JPEGs (requires `--cameras`).
+
+> Off-screen camera rendering is **not part of the Hub contract**: the `render`
+> input and its per-camera JPEG outputs are only available when the node is
+> launched via `path:` with the `--cameras` flag, which a `hub:` spawn cannot
+> pass. The `render` input is therefore omitted from `dora-node.yml`.
 
 ## Outputs
 
@@ -35,7 +39,7 @@ The node raises at startup if the model has no actuators (`m.nu == 0`).
 - `joint_state`: full generalised coordinates (`data.qpos`) as a float32 array.
 
 Camera JPEG outputs (one per model camera, named after the camera) are produced
-only when off-screen rendering is enabled.
+only when off-screen rendering is enabled via a `path:` launch (see note above).
 
 ## Environment variables
 

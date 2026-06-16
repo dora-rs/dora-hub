@@ -63,7 +63,7 @@ class Client:
         if self.m.nu == 0:
             raise RuntimeError("model has no actuators (m.nu=0) — cannot process action input")
 
-        self.node = Node(config["name"])
+        self.node = Node()
 
     def run(self) -> None:
         """Drive the physics + rendering event loop."""
