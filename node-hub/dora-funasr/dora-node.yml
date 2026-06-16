@@ -1,0 +1,53 @@
+apiVersion: 1
+name: dora-funasr
+namespace: dora-rs
+description: >-
+  Speech-to-text (ASR) node using FunASR's paraformer-zh model with ct-punc
+  punctuation. Receives raw audio samples and emits recognized text.
+categories: [ml-inference, speech]
+keywords: [asr, speech-to-text, funasr, paraformer, transcription, audio]
+runtime: python
+entrypoint: dora-funasr
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  audio:
+    description: >-
+      Raw audio samples as an Arrow array, converted to a numpy array and fed to
+      the FunASR model. Any input id NOT containing "text_noise" is treated as
+      audio. Required to produce any output.
+    required: true
+  text_noise:
+    description: >-
+      Optional text (first element read as a string) whose words are stripped
+      from recognized text as known noise. Matched by any input id containing
+      "text_noise".
+    required: false
+
+outputs:
+  text:
+    description: >-
+      Recognized text as a single-element UTF-8 Arrow array. Metadata sets
+      language=zh and primitive=text. Empty/"."-only results are skipped.
+  speech_started:
+    description: >-
+      Emitted alongside text whenever a non-empty transcription is produced;
+      carries the same recognized text payload.
+
+env: {}
+
+example: |
+  nodes:
+    - id: microphone
+      path: dora-microphone
+      outputs:
+        - audio
+    - id: dora-funasr
+      hub: dora-funasr@^0.5
+      inputs:
+        audio: microphone/audio
+      outputs:
+        - text
+        - speech_started

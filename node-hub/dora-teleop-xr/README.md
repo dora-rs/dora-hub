@@ -1,65 +1,70 @@
 # dora-teleop-xr
 
-A Dora adapter node that provides teleoperation functionality using [teleop-xr](https://github.com/qrafty-ai/teleop_xr).
+XR teleoperation node. It serves a WebXR/VR teleop session (via
+[teleop-xr](https://github.com/qrafty-ai/teleop_xr)), runs inverse kinematics on
+incoming controller poses, and on each tick emits the latest head/hand poses,
+the robot joint state, and the raw XR state.
 
-## Getting Started
+## Behavior
 
-### Prerequisites
+On startup the node loads the robot class named by `ROBOT_CLASS`, builds an IK
+solver and controller for it, and starts a teleop HTTPS server (host and port
+come from the teleop-xr settings defaults). A background worker thread solves IK
+whenever new XR state arrives and publishes joint updates back to the connected
+WebXR client.
 
-- Python 3.10 or higher
-- Dora Framework 0.3.6 or higher
-- A compatible VR headset or WebXR-enabled mobile device.
-- `dora-rs-cli` (dev dependency for deployment).
+The node loop is driven by the `tick` input. On each tick, if an XR state has
+been received, it extracts the head device pose and the left/right grip poses,
+publishes any that are present, publishes the current robot joint configuration
+(reordered into the robot's rerun URDF joint order when available), and
+publishes the complete raw XR state as JSON. Ticks received before any XR state
+has arrived are ignored.
 
-### Installation
+## Inputs
 
-Install the package in editable mode:
-```bash
-uv pip install -e .
+- `tick` (required): poll trigger. Each tick reads the latest received XR state
+  and publishes outputs. Wire it to a timer such as `dora/timer/millis/10`.
+
+## Outputs
+
+- `head_pose`: headset pose, `float32[7]` `[x, y, z, qx, qy, qz, qw]`. Emitted
+  only when a head pose is present. Metadata: `primitive=pose`,
+  `encoding=xyzquat`.
+- `left_hand_pose`: left controller/hand grip pose, `float32[7]`. Emitted only
+  when present. Metadata: `primitive=pose`, `encoding=xyzquat`.
+- `right_hand_pose`: right controller/hand grip pose, `float32[7]`. Emitted only
+  when present. Metadata: `primitive=pose`, `encoding=xyzquat`.
+- `joint_state`: current robot joint configuration, `float32` array, reordered
+  into the robot's rerun URDF joint order when available. Metadata:
+  `primitive=jointstate`, `encoding=jointstate`.
+- `raw_xr_state`: the complete raw XR state as a single JSON string.
+
+## Environment variables
+
+- `ROBOT_CLASS` (default `teleop_xr.ik.robots.so101:SO101Robot`): Python class
+  path (`module:ClassName`) of the robot used to build the IK solver and report
+  joint names.
+
+## Usage
+
+```yaml
+nodes:
+  - id: teleop-xr
+    hub: dora-teleop-xr@^0.5
+    inputs:
+      tick: dora/timer/millis/10
+    outputs:
+      - head_pose
+      - left_hand_pose
+      - right_hand_pose
+      - joint_state
+      - raw_xr_state
+    env:
+      ROBOT_CLASS: "teleop_xr.ik.robots.so101:SO101Robot"
 ```
 
-### Example
-See [so101_ik_demo](../../examples/teleop-xr/so101_ik_demo.yml).
+## Build
 
-### Outputs
-
-The node publishes 9 outputs based on the XR session state:
-
-| Output | Type | Description |
-|--------|------|-------------|
-| `head_pose` | `float32[7]` | Head pose `[x, y, z, qx, qy, qz, qw]`. Metadata: `primitive: "pose"`. |
-| `left_hand_pose` | `float32[7]` | Left controller/hand grip pose. Metadata: `primitive: "pose"`. |
-| `right_hand_pose` | `float32[7]` | Right controller/hand grip pose. Metadata: `primitive: "pose"`. |
-| `joint_state` | `JSON string` | Computed or received robot joint states. Metadata: `primitive: "jointstate"`. |
-| `left_buttons` | `float64[]` | Flattened list of `[pressed, value]` pairs for all buttons. |
-| `right_buttons` | `float64[]` | Flattened list of `[pressed, value]` pairs for all buttons. |
-| `left_axes` | `float64[]` | List of axis values (e.g., thumbstick X/Y). |
-| `right_axes` | `float64[]` | List of axis values (e.g., thumbstick X/Y). |
-| `cmd_vel` | `float64[6]` | Velocity commands `[vx, vy, vz, wx, wy, wz]`. |
-| `raw_xr_state` | `string` | Complete raw WebXR state message as a JSON string. |
-
-#### Pose Format
-All pose outputs use the `xyzquat` encoding: `[position_x, position_y, position_z, orientation_x, orientation_y, orientation_z, orientation_w]`. They include `primitive: "pose"` metadata for compatibility with `dora-rerun`.
-
-#### Velocity Control (`cmd_vel`)
-- **Linear X (Forward/Backward)**: Controlled by Right Thumbstick Y-axis.
-- **Angular Z (Turn Left/Right)**: Controlled by Right Thumbstick X-axis.
-- **Deadman Switch**: The Right Grip button must be held to enable velocity output.
-- **Deadzone**: 20% to prevent drift.
-
-### Inputs
-
-1. **`tick`**: Triggers the node to process the latest received XR message and publish outputs.
-2. **`joint_state`**: Receives robot joint states (as a JSON string) to be sent back to the WebXR client.
-   - **Requirement**: Use `primitive: "jointstate"` metadata for this input to ensure proper handling.
-
-## Configuration
-
-### Environment Variables
-
-The following variables can be set in your environment or YAML:
-
-- `TELEOP_HOST`: WebSocket server host (default: `0.0.0.0`).
-- `TELEOP_PORT`: WebSocket server port (default: `4443`).
-- `INPUT_MODE`: Input mode for XR (`controller`, `hand`, or `auto`).
-- `ROBOT_CLASS`: Python class path for internal IK (e.g., `teleop_xr.ik.robots.so101:SO101Robot`).
+```bash
+pip install .
+```

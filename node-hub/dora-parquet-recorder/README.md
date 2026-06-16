@@ -1,108 +1,57 @@
-# dora-dataset-record
+# dora-parquet-recorder
 
-Node for recording robot datasets in LeRobot format. You can captures synchronized camera feeds and robot poses to create high-quality datasets for imitation learning and robot training.
+A generic, zero-copy data recorder for dora. It records received inputs in
+batches and writes one Apache Parquet file per input id.
 
-- **Robot pose recording** - Capture both state and action data
-- **Multi-camera support** - Record from multiple cameras simultaneously
-- **LeRobot dataset format (v2.1)** - Direct integration with HuggingFace LeRobot datasets
-- **Episode management** - Automatic episode segmentation with reset phases
+## Behavior
 
-## Quick Start
+`dora-parquet-recorder` connects as a dora node and records **every** input
+event it receives. For each input id it appends a row containing the receive
+`timestamp`, the input `data` (raw Arrow buffer bytes when available, otherwise
+a Python-level fallback), and the input `metadata` (JSON). Rows are buffered per
+input id and flushed in batches of `BATCH_SIZE` to `LOG_DIR/<input-id>.parquet`
+using a background writer thread. On `STOP` it flushes any remaining buffered
+rows and closes all open files.
 
-### 1. Installation
+The node itself records **any** input id it receives, but a `hub:` contract must
+declare every wired input (an undeclared input fails the build), so it declares
+one generic `data` input. To record arbitrary or multiple input names, run it
+directly via `path:` (where the contract isn't enforced) or use one instance per
+stream.
 
-```bash
-# Source your venv
-cd dora/node-hub/dora-dataset-record
-uv pip install -e .
-```
+## Inputs
 
-### 2. Usage Guide
+- `data`: the stream to record. Any Arrow value. Each input id is written to its
+  own `<id>.parquet` file with `timestamp`, `data`, and `metadata` columns.
 
-Create a dataflow file, see `examples/lerobot-dataset-record/dataset_record.yml`:
+## Outputs
+
+- `status`: a single `"READY"` value emitted on startup as a handshake signal.
+
+## Environment variables
+
+- `BATCH_SIZE` (default `30`): number of tables buffered per input id before a
+  batch is flushed to disk.
+- `LOG_DIR` (default `data_logs`): directory where per-input Parquet files are
+  written. Created if it does not exist.
+
+## Usage
+
+Wire a node's output into `dora-parquet-recorder`:
 
 ```yaml
 nodes:
-  # Dataset recorder
-  - id: dataset_recorder
-    build: pip install -e ../../dora-dataset-record
-    path: dora-dataset-record
+  - id: dora-parquet-recorder
+    hub: dora-parquet-recorder@^0.5
     inputs:
-      laptop: laptop_cam/image
-      front: front_cam/image
-      robot_state: robot_follower/pose
-      robot_action: leader_interface/pose
-    outputs:
-      - text
+      data: some-node/output
     env:
-      # Required settings
-      REPO_ID: "your_username/your_dataset_name"
-      SINGLE_TASK: "Pick up the cube and place it in the box"
-      ROBOT_TYPE: "your_robot_type"
-
-      # Recording settings
-      FPS: "30"
-      TOTAL_EPISODES: "50"
-      EPISODE_DURATION_S: "60"
-      RESET_DURATION_S: "15"
-
-      # Camera configuration
-      CAMERA_NAMES: "laptop,front"
-      CAMERA_LAPTOP_RESOLUTION: "480,640,3"
-      CAMERA_FRONT_RESOLUTION: "480,640,3"
-
-      # Robot configuration
-      ROBOT_JOINTS: "joint1,joint2,joint3,joint4,joint5,gripper"
-
-      # Optional settings
-      USE_VIDEOS: "true"
-      SAVE_AVIF_FRAMES: "true" # This will additionally save frames
-      PUSH_TO_HUB: "false"
-      PRIVATE: "false"
-      TAGS: "robotics,manipulation,imitation_learning"
-
-  # Visualization with rerun
-  - id: plot
-    build: pip install dora-rerun
-    path: dora-rerun
-    inputs:
-      text: dataset_recorder/text
+      BATCH_SIZE: "30"
+      LOG_DIR: "data_logs"
 ```
 
-### 3. Start Recording the dataset
+## Build
 
 ```bash
-dora build dataset_record.yml
-dora run dataset_record.yml
+pip install .
 ```
-
-The node will send instructions on dora-rerun, about episode starting, reset time, Saving episodes etc.
-
-## Configuration
-
-### Required Environment Variables
-
-| Variable              | Description                  | Example                    |
-| --------------------- | ---------------------------- | -------------------------- |
-| `REPO_ID`             | HuggingFace dataset repo     | `"username/dataset_name"`  |
-| `SINGLE_TASK`         | Task description             | `"Pick and place objects"` |
-| `CAMERA_NAMES`        | Comma-separated camera names | `"laptop,front,top"`       |
-| `CAMERA_*_RESOLUTION` | Resolution for each camera   | `"480,640,3"`              |
-| `ROBOT_JOINTS`        | Comma-separated joint names  | `"joint1,joint2,gripper"`  |
-
-### Optional Settings
-
-| Variable             | Default                                     | Description                                           |
-| -------------------- | ------------------------------------------- | ----------------------------------------------------- |
-| `FPS`                | `30`                                        | Recording frame rate (match camera fps)               |
-| `TOTAL_EPISODES`     | `10`                                        | Number of episodes to record                          |
-| `EPISODE_DURATION_S` | `60`                                        | Episode length in seconds                             |
-| `RESET_DURATION_S`   | `15`                                        | Break between episodes to reset the environment       |
-| `USE_VIDEOS`         | `true`                                      | Encode as MP4 videos, else saves images               |
-| `PUSH_TO_HUB`        | `false`                                     | Upload to HuggingFace Hub                             |
-| `PRIVATE`            | `false`                                     | Make dataset private                                  |
-| `ROOT_PATH`          | `~/.cache/huggingface/lerobot/your_repo_id` | Local storage path where you want to save the dataset |
-
-## License
-
-This project is released under the MIT License.
