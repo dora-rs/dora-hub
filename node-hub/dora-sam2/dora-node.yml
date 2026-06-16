@@ -43,6 +43,7 @@ env: {}
 
 example: |
   - id: dora-sam2
+    hub: dora-sam2@^0.5
     inputs:
       image: camera/image
       boxes2d: object-detector/boxes2d
