@@ -33,14 +33,25 @@ import sys
 
 RESERVED_FILE = pathlib.Path(__file__).resolve().parent / "reserved_namespaces.txt"
 
-# Visually-confusable single substitutions, applied before comparison. `rn`->`m`
-# is the classic lookalike (distance 2 by edit count, distance 0 to the eye).
-_HOMOGLYPH_PAIRS = str.maketrans({"0": "o", "1": "l", "3": "e", "5": "s"})
+# Visually-confusable substitutions, folded before comparison so a homoglyph
+# swap and a structural edit can't be *combined* to slip past the gate (e.g.
+# `d0rars` = `0`->`o` + a dropped hyphen). Multi-char lookalikes (read
+# identically, differ by edit count) first, then single-char swaps. Best-effort,
+# not exhaustive — it only has to make the obvious typosquats land on the same
+# skeleton, and a miss flags for human review, it never auto-rejects.
+_BIGRAM_LOOKALIKES = (("rn", "m"), ("cl", "d"), ("vv", "w"), ("nn", "m"))
+_HOMOGLYPH_CHARS = str.maketrans(
+    {"0": "o", "1": "l", "2": "z", "3": "e", "5": "s", "6": "b", "8": "b", "9": "g"}
+)
 
 
 def normalize(ns: str) -> str:
-    """Collapse a namespace to its visual skeleton for confusable comparison."""
-    return ns.lower().replace("rn", "m").translate(_HOMOGLYPH_PAIRS)
+    """Collapse a namespace to its visual skeleton: drop separators and fold
+    look-alike character groups, so confusable comparison sees through both."""
+    s = ns.lower().replace("-", "").replace("_", "")
+    for a, b in _BIGRAM_LOOKALIKES:
+        s = s.replace(a, b)
+    return s.translate(_HOMOGLYPH_CHARS)
 
 
 def levenshtein(a: str, b: str) -> int:
@@ -60,10 +71,13 @@ def levenshtein(a: str, b: str) -> int:
 
 
 def is_confusable(a: str, b: str) -> bool:
-    """True if `a` is a distinct-but-lookalike name for `b`."""
+    """True if `a` is a distinct-but-lookalike name for `b`. Compares the visual
+    skeletons (not the raw strings) so a homoglyph swap plus a single structural
+    edit still collapses to within distance 1."""
     if a == b:
         return False
-    return normalize(a) == normalize(b) or levenshtein(a, b) <= 1
+    na, nb = normalize(a), normalize(b)
+    return na == nb or levenshtein(na, nb) <= 1
 
 
 def screen_namespace(ns: str, existing: set[str], reserved: set[str]) -> str | None:

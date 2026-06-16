@@ -212,6 +212,14 @@ def test_namespace_screening() -> None:
     # a name far from everything is fine even if it shares a prefix
     check("distinct longer name auto-merges", not needs_review("acme-robotics"))
 
+    # homoglyph + structural edit must not compose past the gate (the d0rars
+    # class): a 0->o swap AND a dropped/extra hyphen is still one skeleton
+    check("homoglyph + dropped hyphen flagged", needs_review("d0rars"))
+    check("homoglyph + double hyphen flagged", needs_review("d0ra--rs"))
+    check("dropped hyphen alone flagged", needs_review("dorars"))
+    # bigram lookalikes: cl->d, vv->w, nn->m
+    check("cl->d homoglyph flagged", needs_review("clora-rs"))
+
     # the homoglyph normalizer and metric the gate is built on
     check("normalize collapses 0/1/3/5 and rn", cns.normalize("d0rn3") == "dome")
     check("levenshtein basic", cns.levenshtein("acme", "acme2") == 1)
