@@ -23,6 +23,7 @@ os.environ["DORA_INDEX_ROOT"] = str(FIXTURES)
 
 import check_append_only as cao  # noqa: E402
 import check_namespace as cns  # noqa: E402
+import decide_auto_merge as dam  # noqa: E402
 import validate_entries as ve  # noqa: E402
 
 PASSED = 0
@@ -233,10 +234,92 @@ def test_namespace_screening() -> None:
     check("levenshtein rn vs m is 2", cns.levenshtein("acrne", "acme") == 2)
 
 
+def test_decide_auto_merge() -> None:
+    import subprocess as sp
+    import tempfile
+
+    print("decide_auto_merge (path/owner guards):")
+    check("version file accepted", dam.is_version_file("node-index/acme/widget/1.2.3.yml"))
+    check("prerelease semver accepted", dam.is_version_file("node-index/acme/widget/1.0.0-rc.1.yml"))
+    check("package.yml is not a version file", not dam.is_version_file("node-index/acme/widget/package.yml"))
+    check("nested path rejected", not dam.is_version_file("node-index/acme/widget/sub/1.0.0.yml"))
+    check("non-semver rejected", not dam.is_version_file("node-index/acme/widget/latest.yml"))
+    check("outside node-index rejected", not dam.is_version_file("node-hub/acme/main.py"))
+
+    member = {("acme-org", "alice")}
+    is_member = lambda org, user: (org, user) in member  # noqa: E731
+    check("direct owner authorized", dam.is_authorized("alice", ["alice"], is_member))
+    check("non-owner rejected", not dam.is_authorized("mallory", ["alice"], is_member))
+    check("org-member authorized", dam.is_authorized("alice", ["acme-org"], is_member))
+    check("non-member of owner-org rejected", not dam.is_authorized("bob", ["acme-org"], is_member))
+
+    print("decide_auto_merge (real two-commit repo):")
+    no_org = lambda org, user: False  # noqa: E731
+    with tempfile.TemporaryDirectory() as td:
+        repo = pathlib.Path(td)
+        env = {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
+        }
+
+        def g(*a: str) -> None:
+            sp.run(["git", *a], cwd=repo, env=env, check=True, capture_output=True)
+
+        def commit(msg: str) -> None:
+            g("add", "-A")
+            g("commit", "-qm", msg)
+
+        entry = "manifest: {}\nsource: {git: g, rev: r}\n"
+        g("init", "-q", "-b", "main")
+        pkg = repo / "node-index" / "acme" / "widget"
+        pkg.mkdir(parents=True)
+        (pkg / "package.yml").write_text("owners:\n  - alice\n")
+        (pkg / "1.0.0.yml").write_text(entry)
+        commit("base")
+        base = sp.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, env=env, capture_output=True, text=True
+        ).stdout.strip()
+
+        saved = os.getcwd()
+        os.chdir(repo)
+        try:
+            # routine publish by the owner -> MERGE
+            (pkg / "1.1.0.yml").write_text(entry)
+            commit("publish 1.1.0")
+            check("owner publish -> MERGE", dam.decide("alice", base, no_org) == [])
+            check(
+                "non-owner publish -> HOLD",
+                any("not an owner" in r for r in dam.decide("mallory", base, no_org)),
+            )
+
+            # new namespace claim -> HOLD (new ns + a non-version package.yml)
+            g("checkout", "-q", base)
+            g("checkout", "-q", "-b", "newns")
+            newpkg = repo / "node-index" / "other" / "thing"
+            newpkg.mkdir(parents=True)
+            (newpkg / "package.yml").write_text("owners:\n  - alice\n")
+            (newpkg / "0.1.0.yml").write_text(entry)
+            commit("new namespace")
+            holds = dam.decide("alice", base, no_org)
+            check("new namespace -> HOLD", any("new namespace" in r for r in holds))
+
+            # editing OWNERS/package.yml -> HOLD (non-version path)
+            g("checkout", "-q", base)
+            g("checkout", "-q", "-b", "owners")
+            (pkg / "package.yml").write_text("owners:\n  - alice\n  - mallory\n")
+            commit("add owner")
+            holds = dam.decide("alice", base, no_org)
+            check("OWNERS edit -> HOLD", any("human review" in r for r in holds))
+        finally:
+            os.chdir(saved)
+
+
 if __name__ == "__main__":
     test_validate()
     test_append_only()
     test_namespace_screening()
+    test_decide_auto_merge()
     test_subdir_no_traversal()
     test_empty_binary_rejected()
     test_symlink_rejected()
