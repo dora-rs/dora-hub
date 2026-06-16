@@ -311,6 +311,32 @@ def test_decide_auto_merge() -> None:
             commit("add owner")
             holds = dam.decide("alice", base, no_org)
             check("OWNERS edit -> HOLD", any("human review" in r for r in holds))
+
+            # a FORMER owner branching from an old commit where they were still
+            # listed must HOLD: authorization reads the base tip, not the
+            # attacker-chosen merge-base (CRITICAL-1 regression)
+            g("checkout", "-q", "main")
+            hist = repo / "node-index" / "hist" / "tool"
+            hist.mkdir(parents=True)
+            (hist / "package.yml").write_text("owners:\n  - mallory\n")
+            (hist / "1.0.0.yml").write_text(entry)
+            commit("hist: mallory owns")
+            old = sp.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, env=env,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            (hist / "package.yml").write_text("owners:\n  - alice\n")
+            commit("hist: transferred to alice")
+            new_tip = sp.run(
+                ["git", "rev-parse", "HEAD"], cwd=repo, env=env,
+                capture_output=True, text=True,
+            ).stdout.strip()
+            g("checkout", "-q", old)
+            g("checkout", "-q", "-b", "hist-attack")
+            (hist / "2.0.0.yml").write_text(entry)
+            commit("hist: mallory republishes from the old branch point")
+            holds = dam.decide("mallory", new_tip, no_org)
+            check("former owner from old commit -> HOLD", any("not an owner" in r for r in holds))
         finally:
             os.chdir(saved)
 

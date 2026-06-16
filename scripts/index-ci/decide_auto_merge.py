@@ -90,8 +90,13 @@ def gh_is_member(org: str, user: str) -> bool:
 
 
 def decide(author: str, base: str, is_member=gh_is_member) -> list[str]:
-    """Return a list of HOLD reasons; empty list means auto-mergeable."""
-    merge_base = git("merge-base", base, "HEAD").strip()
+    """Return a list of HOLD reasons; empty list means auto-mergeable.
+
+    All authorization reads (owners, existing namespaces) use `base` — the base
+    *tip* — never `merge-base(base, HEAD)`. The PR chooses its own merge-base
+    (its branch point), so a former owner could branch from an old commit where
+    they were still listed and self-approve. `changed_files` still enumerates
+    the PR's own edits via merge-base; that only widens the set (fail-safe)."""
     files = changed_files(base)
     reasons: list[str] = []
 
@@ -105,18 +110,21 @@ def decide(author: str, base: str, is_member=gh_is_member) -> list[str]:
     if bad_status:
         reasons.append("deletes/renames a published file: " + ", ".join(bad_status))
 
-    # new-namespace guard (§7.4): a new namespace always gets a human
-    new_ns = namespaces_at("HEAD") - namespaces_at(merge_base)
+    # new-namespace guard (§7.4): a new namespace always gets a human. Compare
+    # against the base tip so resurrecting a namespace deleted on base (but
+    # present at the branch point) is still flagged new.
+    new_ns = namespaces_at("HEAD") - namespaces_at(base)
     if new_ns:
         reasons.append("claims new namespace(s): " + ", ".join(sorted(new_ns)))
 
     # owner guard (§7.5): every touched version entry must be owner-authored,
-    # against the OWNERS list as it exists in the base (not the PR)
+    # against the OWNERS list as it exists on the base tip (not the PR, and not
+    # the branch point)
     for _, path in files:
         if not is_version_file(path):
             continue
         _, ns, name, _ = path.split("/")
-        owners = owners_at(merge_base, ns, name)
+        owners = owners_at(base, ns, name)
         if not owners:
             reasons.append(f"{path}: no owners on the base package.yml")
         elif not is_authorized(author, owners, is_member):
