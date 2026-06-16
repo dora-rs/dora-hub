@@ -33,3 +33,5 @@ jobs:
         run: git fetch --no-tags origin "${{ github.base_ref }}"
       - name: Append-only enforcement (§7.5)
         run: python3 scripts/index-ci/check_append_only.py --base "origin/${{ github.base_ref }}"
+      - name: Namespace governance (§7.4 reserved + confusable)
+        run: python3 scripts/index-ci/check_namespace.py --base "origin/${{ github.base_ref }}"

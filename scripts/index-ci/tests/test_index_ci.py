@@ -22,6 +22,7 @@ sys.path.insert(0, str(SCRIPTS))
 os.environ["DORA_INDEX_ROOT"] = str(FIXTURES)
 
 import check_append_only as cao  # noqa: E402
+import check_namespace as cns  # noqa: E402
 import validate_entries as ve  # noqa: E402
 
 PASSED = 0
@@ -193,9 +194,49 @@ def test_subdir_no_traversal() -> None:
     check("newline-smuggled dotdot rejected", not subdir_ok("ok\n../../etc"))
 
 
+def test_namespace_screening() -> None:
+    print("check_namespace.review_tier:")
+    existing = {"dora-rs", "acme"}
+    reserved = {"dora", "dora-rs", "std", "hub"}
+
+    def tier(ns: str) -> str:
+        return cns.review_tier(ns, existing - {ns}, reserved)[0]
+
+    def reason(ns: str) -> str:
+        return cns.review_tier(ns, existing - {ns}, reserved)[1]
+
+    # every new namespace needs at least a human reviewer — never auto-merge
+    check("fresh distinct namespace needs human review", tier("widgetworks") == "human")
+    check("distinct longer name needs human review", tier("acme-robotics") == "human")
+    # only RESERVED claims escalate to an index admin (§7.4)
+    check("reserved namespace needs admin", tier("std") == "admin")
+    # confusables get mandatory HUMAN review (not admin), but flagged in the
+    # reason so the detection is still proven (not silently defaulting to "new")
+    check("homoglyph of reserved is human review", tier("d0ra") == "human")
+    check("homoglyph of reserved is flagged confusable", "confusable" in reason("d0ra"))
+    check("homoglyph of existing is human review (0->o)", tier("d0ra-rs") == "human")
+    check("homoglyph of existing flagged", "confusable" in reason("d0ra-rs"))
+    check("rn->m confusable flagged", "confusable" in reason("acrne"))
+    check("edit-distance-1 of existing flagged", "confusable" in reason("acme2"))
+
+    # homoglyph + structural edit must not compose past the gate (the d0rars
+    # class): a 0->o swap AND a dropped/extra hyphen is still one skeleton
+    check("homoglyph + dropped hyphen flagged", "confusable" in reason("d0rars"))
+    check("homoglyph + double hyphen flagged", "confusable" in reason("d0ra--rs"))
+    check("dropped hyphen alone flagged", "confusable" in reason("dorars"))
+    # bigram lookalikes: cl->d, vv->w, nn->m
+    check("cl->d homoglyph flagged", "confusable" in reason("clora-rs"))
+
+    # the homoglyph normalizer and metric the gate is built on
+    check("normalize collapses 0/1/3/5 and rn", cns.normalize("d0rn3") == "dome")
+    check("levenshtein basic", cns.levenshtein("acme", "acme2") == 1)
+    check("levenshtein rn vs m is 2", cns.levenshtein("acrne", "acme") == 2)
+
+
 if __name__ == "__main__":
     test_validate()
     test_append_only()
+    test_namespace_screening()
     test_subdir_no_traversal()
     test_empty_binary_rejected()
     test_symlink_rejected()
