@@ -57,6 +57,9 @@ jobs:
           AUTHOR: ${{ github.event.pull_request.user.login }}
           PR: ${{ github.event.pull_request.number }}
           GH_TOKEN: ${{ github.token }}
+          # the workspace is the (forked) head repo, so pin gh to the BASE repo
+          # — otherwise `gh pr merge` targets the fork and silently no-ops
+          GH_REPO: ${{ github.repository }}
         run: |
           set +e
           "$GATE" validate; v=$?

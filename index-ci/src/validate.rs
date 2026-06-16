@@ -160,6 +160,7 @@ fn validate_file(
 /// non-empty binary list, with a safe `subdir` and unique binary platforms.
 /// Mirrors `dora-hub-client`'s `SourceSpec::git_pin` rules.
 pub fn validate_source(source: &SourceSpec) -> eyre::Result<()> {
+    let binary = source.binary.as_deref().unwrap_or(&[]);
     match (&source.git, &source.rev) {
         (Some(git), Some(rev)) => {
             validate_git_url(git)?;
@@ -168,14 +169,18 @@ pub fn validate_source(source: &SourceSpec) -> eyre::Result<()> {
                 bail!("`rev` must be a full 40- or 64-char hex object id");
             }
         }
-        (None, None) if !source.binary.is_empty() => {} // binary form (reserved, P2.8)
+        (None, None) if !binary.is_empty() => {} // binary form (reserved, P2.8)
         (None, None) => bail!("no usable source: needs `git`+`rev` or a non-empty `binary`"),
         _ => bail!("incomplete git source (needs both `git` and `rev`)"),
+    }
+    // a `binary` key, if present, must not be empty (schema `minItems: 1`)
+    if matches!(&source.binary, Some(b) if b.is_empty()) {
+        bail!("`source.binary` is present but empty");
     }
     if let Some(subdir) = &source.subdir {
         validate_subdir(subdir)?;
     }
-    check_binary_artifacts(&source.binary)?;
+    check_binary_artifacts(binary)?;
     // a `fallback-git` source must itself be a valid source — same full-hash pin,
     // URL, subdir, and binary rules (the old schema applied $ref recursively)
     if let Some(fb) = &source.fallback_git {

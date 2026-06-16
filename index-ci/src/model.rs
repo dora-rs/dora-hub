@@ -57,8 +57,10 @@ pub struct SourceSpec {
     pub rev: Option<String>,
     #[serde(default)]
     pub subdir: Option<String>,
+    // `Option` (not bare `Vec`) so a *present but empty* list can be rejected
+    // (the old schema's `minItems: 1`) — absent is `None`, `binary: []` is `Some([])`.
     #[serde(default)]
-    pub binary: Vec<BinaryArtifact>,
+    pub binary: Option<Vec<BinaryArtifact>>,
     #[serde(default, rename = "fallback-git")]
     pub fallback_git: Option<Box<SourceSpec>>,
 }

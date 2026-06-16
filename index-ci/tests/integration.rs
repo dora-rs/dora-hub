@@ -218,6 +218,13 @@ fn source_validation() {
         validate_source(&source("binary: []\n")).is_err(),
         "empty binary = no source"
     );
+    assert!(
+        validate_source(&source(&format!(
+            "git: https://x/y\nrev: {full}\nbinary: []\n"
+        )))
+        .is_err(),
+        "a present-but-empty binary list is rejected even with a git pin"
+    );
     let hash = "a".repeat(64);
     assert!(
         validate_source(&source(&format!(
