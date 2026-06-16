@@ -35,7 +35,7 @@ Wire any node's output into `terminal-print`:
 ```yaml
 nodes:
   - id: terminal-print
-    hub: terminal-print@^0.5      # or, from source: path: <repo>/node-hub/terminal-print
+    hub: terminal-print@^0.5
     inputs:
       text: some-node/output
 ```

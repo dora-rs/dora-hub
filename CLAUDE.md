@@ -52,7 +52,7 @@ Every node must ship a `README.md`. `dora-node.yml` is the machine contract; the
 - [ ] **Inputs** — each input id + type, or "accepts any input" for generic sinks.
 - [ ] **Outputs** — each output id + type, or "None" for sinks.
 - [ ] **Environment variables** — name, type, default, meaning (mirror `dora-node.yml`'s `env`), or "None".
-- [ ] **Usage** — a copy-pasteable dataflow YAML snippet wiring the node (`hub:` and/or `path:`).
+- [ ] **Usage** — a copy-pasteable dataflow YAML snippet wiring the node. Prefer the `hub:` form. If you show a from-source `path:`, it is the built **executable** (the manifest `entrypoint`, e.g. `target/release/<bin>`), paired with `build:` — never the package directory.
 - [ ] **Build** — for workspace-member Rust nodes, note `cargo build --release --target-dir target` (package-local binary, matches `entrypoint`).
 
 No broken relative links to examples in the upstream `dora-rs/dora` repo — inline the snippet instead.
