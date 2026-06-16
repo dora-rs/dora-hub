@@ -22,8 +22,7 @@ metadata parameter, and if absent infers one from a keyword contained in the
 input id (e.g. an id containing `image`). An id containing more than one keyword,
 or an unknown primitive, is an error. The supported primitives are: `image`,
 `depth`, `text`, `boxes2d`, `boxes3d`, `masks`, `jointstate`, `pose`, `series`,
-`points3d`, `points2d`, and `lines3d` (the last is selectable only via the
-`primitive` metadata parameter).
+`points3d`, `points2d`, and `lines3d`.
 
 Some primitives read extra per-message metadata parameters — for example
 `width`/`height`/`encoding` for `image` and `depth`, `format` for `boxes2d`/
@@ -73,7 +72,7 @@ nodes:
     outputs:
       - image
   - id: dora-rerun
-    hub: dora-rerun@^1.0
+    hub: dora-rerun@^0.5
     inputs:
       image: camera/image
     env:

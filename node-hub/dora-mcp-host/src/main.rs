@@ -95,7 +95,7 @@ async fn main() -> eyre::Result<()> {
                         .collect::<Vec<_>>();
                     node.send_output(
                         DataId::from(output),
-                        Default::default(),
+                        metadata,
                         StringArray::from(texts),
                     )
                     .context("failed to send dora output")?;

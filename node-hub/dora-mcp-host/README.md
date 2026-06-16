@@ -28,7 +28,7 @@ The node stops on a Dora `Stop` event or when the HTTP server task ends.
 
 ## Inputs
 
-- `tick`: reply stream for the Dora provider. A node wired here receives the
+- `text`: reply stream for the Dora provider. A node wired here receives the
   prompt on the configured output and must reply with a UTF-8 string array
   carrying the same `__dora_call_id` metadata parameter. The input is matched by
   metadata, not by id, so any input id may be wired; inputs without a matching
@@ -36,7 +36,7 @@ The node stops on a Dora `Stop` event or when the HTTP server task ends.
 
 ## Outputs
 
-- `tick`: the chat prompt forwarded to the dataflow when a request routes to the
+- `text`: the chat prompt forwarded to the dataflow when a request routes to the
   Dora provider, emitted as a UTF-8 string array with a `__dora_call_id`
   metadata parameter. The actual output id is set by the `output` field of the
   Dora provider in the config file.
