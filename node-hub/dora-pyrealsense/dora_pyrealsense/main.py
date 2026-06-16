@@ -26,7 +26,7 @@ def main():
 
     # Serial list
     serials = [device.get_info(rs.camera_info.serial_number) for device in devices]
-    if device_serial and (device_serial in serials):
+    if device_serial and (device_serial not in serials):
         raise ConnectionError(
             f"Device with serial {device_serial} not found within: {serials}.",
         )
@@ -34,7 +34,10 @@ def main():
     pipeline = rs.pipeline()
 
     config = rs.config()
-    config.enable_device(device_serial)
+    # only request a specific device when a serial is given; an empty serial
+    # means "use the default device" (enable_device("") would request serial "")
+    if device_serial:
+        config.enable_device(device_serial)
     config.enable_stream(rs.stream.color, image_width, image_height, rs.format.rgb8, 30)
     config.enable_stream(rs.stream.depth, image_width, image_height, rs.format.z16, 30)
 

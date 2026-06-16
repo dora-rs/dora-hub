@@ -1,5 +1,54 @@
-# Dora Node for sending terminal input data.
+# terminal-input
 
-This node send the data that is given to him within a terminal window.
+Reads data from the terminal (or the `DATA` env var) and emits it as an Apache Arrow output.
 
-Check example at [examples/echo](examples/echo)
+## Behavior
+
+`terminal-input` connects as a dora node and sends a `data` output. If the node
+isn't connected yet it waits and retries, so wiring order doesn't matter.
+
+- **Interactive mode** (no `DATA` env var and no `DORA_NODE_CONFIG`): it prompts
+  `Provide the data you want to send:` on stdin in a loop. Each line is parsed
+  with `ast.literal_eval` (falling back to a plain string on `ValueError` /
+  `SyntaxError`), wrapped in a `pyarrow` array, and sent as the `data` output.
+  After each send it drains any pending input events and prints them as
+  `Received: <value>`.
+- **Single-shot mode** (`DATA` env var set, or `DORA_NODE_CONFIG` present): it
+  parses the value once, wraps it in a `pyarrow` array, and sends it as `data`.
+  Under Hub (`DORA_NODE_CONFIG` is set), the node is non-interactive, so `DATA`
+  **must** be provided — otherwise there is nothing to send and it errors.
+
+## Inputs
+
+None declared. In interactive mode it does read back any input events that are
+wired to it and prints them, but there is no fixed or typed input contract (so
+`dora-node.yml` declares none).
+
+## Outputs
+
+- `data` — the value typed at the prompt (or taken from the `DATA` env var),
+  parsed via `ast.literal_eval` and wrapped in an Arrow array.
+
+## Environment variables
+
+- `DATA` — the value to send (parsed via `ast.literal_eval`). **Required under
+  Hub** (a daemon-spawned node is non-interactive). Only when run standalone on a
+  terminal does the node prompt for input instead.
+
+## Usage
+
+```yaml
+nodes:
+  - id: terminal-input
+    hub: terminal-input@^0.5
+    env:
+      DATA: "Hello, dora!"
+    outputs:
+      - data
+```
+
+## Build
+
+```bash
+pip install .
+```

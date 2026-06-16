@@ -1,88 +1,83 @@
-# Dora Node for capturing video with PyRealSense
+# dora-pyrealsense
 
-This node is used to capture video from a camera using PyRealsense.
+Captures aligned RGB color and depth frames from an Intel RealSense camera.
 
-# Installation
+## Behavior
 
-Make sure to use realsense udev config at https://github.com/IntelRealSense/librealsense/blob/master/doc/installation.md
+On startup the node queries for connected RealSense devices and raises a
+`ConnectionError` if none are found. It opens the device selected by
+`DEVICE_SERIAL` (or the default device) and enables a color stream
+(`rgb8`) and a depth stream (`z16`) at `IMAGE_WIDTH` x `IMAGE_HEIGHT`, 30 FPS.
+Depth frames are aligned to the color stream via `rs.align`.
 
-You can try, the following:
+On each `tick` input it waits for a frame set, aligns it, and:
 
-```bash
-wget https://raw.githubusercontent.com/IntelRealSense/librealsense/refs/heads/master/scripts/setup_udev_rules.sh
+- Optionally flips the color frame (`FLIP` = `VERTICAL` / `HORIZONTAL` / `BOTH`).
+- Encodes the color frame per `ENCODING` (`rgb8` passthrough, `bgr8` color
+  conversion, or OpenCV image encoding for `jpeg`/`jpg`/`jpe`/`bmp`/`webp`/`png`).
+- Sends the color frame on `image` with metadata (`encoding`, `width`,
+  `height`, `resolution` = RGB principal point, `focal_length`, `timestamp`).
+- Zeros depth values above 5000, then sends the depth frame on `depth` as
+  `mono16`, reusing the color frame metadata.
 
-mkdir config
-cd config
-wget https://raw.githubusercontent.com/IntelRealSense/librealsense/master/config/99-realsense-libusb.rules
+When the `CI` environment variable is `true`, the node runs for only 10 seconds.
 
-cd ..
+## Inputs
 
-chmod +x setup_udev_rules.sh
-```
+- `tick`: trigger to capture one aligned color + depth frame.
 
-# YAML
+## Outputs
 
-```yaml
-- id: opencv-video-capture
-  build: pip install ../../opencv-video-capture
-  path: opencv-video-capture
-  inputs:
-    tick: dora/timer/millis/16 # try to capture at 60fps
-  outputs:
-    - image: # the captured image
+- `image`: color frame as a flattened Arrow array (`pa.array(frame.ravel())`).
+  Metadata: `encoding`, `width`, `height`, `resolution`, `focal_length`,
+  `timestamp`.
+- `depth`: aligned depth frame (`mono16`, values > 5000 zeroed) as a flattened
+  Arrow array, sharing the color frame metadata.
 
-  env:
-    PATH: 0 # optional, default is 0
-
-    IMAGE_WIDTH: 640 # optional, default is video capture width
-    IMAGE_HEIGHT: 480 # optional, default is video capture height
-```
-
-# Inputs
-
-- `tick`: empty Arrow array to trigger the capture
-
-# Outputs
-
-- `image`: an arrow array containing the captured image
+Decoding the `image` output:
 
 ```Python
-## Image data
-image_data: UInt8Array # Example: pa.array(img.ravel())
-metadata = {
-  "width": 640,
-  "height": 480,
-  "encoding": str, # bgr8, rgb8
-}
-
-## Example
-node.send_output(
-  image_data, {"width": 640, "height": 480, "encoding": "bgr8"}
-  )
-
-## Decoding
 storage = event["value"]
-
 metadata = event["metadata"]
 encoding = metadata["encoding"]
 width = metadata["width"]
 height = metadata["height"]
 
-if encoding == "bgr8":
+if encoding in ["rgb8", "bgr8"]:
     channels = 3
-    storage_type = np.uint8
-
-frame = (
-    storage.to_numpy()
-    .astype(storage_type)
-    .reshape((height, width, channels))
-)
+    frame = (
+        storage.to_numpy()
+        .astype(np.uint8)
+        .reshape((height, width, channels))
+    )
 ```
 
-## Examples
+## Environment variables
 
-Check example at [examples/python-dataflow](examples/python-dataflow)
+- `FLIP`: flip the color frame; one of `VERTICAL`, `HORIZONTAL`, `BOTH` (empty disables). Default empty.
+- `DEVICE_SERIAL`: serial number of the RealSense device to open (empty selects the default device). Default empty.
+- `IMAGE_HEIGHT`: requested stream height in pixels. Default `480`.
+- `IMAGE_WIDTH`: requested stream width in pixels. Default `640`.
+- `ENCODING`: color output encoding; `rgb8`, `bgr8`, or an OpenCV-encoded format (`jpeg`, `jpg`, `jpe`, `bmp`, `webp`, `png`). Default `rgb8`.
 
-## License
+Make sure to install the RealSense udev rules:
+<https://github.com/IntelRealSense/librealsense/blob/master/doc/installation.md>
 
-This project is licensed under Apache-2.0. Check out [NOTICE.md](../../NOTICE.md) for more information.
+## Usage
+
+```yaml
+nodes:
+  - id: dora-pyrealsense
+    hub: dora-pyrealsense@^0.5
+    inputs:
+      tick: dora/timer/millis/33
+    outputs:
+      - image
+      - depth
+```
+
+## Build
+
+```bash
+pip install .
+```

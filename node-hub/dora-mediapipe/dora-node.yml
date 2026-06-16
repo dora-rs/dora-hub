@@ -1,0 +1,32 @@
+apiVersion: 1
+name: dora-mediapipe
+namespace: dora-rs
+description: MediaPipe pose estimation — turns RGB image frames into 2D (and optional depth-derived 3D) body landmarks.
+categories: [ml-inference]
+keywords: [mediapipe, pose, landmarks, vision, image]
+runtime: python
+entrypoint: dora-mediapipe
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+inputs:
+  image:
+    required: true
+    description: RGB/BGR or encoded (jpeg/png/bmp/webp) image frame with width/height/encoding metadata; pose landmarks are extracted from it.
+  depth:
+    required: false
+    description: Depth frame (with focal_length and resolution metadata) used to lift detected landmarks into 3D coordinates.
+outputs:
+  points2d:
+    description: Flattened (x, y) pixel coordinates of the detected pose landmarks.
+  points3d:
+    description: Flattened (x, y, z) 3D coordinates of the pose landmarks, emitted only when a depth input has been received.
+example: |
+  - id: dora-mediapipe
+    hub: dora-mediapipe@^0.5
+    inputs:
+      image: camera/image
+      depth: camera/depth      # required for the points3d output
+    outputs:
+      - points2d
+      - points3d
