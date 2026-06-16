@@ -1,40 +1,71 @@
-## LeRobot Record Interface
+# lerobot-dashboard
 
-Simple Interface that uses Pygame to display images and texts. It also manages keyboard events.
-This simple interface can only display two images of the same size side by side and a text in the middle bottom of the
-screen.
+Pygame dashboard for LeRobot dataset recording — displays two images side by side
+plus a status text, and turns keyboard events into episode-recording control
+outputs.
 
-## YAML Configuration
+## Behavior
 
-````YAML
-nodes:
-  - id: lerobot_record
-    path: record.py # modify this to the relative path from the graph file to the client script
-    inputs:
-      tick: dora/timer/millis/16 # update the interface every 16ms (= 60fps)
+`lerobot-dashboard` opens a Pygame window and connects as a dora node. On each
+`tick` it redraws the window (left image, right image, and a status text at the
+bottom center) and processes pending keyboard events:
 
-      # image_left: some image from other node 
-      # image_right: some image from other node
-    outputs:
-      - text
-      - episode
-      - failed
-      - end # end signal that can be sent to other nodes (sent when the window is closed)
+- **Space**: toggle recording. When starting, it emits `episode` with the current
+  episode index; when stopping, it emits `episode` with `-1` and advances the
+  episode index.
+- **Return**: mark an episode as failed. While recording, it emits `failed` with
+  the current episode index, advances the index, and emits `episode` with `-1`.
+  When idle (and at least one episode exists), it emits `failed` with the previous
+  episode index.
+- **Window close (QUIT)**: ends the loop.
 
-    env:
-      WINDOW_WIDTH: 1280 # window width (default is 640) 
-      WINDOW_HEIGHT: 1080 # window height (default is 480)
-````
+The status text is rendered locally (e.g. "Recording episode N"); it is not
+emitted as an output. Each `tick` is echoed back on the `tick` output. When the
+window closes, an empty `end` output is sent.
 
 ## Inputs
 
-## Outputs:
+- `image_left`: image for the left half of the window (dora Arrow image struct
+  with `width`/`height`/`channels`/`data`, interpreted as BGR).
+- `image_right`: image for the right half of the window (same format).
+- `tick`: refresh trigger; drives redraw and keyboard handling.
 
-- `text` : Array containing 1 element, the text in Arrow format.
-- `episode` : Array containing 1 element, the episode number in Arrow format (or -1, marks episode end).
-- `failed` : Array containing 1 element, the episode number failed in Arrow format.
-- `end` : Array containing 1 empty element, indicates the end of recording to the dataflow.
+## Outputs
 
-## License
+- `tick`: echoed once per received tick (empty array), forwarding the tick's
+  metadata.
+- `episode`: single-element array — the episode index when recording starts, or
+  `-1` when recording stops.
+- `failed`: single-element array — the index of the episode marked as failed.
+- `end`: single empty-element array, emitted when the window is closed.
 
-This library is licensed under the [Apache License 2.0](../../LICENSE).
+## Environment variables
+
+- `WINDOW_WIDTH` (int, default `640`): window width in pixels.
+- `WINDOW_HEIGHT` (int, default `480`): window height in pixels.
+
+## Usage
+
+```yaml
+nodes:
+  - id: lerobot-dashboard
+    hub: lerobot-dashboard@^0.5
+    inputs:
+      tick: dora/timer/millis/16
+      image_left: camera-left/image
+      image_right: camera-right/image
+    outputs:
+      - tick
+      - episode
+      - failed
+      - end
+    env:
+      WINDOW_WIDTH: 1280
+      WINDOW_HEIGHT: 1080
+```
+
+## Build
+
+```bash
+pip install .
+```

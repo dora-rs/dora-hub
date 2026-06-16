@@ -1,0 +1,41 @@
+apiVersion: 1
+name: dora-mujoco-husky
+namespace: dora-rs
+description: MuJoCo-based Clearpath Husky mobile-robot simulation node. Consumes velocity commands, steps the physics sim, and emits the robot's position and velocity.
+categories: [simulator, robot]
+keywords: [mujoco, husky, simulation, mobile-robot, physics]
+runtime: python
+entrypoint: dora-mujoco-husky
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  cmd_vel:
+    required: false
+    description: Velocity command array; index 0 is linear velocity (m/s, clamped to [-2.0, 2.0]), index 5 is angular velocity (rad/s, clamped to [-3.0, 3.0]).
+
+outputs:
+  position:
+    description: Robot base position [x, y, z] from MuJoCo qpos, as float64.
+  velocity:
+    description: Robot base velocity [vx, vy, vz] from MuJoCo qvel, as float64.
+
+env: {}
+
+example: |
+  nodes:
+    - id: gamepad
+      hub: gamepad@^0.5
+      inputs:
+        tick: dora/timer/millis/10
+      outputs:
+        - cmd_vel
+
+    - id: mujoco_husky
+      hub: dora-mujoco-husky@^0.5
+      inputs:
+        cmd_vel: gamepad/cmd_vel
+      outputs:
+        - position
+        - velocity

@@ -1,0 +1,74 @@
+apiVersion: 1
+name: dora-transformers
+namespace: dora-rs
+description: >-
+  Generate text with a Hugging Face transformers causal-LM. Receives an input
+  string, applies the tokenizer chat template, generates a reply, and emits the
+  decoded text. Supports an optional system prompt, activation-word gating, and
+  multi-turn history.
+categories: [llm, ml-inference]
+keywords: [transformers, huggingface, text-generation, llm, chat]
+runtime: python
+entrypoint: dora-transformers
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  text:
+    required: false
+    description: >-
+      Prompt string to generate a response for. The first element of the Arrow
+      array is read as the user message.
+
+outputs:
+  text:
+    description: Generated response text as a single-element UTF-8 Arrow array.
+
+env:
+  MODEL_NAME:
+    type: string
+    default: "Qwen/Qwen2.5-0.5B-Instruct"
+    description: Hugging Face model identifier or local path to load.
+  SYSTEM_PROMPT:
+    type: string
+    default: ""
+    description: >-
+      Optional system message prepended to the conversation. Empty disables it.
+  MAX_TOKENS:
+    type: int
+    default: 512
+    description: Maximum number of new tokens to generate per response.
+  DEVICE:
+    type: string
+    default: "auto"
+    description: >-
+      device_map passed to from_pretrained (e.g. "auto", "cpu", "cuda", "mps").
+  TORCH_DTYPE:
+    type: string
+    default: "auto"
+    description: torch_dtype passed to from_pretrained (e.g. "auto", "float16").
+  HISTORY:
+    type: bool
+    default: false
+    description: >-
+      When true, keep multi-turn conversation history across inputs; otherwise
+      each input is answered independently.
+  ACTIVATION_WORDS:
+    type: string
+    default: ""
+    description: >-
+      Space-separated trigger words. When set, a response is only generated if
+      the input contains at least one of them. Empty responds to every input.
+
+example: |
+  - id: dora-transformers
+    hub: dora-transformers
+    inputs:
+      text: source-node/text
+    outputs:
+      - text
+    env:
+      MODEL_NAME: "Qwen/Qwen2.5-0.5B-Instruct"
+      SYSTEM_PROMPT: "You are a succinct AI assistant with short answers."
+      MAX_TOKENS: "128"

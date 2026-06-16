@@ -1,107 +1,63 @@
 # dora-mujoco-husky
 
-A MuJoCo-based Clearpath Husky simulation node for the Dora framework. This node provides a physics-accurate simulation of the Husky robot that can be controlled via velocity commands.
+A MuJoCo-based Clearpath Husky mobile-robot simulation node. It consumes
+velocity commands, steps a physics-accurate Husky model, and emits the robot's
+position and velocity feedback.
 
-## Features
+## Behavior
 
-- Real-time physics simulation using MuJoCo
-- Accurate Husky robot model with proper inertial properties
-- Velocity-based control interface
-- Position and velocity feedback
-- Gamepad control support
+On startup the node downloads the required Husky meshes, loads the
+`husky/husky.xml` MuJoCo model, and opens a passive viewer window.
 
-## Getting Started
+For each `cmd_vel` input it:
 
-### Prerequisites
+- reads linear velocity from index 0 (clamped to [-2.0, 2.0] m/s) and angular
+  velocity from index 5 (clamped to [-3.0, 3.0] rad/s),
+- converts them to left/right wheel velocities (wheel radius 0.17775 m, track
+  width 0.59 m) and applies them to the four wheel actuators,
+- advances the simulation one step and syncs the viewer,
+- emits the base `position` (qpos[:3]) and `velocity` (qvel[:3]).
 
-- Python 3.8 or higher
-- MuJoCo 3.1.6 or higher
+Inputs other than `cmd_vel` are ignored.
 
-### Installation
+## Inputs
 
-1. Create and activate a Python virtual environment:
-```bash
-uv venv -p 3.11 --seed
-source .venv/bin/activate
-```
+- `cmd_vel`: velocity command array. Index 0 = linear velocity (m/s, clamped to
+  [-2.0, 2.0]); index 5 = angular velocity (rad/s, clamped to [-3.0, 3.0]).
 
-2. Install the package:
-```bash 
-uv pip install -e .
-```
+## Outputs
 
-### Running the Demo
+- `position`: base position `[x, y, z]` from MuJoCo `qpos`, float64.
+- `velocity`: base velocity `[vx, vy, vz]` from MuJoCo `qvel`, float64.
 
-1. Make sure you have a gamepad connected
-2. Build the demo:
-```bash
-dora build demo.yml --uv
-```
-3. Run the demo:
-```bash
-dora run demo.yml --uv
-```
+## Environment variables
+
+None.
 
 ## Usage
 
-The node accepts velocity commands and outputs position/velocity data:
-
-### Inputs
-
-- `cmd_vel`: Velocity command array with the format:
-  - Index 0: Linear velocity (m/s), range: [-2.0, 2.0]
-  - Index 5: Angular velocity (rad/s), range: [-3.0, 3.0]
-
-### Outputs
-
-- `position`: Robot position [x, y, z] in world coordinates
-- `velocity`: Robot velocity [vx, vy, vz] in world coordinates
-
-### Example Configuration
+Drive the sim from a gamepad and inspect its output:
 
 ```yaml
 nodes:
-  - id: mujoco_husky
-    build: pip install -e .
-    path: dora-mujoco-husky
+  - id: gamepad
+    hub: gamepad@^0.5
     inputs:
-      cmd_vel: input_source/cmd_vel
+      tick: dora/timer/millis/10
+    outputs:
+      - cmd_vel
+
+  - id: mujoco_husky
+    hub: dora-mujoco-husky@^0.5
+    inputs:
+      cmd_vel: gamepad/cmd_vel
     outputs:
       - position
       - velocity
 ```
 
-## Development
+## Build
 
-### Code Formatting
-
-Format code using ruff:
 ```bash
-uv pip install ruff
-uv run ruff check . --fix
+pip install .
 ```
-
-### Linting
-
-Run linting checks:
-```bash
-uv run ruff check .
-```
-
-### Testing
-
-Run tests using pytest:
-```bash
-uv pip install pytest
-uv run pytest .
-```
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- Based on the Clearpath Robotics Husky robot
-- Uses the MuJoCo physics engine
-- Built with the Dora framework

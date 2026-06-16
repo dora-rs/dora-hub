@@ -1,235 +1,73 @@
 # dora-mujoco
 
-A MuJoCo physics simulation node for the Dora dataflow framework. This node provides real-time physics simulation with support for a wide range of robots from the `robot_descriptions` package, as well as custom robot models. Designed for modular robotics control architectures.
+A MuJoCo physics simulation node for the Dora dataflow framework. It loads a
+robot model, steps the physics once per received event, applies actuator
+control inputs, and emits joint and sensor state.
 
-## Features
+## Behavior
 
-- **Wide Robot Support**: Built-in support for 50+ robot models including quadrupeds, humanoids, arms, drones, and more
-- **Flexible Model Loading**: Load robots by name (via robot_descriptions) or direct XML file paths
-- **Real-time Simulation**: Continuous physics simulation with configurable tick rates
-- **Live Visualization**: Optional MuJoCo viewer for real-time 3D visualization
-- **Generic Control Interface**: Accepts control commands for any robot type
-- **Rich Data Output**: Joint positions, velocities, accelerations, and sensor data
+On startup the node loads a model named by the `MODEL_NAME` environment
+variable. If `MODEL_NAME` is a path to an existing `.xml` file it is loaded
+directly; otherwise it is treated as a `robot_descriptions` name and loaded with
+its `scene` variant. The model is reset to its first keyframe (or to zero if it
+has none), and a passive MuJoCo viewer is launched for live visualization.
 
+The node then runs the Dora event loop. For every event it receives it steps the
+physics simulation once and syncs the viewer. When the event is an input, after
+stepping it emits the current state (`joint_positions`, `joint_velocities`,
+`actuator_controls`, and `sensor_data` when the model has sensors). A
+`control_input` event additionally applies its values to the model's actuators
+before the step — each value is clamped to that actuator's control range, and
+values beyond the actuator count are ignored.
 
-## Supported Robot Categories
+## Inputs
 
-| Category | Examples |
-|----------|----------|
-| **Quadrupeds** | Unitree Go1/Go2/A1, ANYmal B/C, Boston Dynamics Spot |
-| **Humanoids** | Unitree G1/H1, Apptronik Apollo, TALOS, JVRC-1 |
-| **Arms** | Franka Panda, KUKA iiwa14, Universal Robots UR5e/UR10e |
-| **Dual Arms** | Aloha 2, Baxter, YuMi |
-| **End Effectors** | Allegro Hand, Shadow Hand, Robotiq 2F-85 |
-| **Drones** | Crazyflie 2.0, Skydio X2 |
-| **Educational** | Double Pendulum |
+- `tick` (required): drives the simulation. Each received event steps the
+  physics once and triggers the state outputs. Wire to a timer such as
+  `dora/timer/millis/2` for ~500 Hz.
+- `control_input` (optional): actuator commands as a float64 Arrow array,
+  applied in actuator order and clamped to each actuator's control range.
 
-## Getting Started
+## Outputs
 
-### Quick Start
+- `joint_positions`: joint positions (MuJoCo `qpos`), float64 Arrow array.
+  Metadata: `timestamp`, `encoding: jointstate`.
+- `joint_velocities`: joint velocities (MuJoCo `qvel`), float64 Arrow array.
+  Metadata: `timestamp`.
+- `actuator_controls`: current actuator commands (MuJoCo `ctrl`), float64 Arrow
+  array. Metadata: `timestamp`.
+- `sensor_data`: sensor readings (MuJoCo `sensordata`), float64 Arrow array.
+  Emitted only when the model defines sensors. Metadata: `timestamp`.
 
-1. **Run a simple simulation**:
-```bash
-dora build demo.yml 
-# Start with Unitree Go2 quadruped
-dora run demo.yml
-```
+## Environment variables
 
-2. **Use different robots**:
-```python
-# In main.py, modify the model name (line ~95)
-model_path_or_name = "franka_panda"  # Change this line
-# Examples: "go2", "franka_panda", "g1", "spot", etc.
-```
+- `MODEL_NAME` (default `go2_mj_description`): robot to load — a
+  `robot_descriptions` name (loaded as its `scene` variant) or a path to a
+  MuJoCo `.xml` model file.
 
-3. **Use custom robot models**:
-```python
-# In main.py, use file path instead of model name
-model_path_or_name = "/path/to/my_robot/scene.xml"
-```
+## Usage
 
-## Usage Examples
-TODO
+Drive the simulation with a timer and (optionally) wire a controller into
+`control_input`:
 
-### Available Robot Models
-The simulator supports all models from the `robot_descriptions` package. Common names include:
-
-- **Quadrupeds**: `go1`, `go2`, `a1`, `aliengo`, `anymal_b`, `anymal_c`, `spot`
-- **Humanoids**: `g1`, `h1`, `apollo`, `talos`, `jvrc`, `cassie`
-- **Arms**: `panda`, `ur5e`, `ur10e`, `iiwa14`, `gen3`, `sawyer`
-- **Hands**: `allegro_hand`, `shadow_hand`, `leap_hand`, `robotiq_2f85`
-
-See [`robot_models.json`](dora_mujoco/robot_models.json) for the complete list.
-
-## Architecture
-
-The `dora-mujoco` node is designed to be **robot-agnostic** and work with **robot-specific controllers**:
-
-```
-┌─────────────────┐    
-│  Command Node   │    target_pose/cmd_vel
-│  (Gamepad, etc) │─────────────┐
-└─────────────────┘             │
-                                ▼
-┌─────────────────┐    control_input   ┌─────────────────┐
-│ Robot Controller│───────────────────▶│  dora-mujoco    │
-│ (Franka, Husky) │                    │                 │
-└─────────────────┘                    │ ┌─────────────┐ │    joint_positions
-           ▲                           │ │  Simulator  │ │──────────────────▶
-           │        joint_positions    │ │             │ │    joint_velocities  
-           └───────────────────────────│ │  ┌────────┐ │ │──────────────────▶
-                                       │ │  │Renderer│ │ │    actuator_controls
-                                       │ │  └────────┘ │ │──────────────────▶
-                                       │ │             │ │    sensor_data
-                                       │ └─────────────┘ │──────────────────▶
-                                       └─────────────────┘
-the control nodes are optional (the robot will still spawn without them)
-```
-
-## YAML Specification
-
-### Node Configuration
 ```yaml
 nodes:
-  - id: mujoco_sim
-    build: pip install -e .
-    path: dora-mujoco
-    env:
-      MODEL_NAME: "go2"  # Robot model name or file path
+  - id: mujoco-sim
+    hub: dora-mujoco@^0.5
     inputs:
-      TICK: dora/timer/millis/2  # Simulation tick rate (500Hz)
+      tick: dora/timer/millis/2
+      control_input: controller/output
     outputs:
-      - joint_positions    # Joint position array
-      - joint_velocities   # Joint velocity array  
-      - sensor_data       # Sensor readings array
+      - joint_positions
+      - joint_velocities
+      - actuator_controls
+      - sensor_data
+    env:
+      MODEL_NAME: go2_mj_description
 ```
 
-### Input Specification
-| Input | Type | Description |
-|-------|------|-------------|
-| `tick` | Timer | Triggers simulation steps and data output |
-| `control_input` | `pa.array(float64)` | Control commands for actuators |
+## Build
 
-**Control Input Format**:
-- **Manipulator Arms**: Joint position commands `[q1, q2, ..., q7, gripper]`
-- **Mobile Robots**: Wheel velocity commands `[wheel1, wheel2, wheel3, wheel4]`
-- **Quadrupeds**: Joint position commands `[hip1, thigh1, calf1, ...]`
-
-### Output Specification
-| Output | Type | Description | Metadata |
-|--------|------|-------------|----------|
-| `joint_positions` | `pa.array(float64)` | Joint positions (qpos) | `timestamp` |
-| `joint_velocities` | `pa.array(float64)` | Joint velocities (qvel) | `timestamp` |
-| `actuator_controls` | `pa.array(float64)` | Current actuator commands | `timestamp` |
-| `sensor_data` | `pa.array(float64)` | Sensor readings (if available) | `timestamp` |
-
-## Configuration Options
-
-### Environment Variables
-- `MODEL_NAME`: Robot model name or XML file path (default: "go2")
-
-### Custom Robot Models
-```python
-# Use direct XML file path
-env:
-  MODEL_NAME: "/path/to/my_robot/scene.xml"
-```
-
-### Simulation Parameters
-- **Physics Timestep**: Fixed at MuJoCo default (0.002s = 500Hz)
-- **Output Rate**: Controlled by `tick` input frequency
-- **Control Rate**: Determined by `control_input` frequency
-
-## Development
-
-### Code Quality
 ```bash
-# Format code
-uv run ruff check . --fix
-
-# Lint code  
-uv run ruff check .
-
-# Run tests
-uv pip install pytest
-uv run pytest .
+pip install .
 ```
-
-### Adding New Models
-To add support for new robot models:
-
-1. Add the model mapping to [`robot_models.json`](dora_mujoco/robot_models.json):
-```json
-{
-  "category_name": {
-    "my_robot": "my_robot_mj_description"
-  }
-}
-```
-
-2. Ensure the model is available in `robot_descriptions` or provide the XML file path directly.
-
-### Creating Robot Controllers
-
-Robot-specific controllers should:
-1. Subscribe to `joint_positions` from the simulation
-2. Implement robot-specific control logic (IK, dynamics, etc.)
-3. Publish `control_input` commands to the simulation
-
-
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Model not found**:
-   ```
-   ERROR: Model file not found for my_robot
-   ```
-   - Check if the model name exists in `robot_models.json`
-   - Verify `robot_descriptions` has the model installed
-   - Use absolute file path for custom models
-
-2. **Scene variant missing**:
-   ```
-   WARNING: Failed to load scene variant
-   ```
-   - Normal behavior - falls back to robot-only model
-   - Scene variants include ground plane and lighting
-
-3. **Control dimension mismatch**:
-   ```
-   WARNING: Control input size doesn't match actuators
-   ```
-   - Check that control commands match the robot's actuator count
-   - Use `print(model.nu)` to see expected control dimensions
-
-4. **Viewer issues**:
-   - Ensure proper OpenGL/graphics drivers
-   - Use headless mode for server environments
-
-## Examples
-
-Complete working examples are available in:
-- `dora/examples/mujoco-sim/`
-  - Target pose control with Cartesian space control
-  - Gamepad control with real-time interaction
-
-## License
-
-This project is released under the MIT License. See the LICENSE file for details.
-
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Follow the existing code style (ruff formatting)
-2. Add tests for new features
-3. Update documentation as needed
-4. Submit pull requests with clear descriptions
-
-## Related Projects
-
-- [Dora-rs](https://github.com/dora-rs/dora) - The dataflow framework
-- [MuJoCo](https://github.com/google-deepmind/mujoco) - Physics simulation engine  
-- [robot_descriptions](https://github.com/robot-descriptions/robot_descriptions) - Robot model collection

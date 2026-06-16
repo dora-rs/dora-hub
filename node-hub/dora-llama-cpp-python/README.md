@@ -1,152 +1,61 @@
 # dora-llama-cpp-python
 
-A Dora node that provides access to LLaMA models using llama-cpp-python for efficient CPU/GPU inference.
+LLM text generation via [llama-cpp-python](https://github.com/abetlen/llama-cpp-python).
+Consumes input text and emits a generated response (text -> text) using a GGUF
+model, with optional CUDA (Linux) / Metal (macOS) GPU acceleration.
 
-## Features
+## Behavior
 
-- GPU acceleration support (CUDA on Linux, Metal on macOS)
-- Easy integration with speech-to-text and text-to-speech pipelines  
-- Configurable system prompts and activation words
-- Lightweight CPU inference with GGUF models
-- Thread-level CPU optimization
-- Adjustable context window size
+On startup the node loads a GGUF model: if `MODEL_NAME_OR_PATH` points at an
+existing local file it is loaded directly, otherwise the model is downloaded
+from HuggingFace using `MODEL_NAME_OR_PATH` as the repo id and
+`MODEL_FILE_PATTERN` to pick the file.
 
-## Getting started
+For each input event the node takes the first element of the value as the prompt
+text. If `ACTIVATION_WORDS` is set, the prompt is only answered when it contains
+at least one of those words; if it is empty, every input is answered. It then
+calls `create_chat_completion` (optionally prefixed by a `SYSTEM_PROMPT` message)
+and sends the generated content on the `text` output.
 
-### Installation
+## Inputs
 
-```bash
-uv venv -p 3.11 --seed
-uv pip install -e .
-```
+- `text`: the prompt to generate a response for. The first array element is read
+  and used as the user message.
 
+## Outputs
+
+- `text`: the generated response string.
+
+## Environment variables
+
+- `SYSTEM_PROMPT` (string, default `""`): system prompt prepended to the chat. Empty means no system message.
+- `MODEL_NAME_OR_PATH` (string, default `TheBloke/Llama-2-7B-Chat-GGUF`): local GGUF path, or HuggingFace repo id to download.
+- `MODEL_FILE_PATTERN` (string, default `*Q4_K_M.gguf`): filename glob to select the GGUF file when downloading.
+- `MAX_TOKENS` (int, default `512`): maximum tokens generated per response.
+- `N_GPU_LAYERS` (int, default `0`): layers offloaded to GPU (e.g. `35` for full acceleration); `0` is CPU-only.
+- `N_THREADS` (int, default `4`): CPU threads used for inference.
+- `CONTEXT_SIZE` (int, default `4096`): maximum context window (`n_ctx`).
+- `ACTIVATION_WORDS` (string, default `""`): space-separated trigger words; when set, only prompts containing one are answered. Empty answers everything.
 
 ## Usage
 
-The node can be configured in your dataflow YAML file:
-
-```yaml
-
-# Using a HuggingFace model
-- id: dora-llama-cpp-python
-  build: pip install -e path/to/dora-llama-cpp-python
-  path: dora-llama-cpp-python
-  inputs:
-    text: source_node/text  # Input text to generate response for
-  outputs:
-    - text  # Generated response text
-  env:
-    MODEL_NAME_OR_PATH: "TheBloke/Llama-2-7B-Chat-GGUF"
-    MODEL_FILE_PATTERN: "*Q4_K_M.gguf"
-    SYSTEM_PROMPT: "You're a very succinct AI assistant with short answers."
-    ACTIVATION_WORDS: "what how who where you"
-    MAX_TOKENS: "512"
-    N_GPU_LAYERS: "35"     # Enable GPU acceleration
-    N_THREADS: "4"         # CPU threads
-    CONTEXT_SIZE: "4096"   # Maximum context window
-```
-
-### Configuration Options
-
-- `MODEL_NAME_OR_PATH`: Path to local model file or HuggingFace repo id (default: "TheBloke/Llama-2-7B-Chat-GGUF")
-- `MODEL_FILE_PATTERN`: Pattern to match model file when downloading from HF (default: "*Q4_K_M.gguf")
-- `SYSTEM_PROMPT`: Customize the AI assistant's personality/behavior
-- `ACTIVATION_WORDS`: Space-separated list of words that trigger model response
-- `MAX_TOKENS`: Maximum number of tokens to generate (default: 512)
-- `N_GPU_LAYERS`: Number of layers to offload to GPU (default: 0, set to 35 for GPU acceleration)
-- `N_THREADS`: Number of CPU threads to use (default: 4)
-- `CONTEXT_SIZE`: Maximum context window size (default: 4096)
-
-## Example: Speech Assistant Pipeline
-
-This example shows how to create a conversational AI pipeline that:
-1. Captures audio from microphone
-2. Converts speech to text
-3. Generates AI responses
-4. Converts responses back to speech
-
 ```yaml
 nodes:
-  - id: dora-microphone
-    build: pip install dora-microphone
-    path: dora-microphone
-    inputs:
-      tick: dora/timer/millis/2000
-    outputs:
-      - audio
-
-  - id: dora-vad
-    build: pip install dora-vad
-    path: dora-vad
-    inputs:
-      audio: dora-microphone/audio
-    outputs:
-      - audio
-      - timestamp_start
-
-  - id: dora-whisper
-    build: pip install dora-distil-whisper
-    path: dora-distil-whisper
-    inputs:
-      input: dora-vad/audio
-    outputs:
-      - text
-
   - id: dora-llama-cpp-python
-    build: pip install -e .
-    path: dora-llama-cpp-python
+    hub: dora-rs/dora-llama-cpp-python
     inputs:
-      text: dora-whisper/text
+      text: source-node/text
     outputs:
       - text
     env:
-      MODEL_NAME: "TheBloke/Llama-2-7B-Chat-GGUF"
+      MODEL_NAME_OR_PATH: TheBloke/Llama-2-7B-Chat-GGUF
       MODEL_FILE_PATTERN: "*Q4_K_M.gguf"
-      SYSTEM_PROMPT: "You're a helpful assistant."
-      ACTIVATION_WORDS: "hey help what how"
-      MAX_TOKENS: "512"
-      N_GPU_LAYERS: "35"
-      N_THREADS: "4"
-      CONTEXT_SIZE: "4096"
-
-  - id: dora-tts
-    build: pip install dora-kokoro-tts
-    path: dora-kokoro-tts
-    inputs:
-      text: dora-llama-cpp-python/text
-    outputs:
-      - audio
+      SYSTEM_PROMPT: "You're a very succinct AI assistant with short answers."
+      MAX_TOKENS: 512
 ```
 
-### Running the Example
+## Build
 
 ```bash
-dora build example.yml
-dora run example.yml
+pip install .
 ```
-
-## Contribution Guide
-
-- Format with [ruff](https://docs.astral.sh/ruff/):
-
-```bash
-uv pip install ruff
-uv run ruff check . --fix
-```
-
-- Lint with ruff:
-
-```bash
-uv run ruff check .
-```
-
-- Test with [pytest](https://github.com/pytest-dev/pytest)
-
-```bash
-uv pip install pytest
-uv run pytest . # Test
-```
-
-## License
-
-dora-llama-cpp-python is released under the MIT License

@@ -1,0 +1,68 @@
+apiVersion: 1
+name: dora-vggt
+namespace: dora-rs
+description: >-
+  VGGT (Visual Geometry Grounded Transformer) node — runs the facebook/VGGT-1B
+  model on incoming images to predict per-image depth maps plus camera focal and
+  principal-point parameters, and echoes back the preprocessed RGB image.
+categories: [ml-inference]
+keywords:
+  - vggt
+  - depth
+  - 3d-reconstruction
+  - camera-pose
+  - geometry
+runtime: python
+entrypoint: dora-vggt
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  image:
+    description: >-
+      Input image whose id contains the substring "image". The value is a flat
+      pixel buffer (or encoded bytes) with metadata fields encoding
+      (bgr8/rgb8/jpeg/jpg/jpe/bmp/webp/png), width and height. Images are
+      buffered up to VGGT_NUM_IMAGES frames and fed to the model together.
+
+outputs:
+  depth:
+    description: >-
+      Predicted depth map for the latest image (input id with "image" replaced
+      by "depth"). Flat array; metadata carries width, height, encoding
+      (DEPTH_ENCODING: float64 raw, or mono16 scaled by 1000), focal [fx, fy]
+      and resolution [cx, cy] (principal point).
+  image:
+    description: >-
+      The preprocessed RGB image echoed back under the original input id, as a
+      flat uint8 buffer with metadata encoding rgb8, width, height, focal and
+      resolution (principal point).
+
+env:
+  SCALE_FACTOR:
+    type: float
+    default: 1.0
+    description: Multiplier applied to the predicted depth map before output.
+  VGGT_NUM_IMAGES:
+    type: int
+    default: 2
+    description: Number of recent images buffered and fed to the model together.
+  DEPTH_ENCODING:
+    type: string
+    default: float64
+    description: >-
+      Depth output encoding. "float64" emits raw depth; "mono16" multiplies by
+      1000 and casts to uint16.
+
+example: |
+  - id: dora-vggt
+    hub: dora-vggt@^0.5
+    inputs:
+      image: camera/image
+    outputs:
+      - depth
+      - image
+    env:
+      VGGT_NUM_IMAGES: 2
+      DEPTH_ENCODING: float64

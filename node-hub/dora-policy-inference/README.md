@@ -1,29 +1,54 @@
 # dora-policy-inference
 
-Load pre-trained policies and execute them in real-time to control robots based on camera observations and current robot state.
+Load a pre-trained LeRobot policy and run it in real time to control a robot
+from camera observations and the current robot joint state.
 
-## Quick Start
+## Behavior
 
-### 1. Installation
+The node loads a LeRobot policy from `MODEL_PATH` on startup (device — CUDA / MPS
+/ CPU — is selected automatically by LeRobot) and buffers every input it
+receives. The camera input ids are taken from `CAMERA_NAMES` (default
+`laptop,front`); the **first** camera in that list is the lead camera.
 
-```bash
-# Source your venv
-cd dora/node-hub/dora-policy-inference
-uv pip install -e .
-```
+When the lead camera input arrives — and at most once per `1 / INFERENCE_FPS`
+seconds — the node assembles an observation from the buffered camera images
+(`observation.images.<camera>`) and the robot state (`observation.state`), runs
+the policy, converts the predicted action from degrees to radians, and emits it
+on `robot_action`. Camera images are reshaped from the input's `height`/`width`
+metadata and color-converted per the `encoding` metadata (`bgr8`, `yuv420`).
+Robot state is converted from radians to degrees and float32 before inference.
 
-### 2. Usage Guide
+## Inputs
 
-Create a dataflow file, see `examples/lerobot-dataset/policy_inference.yml`:
+- `laptop`: lead camera image (Arrow uint8). Its arrival triggers inference.
+  Must match the first entry of `CAMERA_NAMES`.
+- `front`: secondary camera image (Arrow uint8). Must match an entry of
+  `CAMERA_NAMES`. Add one input per camera you list.
+- `robot_state`: current robot joint state in radians (Arrow numeric).
+
+Image inputs rely on `height`, `width`, and optional `encoding` metadata.
+
+## Outputs
+
+- `robot_action`: predicted robot action, converted to radians.
+- `status`: status / log messages (e.g. "Policy loaded successfully").
+
+## Environment variables
+
+| Variable           | Type   | Default        | Description                                                              |
+| ------------------ | ------ | -------------- | ------------------------------------------------------------------------ |
+| `MODEL_PATH`       | string | (required)     | Trained LeRobot policy model directory.                                  |
+| `CAMERA_NAMES`     | string | `laptop,front` | Comma-separated camera input ids; first is the lead (inference trigger). |
+| `TASK_DESCRIPTION` | string | `""`           | Task string for task-conditioned policies.                               |
+| `INFERENCE_FPS`    | int    | `30`           | Max inference frequency (Hz).                                            |
+
+## Usage
 
 ```yaml
 nodes:
-  # Policy inference
-  - id: policy_inference
-    build: pip install -e ../../dora-policy-inference
-    path: dora-policy-inference
+  - id: dora-policy-inference
+    hub: dora-policy-inference@^0.5
     inputs:
-      # your Cameras should be same as the dataset trained policy is on.
       laptop: laptop_cam/image
       front: front_cam/image
       robot_state: robot/pose
@@ -31,76 +56,21 @@ nodes:
       - robot_action
       - status
     env:
-      # Required settings
-      MODEL_PATH: "/path/to/your/lerobot/model"
-      TASK_DESCRIPTION: "pick up the cup"
-      INFERENCE_FPS: "30"
-
-      # Camera configuration
+      MODEL_PATH: /path/to/your/lerobot/model
       CAMERA_NAMES: "laptop,front"
-      CAMERA_LAPTOP_RESOLUTION: "480,640,3"
-      CAMERA_FRONT_RESOLUTION: "480,640,3"
+      TASK_DESCRIPTION: "pick up the cup"
+      INFERENCE_FPS: 30
 
-  # Robot controller
   - id: robot_controller
     path: your-robot-controller
     inputs:
-      action: policy_inference/robot_action # predicted joint state(rad)
+      action: dora-policy-inference/robot_action
     outputs:
       - pose
 ```
 
-### 3. Start Policy Inference
+## Build
 
 ```bash
-dora build policy_inference.yml
-dora run policy_inference.yml
+pip install .
 ```
-
-The node will process camera inputs and robot state to generate actions for robot control.
-
-## Configuration
-
-### Required Environment Variables
-
-| Variable              | Description                                        | Example                                                         |
-| --------------------- | -------------------------------------------------- | --------------------------------------------------------------- |
-| `MODEL_PATH`          | Path to trained LeRobot policy model directory     | `"outputs/train/your_policy/checkpoints/last/pretrained_model"` |
-| `CAMERA_NAMES`        | Comma-separated camera names                       | `"laptop,front,top"`                                            |
-| `CAMERA_*_RESOLUTION` | Resolution for each camera (height,width,channels) | `"480,640,3"`                                                   |
-| `INFERENCE_FPS`       | Inference frequency                                | `"30"`                                                          |
-| `TASK_DESCRIPTION`    | Task description for task-conditioned policies     | `"Grab the red cube and and drop in the box."`                  |
-
-## Camera Configuration
-
-For each camera defined in `CAMERA_NAMES`, you must set the resolution:
-
-```bash
-export CAMERA_NAMES="laptop,front,top"
-export CAMERA_LAPTOP_RESOLUTION="1080,1920,3"
-export CAMERA_FRONT_RESOLUTION="480,640,3"
-export CAMERA_TOP_RESOLUTION="480,640,3"
-```
-
-## Model Requirements
-
-The node expects LeRobot trained models with:
-
-- A `config.json` file in the model directory
-- Model weights compatible with LeRobot's `from_pretrained()` method
-
-#### Device Selection
-
-The node automatically selects the best available device:
-
-- CUDA GPU (if available)
-- MPS (Apple Silicon)
-- CPU (fallback)
-
-Device selection is handled by LeRobot's `get_safe_torch_device()` function.
-
-> See the `examples/lerobot-dataset/policy_inference.yml` for complete dataflow configurations.
-
-## License
-
-This project is released under the MIT License.

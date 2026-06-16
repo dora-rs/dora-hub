@@ -1,0 +1,67 @@
+apiVersion: 1
+name: dora-llama-cpp-python
+namespace: dora-rs
+description: LLM text generation via llama-cpp-python — consumes input text and emits a generated response (text -> text). Loads a GGUF model from a local path or HuggingFace, with optional CUDA/Metal GPU acceleration.
+categories: [llm]
+keywords: [llama, llama-cpp, gguf, llm, text-generation, chat]
+runtime: python
+entrypoint: dora-llama-cpp-python
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  text:
+    required: false
+    description: Prompt text to generate a response for; the first element of the Arrow array is read as the user message.
+
+outputs:
+  text:
+    description: Generated response text as a single-element UTF-8 Arrow array.
+
+env:
+  SYSTEM_PROMPT:
+    type: string
+    default: ""
+    description: System prompt prepended to the chat history. When empty, no system message is used.
+  MODEL_NAME_OR_PATH:
+    type: string
+    default: TheBloke/Llama-2-7B-Chat-GGUF
+    description: Local path to a GGUF model file, or a HuggingFace repo id to download from when the path does not exist.
+  MODEL_FILE_PATTERN:
+    type: string
+    default: "*Q4_K_M.gguf"
+    description: Filename glob used to select the GGUF file when downloading from HuggingFace.
+  MAX_TOKENS:
+    type: int
+    default: 512
+    description: Maximum number of tokens to generate per response.
+  N_GPU_LAYERS:
+    type: int
+    default: 0
+    description: Number of model layers to offload to the GPU (e.g. 35 for full GPU acceleration). 0 means CPU-only.
+  N_THREADS:
+    type: int
+    default: 4
+    description: Number of CPU threads used for inference.
+  CONTEXT_SIZE:
+    type: int
+    default: 4096
+    description: Maximum context window size (n_ctx) for the model.
+  ACTIVATION_WORDS:
+    type: string
+    default: ""
+    description: Space-separated trigger words. When set, a response is only generated if the input contains at least one of these words. When empty, every input is answered.
+
+example: |
+  - id: dora-llama-cpp-python
+    hub: dora-rs/dora-llama-cpp-python
+    inputs:
+      text: source-node/text
+    outputs:
+      - text
+    env:
+      MODEL_NAME_OR_PATH: TheBloke/Llama-2-7B-Chat-GGUF
+      MODEL_FILE_PATTERN: "*Q4_K_M.gguf"
+      SYSTEM_PROMPT: "You're a very succinct AI assistant with short answers."
+      MAX_TOKENS: 512
