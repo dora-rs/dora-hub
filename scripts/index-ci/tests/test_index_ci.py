@@ -97,11 +97,35 @@ def test_append_only() -> None:
     }
     check("mutating an existing binary rejected", cao.allowed_version_edit(base, changed_bin) is not None)
 
+    shadow_bin = {
+        **base,
+        "source": {**base["source"], "binary": base["source"]["binary"] + [{"platform": "x", "url": "EVIL", "sha256": "s2"}]},
+    }
+    check("re-adding a pinned platform (shadowing) rejected", cao.allowed_version_edit(base, shadow_bin) is not None)
+
     changed_manifest = {**base, "manifest": {"name": "n", "namespace": "OTHER"}}
     check("changing the manifest rejected", cao.allowed_version_edit(base, changed_manifest) is not None)
+
+
+def test_subdir_no_traversal() -> None:
+    print("node-index-entry.schema subdir traversal guard:")
+    import jsonschema
+
+    schema = ve.load_schema("node-index-entry.schema.json")["definitions"]["source"]
+
+    def subdir_ok(value: str) -> bool:
+        doc = {"git": "g", "rev": "f" * 40, "subdir": value}
+        return not list(jsonschema.Draft7Validator(schema).iter_errors(doc))
+
+    check("plain subdir accepted", subdir_ok("node-hub/dora-yolo"))
+    check("leading-slash subdir rejected", not subdir_ok("/etc"))
+    check("dotdot subdir rejected", not subdir_ok("../etc"))
+    # the `..` guard must not be defeated by smuggling it onto a second line
+    check("newline-smuggled dotdot rejected", not subdir_ok("ok\n../../etc"))
 
 
 if __name__ == "__main__":
     test_validate()
     test_append_only()
+    test_subdir_no_traversal()
     print(f"\nall index-ci tests passed ({PASSED} checks)")

@@ -41,8 +41,8 @@
         },
         "subdir": {
           "type": "string",
-          "description": "Where in the repository the node lives (monorepo support). Forward slashes, relative, no `..`.",
-          "pattern": "^(?!.*\\.\\.)(?!/)[^\\\\]+$"
+          "description": "Where in the repository the node lives (monorepo support). Forward slashes, relative, no `..`, single line.",
+          "pattern": "^(?!/)(?!.*\\.\\.)[^\\\\\\n\\r]+$"
         },
         "binary": {
           "type": "array",

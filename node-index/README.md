@@ -63,3 +63,14 @@ queue — publishing latency is CI latency.
 
 These checks run **only** on `node-index/**` — they never gate the
 human-reviewed `node-hub/` source path.
+
+## Status: not yet a trust boundary
+
+This bootstrap (P2.3 PR 1) lands the schema, path/pin validation, and the
+append-only rule. It does **not** yet verify *who* may publish: the CI proves an
+entry is well-formed and immutable, not that the PR author owns the namespace.
+Until the governance workstream (PR 2) and the auto-merge bot (PR 3) land — the
+bot enforces the `package.yml` OWNERS list and reserved-namespace claims — a
+`node-index/` entry must be treated as *unverified provenance*, not an
+authoritative mapping. Resolving `hub:` references should stay opt-in/manual
+until then.

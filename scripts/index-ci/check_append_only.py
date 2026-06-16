@@ -89,6 +89,14 @@ def allowed_version_edit(old: dict, new: dict) -> str | None:
         if b not in n_bins:
             return "an existing `source.binary` artifact was changed or removed"
 
+    # an appended artifact may only cover a platform not already pinned —
+    # re-adding an existing platform with a different url/sha shadows the
+    # original (consumers that take the last match would resolve the new one)
+    o_platforms = {b.get("platform") for b in o_bins}
+    for b in n_bins:
+        if b not in o_bins and b.get("platform") in o_platforms:
+            return "a `source.binary` platform already pinned was re-added (shadowing)"
+
     if o_src != n_src:
         return "`source` changed beyond appending binary artifacts"
     if o != n:
