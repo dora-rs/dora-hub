@@ -1,0 +1,49 @@
+apiVersion: 1
+name: opencv-video-capture
+namespace: dora-rs
+description: Capture video frames from a camera or video device using OpenCV.
+categories: [sensor]
+keywords: [opencv, camera, video, capture, image, webcam]
+runtime: python
+entrypoint: opencv-video-capture
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+inputs:
+  tick:
+    required: true
+    description: Trigger to read and emit the next frame (typically a dora timer). When this input closes, the node stops.
+outputs:
+  image:
+    description: Captured frame as a flat UInt8 Arrow array. Metadata carries width, height, encoding, and primitive ("image").
+env:
+  CAMERA_ID:
+    description: Unique camera identifier for stable selection across platforms (macOS system_profiler, Linux /dev/v4l/by-id/, Windows Get-PnpDevice). Takes precedence over CAPTURE_PATH when set.
+  CAPTURE_PATH:
+    default: "0"
+    description: Device path or integer index of the camera to open (e.g. /dev/video1 or 0). Numeric strings are parsed as an index. Used when CAMERA_ID is not set.
+  IMAGE_WIDTH:
+    type: int
+    description: Requested capture width; also resizes output frames. Defaults to the camera's native width.
+  IMAGE_HEIGHT:
+    type: int
+    description: Requested capture height; also resizes output frames. Defaults to the camera's native height.
+  ENCODING:
+    default: bgr8
+    description: Output image encoding. One of bgr8, rgb8, yuv420, jpeg/jpg/jpe, bmp, webp, png.
+  JPEG_QUALITY:
+    type: int
+    default: 95
+    description: JPEG quality (0-100), used only when ENCODING is jpeg, jpg, or jpe.
+  FLIP:
+    description: Flip the frame. One of VERTICAL, HORIZONTAL, or BOTH. Empty/unset means no flip.
+  CI:
+    type: bool
+    description: When true, runs for only 10 seconds and substitutes a black error frame instead of raising when a frame cannot be read.
+example: |
+  - id: camera
+    hub: opencv-video-capture@^0.5
+    inputs:
+      tick: dora/timer/millis/20
+    outputs:
+      - image

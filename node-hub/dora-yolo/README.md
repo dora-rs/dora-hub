@@ -1,69 +1,44 @@
-# Dora Node for detecting objects in images using YOLOv8
+# dora-yolo
 
-This node is used to detect objects in images using YOLOv8.
+Object detection with Ultralytics YOLO — image in, bounding boxes out.
 
-# YAML
+## Behavior
 
-```yaml
-- id: object_detection
-  build: pip install ../../dora-yolo
-  path: dora-yolo
-  inputs:
-    image: webcam/image
+`dora-yolo` connects as a dora node and runs an Ultralytics YOLO model on each
+incoming `image` input. It reads the frame from a UInt8 Arrow array, reshapes it
+using the `width`/`height`/`encoding` metadata (converting `bgr8` to `rgb8` as
+needed), runs detection (including NMS), and sends the detected boxes,
+confidence scores, and class names on the `bbox` output.
 
-  outputs:
-    - bbox
-  env:
-    MODEL: yolov5n.pt
-```
+The model defaults to `yolov8n.pt` and can be overridden via the `MODEL`
+environment variable. The bounding-box coordinate format defaults to `xyxy` and
+can be switched to `xywh` via `FORMAT`.
 
-# Inputs
+## Inputs
 
-- `image`: Arrow array containing the base image
+- `image`: a UInt8 Arrow array holding the raw image, with metadata fields
+  `width`, `height`, and `encoding` (`bgr8` or `rgb8`). Any other encoding raises
+  an error.
 
 ```python
 ## Image data
-image_data: UInt8Array # Example: pa.array(img.ravel())
+image_data: UInt8Array  # Example: pa.array(img.ravel())
 metadata = {
   "width": 640,
   "height": 480,
-  "encoding": str, # bgr8, rgb8
+  "encoding": str,  # bgr8, rgb8
 }
-
-## Example
-node.send_output(
-  image_data, {"width": 640, "height": 480, "encoding": "bgr8"}
-  )
-
-## Decoding
-storage = event["value"]
-
-metadata = event["metadata"]
-encoding = metadata["encoding"]
-width = metadata["width"]
-height = metadata["height"]
-
-if encoding == "bgr8":
-    channels = 3
-    storage_type = np.uint8
-
-frame = (
-    storage.to_numpy()
-    .astype(storage_type)
-    .reshape((height, width, channels))
-)
-
 ```
 
-# Outputs
+## Outputs
 
-- `bbox`: an arrow array containing the bounding boxes, confidence scores, and class names of the detected objects
+- `bbox`: an Arrow struct array containing the detected objects. Output metadata
+  carries `format` (the bbox format) and `primitive` set to `boxes2d`.
 
-```Python
-
+```python
 bbox: {
-    "bbox": np.array,  # flattened array of bounding boxes
-    "conf": np.array,  # flat array of confidence scores
+    "bbox": np.array,    # flattened array of bounding boxes
+    "conf": np.array,    # flat array of confidence scores
     "labels": np.array,  # flat array of class names
 }
 
@@ -76,10 +51,26 @@ decoded_bbox = {
 }
 ```
 
-## Example
+## Environment variables
 
-Check example at [examples/python-dataflow](examples/python-dataflow)
+- `MODEL` (string, default `yolov8n.pt`): Ultralytics YOLO model file to load.
+- `FORMAT` (string, default `xyxy`): bounding-box coordinate format, `xyxy` or
+  `xywh`.
 
-## License
+## Usage
 
-This project is licensed under Apache-2.0. Check out [NOTICE.md](../../NOTICE.md) for more information.
+```yaml
+nodes:
+  - id: object-detection
+    hub: dora-yolo@^0.5
+    inputs:
+      image: camera/image
+    outputs:
+      - bbox
+```
+
+## Build
+
+```bash
+pip install .
+```
