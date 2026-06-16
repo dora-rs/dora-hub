@@ -41,7 +41,7 @@ dora-echo/
 ```
 **Packaging convention:** the PyPI dist name, the `[project.scripts]` console-script, and the value a dataflow uses as `path:` are **all the same string** (`dora-echo`). New nodes must keep this 1:1:1 mapping. Lint config lives under `[tool.ruff.lint]` — see the shared baseline in the root `ruff.toml`.
 
-**Rust node** (`node-hub/dora-rerun/`): a `Cargo.toml` workspace member (add it to the root `Cargo.toml` `members`). Rust+Python hybrids also carry a `pyproject.toml` and build a wheel with maturin.
+**Rust node** (`node-hub/dora-rerun/`): a `Cargo.toml` workspace member (add it to the root `Cargo.toml` `members`). Rust+Python hybrids also carry a `pyproject.toml` and build a wheel with maturin. **Hub-spawnability:** a Rust node must take its node id from the daemon — use `DoraNode::init_flexible(NodeId::from(...))` (or `init_from_env()`), never a hard-coded `init_from_node_id(...)`, or `hub:` only works when the dataflow names the node exactly that id. (Python `Node()` reads `DORA_NODE_CONFIG` already, so it's fine.)
 
 ### Node README checklist
 
