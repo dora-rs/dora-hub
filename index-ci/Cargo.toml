@@ -1,0 +1,23 @@
+[package]
+name = "dora-index-ci"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+description = "Enforcement + auto-merge gate for the dora-hub node-index/ catalog (spec §7)"
+
+[[bin]]
+name = "dora-index-ci"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+eyre = "0.6"
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9.33"
+
+[dev-dependencies]
+tempfile = "3"

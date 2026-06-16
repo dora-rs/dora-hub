@@ -1,0 +1,67 @@
+name: index auto-merge
+
+# Trusted-context auto-merge bot for the node-index/ catalog (Hub spec §7.5).
+#
+# pull_request_target runs in the BASE repo's context, so it has a write token
+# AND lets us build the enforcement binary from the BASE ref rather than the
+# PR's own (possibly-neutered) sources — closing the self-neutering hole. We
+# check out the PR head only as DATA: the trusted binary parses its YAML, we
+# never build or run any PR-provided code, so this is not a "pwn request".
+#
+# It auto-merges only a routine publish (`decide`: version files in an existing
+# namespace, owner-authored, nothing that needs human review). Everything else
+# is left untouched for a human; node-index CI still gates correctness.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+    paths:
+      - 'node-index/**'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base ref (trusted sources)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: index-ci
+      - name: Build the trusted gate from the base ref
+        run: |
+          cargo build -p dora-index-ci --release
+          cp target/release/dora-index-ci "$RUNNER_TEMP/dora-index-ci"
+      - name: Checkout PR head (data only — never built or executed)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - name: Make the base commit reachable for merge-base
+        run: git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+      - name: Run the trusted gate and auto-merge routine publishes
+        env:
+          GATE: ${{ runner.temp }}/dora-index-ci
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          PR: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          "$GATE" validate; v=$?
+          "$GATE" append-only --base "$BASE_SHA"; a=$?
+          "$GATE" decide --author "$AUTHOR" --base "$BASE_SHA"; d=$?
+          echo "verdict: validate=$v append-only=$a decide=$d"
+          if [ "$v" = 0 ] && [ "$a" = 0 ] && [ "$d" = 0 ]; then
+            echo "routine publish by an owner -> enabling auto-merge"
+            gh pr merge "$PR" --squash --auto \
+              || echo "could not enable auto-merge (is 'Allow auto-merge' enabled on the repo?)"
+          else
+            echo "not auto-merging; left for a human reviewer (node-index CI still gates correctness)"
+          fi

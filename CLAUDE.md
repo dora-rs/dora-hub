@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This repo also hosts the **Dora Hub catalog** (`node-index/`) — the git-backed index that the `dora hub` CLI resolves `hub:` references against (spec: [`docs/plan-node-hub.md`](https://github.com/dora-rs/dora/blob/main/docs/plan-node-hub.md) in `dora-rs/dora`).
 
-> **Note:** the `node-index/` catalog, its `schemas/`, `scripts/index-ci/`, and the `node-index CI` workflow land with the catalog bootstrap (PR #66). Until that merges, the index sections below don't apply and `make index-ci` is a no-op.
+> **Note:** the `node-index/` catalog, the `index-ci/` Rust gate, and the `node-index CI` workflow are the Dora Hub catalog enforcement. `make index-ci` is a no-op in a tree without them.
 
 Two languages, one repo:
 - **Python nodes** (~55) — `pyproject.toml` + a package dir, built/tested with **uv**, linted with **ruff**, tested with **pytest**.
@@ -24,8 +24,8 @@ Two languages, one repo:
 | `examples/` | End-to-end dataflows exercised by CI (`examples/*/dataflow.yml`) |
 | `tests/` | Workspace-level Rust integration tests |
 | `benches/` | Benchmarks |
-| `schemas/` | JSON schemas for the node-index entry / package format |
-| `scripts/` | Repo tooling (`index-ci/` validators, `test-node.sh`) |
+| `index-ci/` | Rust crate (`dora-index-ci`) — the node-index validate / append-only / namespace / auto-merge gate |
+| `scripts/` | Repo tooling (`test-node.sh`) |
 | `.github/workflows/` | CI (see below) |
 
 ### Anatomy of a node
@@ -64,10 +64,10 @@ For a Python node this does `uv venv` + `uv pip install .` + `uv run ruff check 
 
 ### The node-index catalog
 ```bash
-make index-ci                         # schema + append-only validators + unit tests
+make index-ci                         # cargo test + validate + append-only + namespace
 # or individually:
-python3 scripts/index-ci/tests/test_index_ci.py
-python3 scripts/index-ci/validate_entries.py
+cargo test -p dora-index-ci
+cargo run -p dora-index-ci -- validate
 ```
 
 ## Pre-commit Quality Gates (MANDATORY)
@@ -76,7 +76,7 @@ python3 scripts/index-ci/validate_entries.py
 
 1. **For each node you touched:** `make test-node NODE=<name>` (ruff + pytest, or cargo for Rust nodes).
 2. **If you touched Rust workspace code:** `cargo fmt --all -- --check`, then `cargo clippy --all <excludes>`, then `cargo test --all <excludes>`.
-3. **If you touched `node-index/`, `schemas/`, or `scripts/index-ci/`:** `make index-ci`.
+3. **If you touched `node-index/` or `index-ci/`:** `make index-ci`.
 4. **Always:** `typos` (config: `_typos.toml`).
 
 `make qa` runs the repo-wide static gates (ruff on repo Python + rustfmt check + clippy + index-ci + typos) in one go. Use `make test-node NODE=<n>` for the node you changed.
@@ -87,7 +87,8 @@ python3 scripts/index-ci/validate_entries.py
 |----------|-------|
 | `ci.yml` | Rust workspace Check/Build/Test (Linux/macOS/Windows), Clippy, rustfmt, Typos, and example dataflows end-to-end |
 | `node-hub-ci-cd.yml` | Per-node matrix (`node_hub_test.sh` for each `node-hub/<folder>`). PRs run the lint+test step on Linux only; macOS runs on release/dispatch. Publishes on release |
-| `node-index-ci.yml` | Catalog CI (schema + append-only), **path-scoped to `node-index/**`** — never gates `node-hub/` source |
+| `node-index-ci.yml` | Catalog CI — the `dora-index-ci` Rust gate (validate + append-only + namespace), **path-scoped to `node-index/**`** — never gates `node-hub/` source |
+| `index-auto-merge.yml` | Trusted-context bot: builds `dora-index-ci` from the base ref and auto-merges a routine, owner-authored publish (`pull_request_target`) |
 | `claude-code.yml` | `@claude` GitHub automation |
 
 ## Conventions

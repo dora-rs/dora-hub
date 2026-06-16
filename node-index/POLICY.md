@@ -16,7 +16,7 @@ by opening a PR that adds `node-index/<namespace>/<name>/package.yml` with an
   the trusted PR actor; routine publishing *within* a namespace you own is not
   re-checked).
 - **Reserved** — names belonging to the project or type system
-  ([`scripts/index-ci/reserved_namespaces.txt`](../scripts/index-ci/reserved_namespaces.txt):
+  ([`index-ci/reserved_namespaces.txt`](../index-ci/reserved_namespaces.txt):
   `dora`, `dora-rs`, `dora-hub`, `std`, `official`, `hub`, …) need an index
   admin, not auto-merge.
 - **Confusable** — a new namespace within edit-distance 1 of, or a homoglyph
