@@ -1,0 +1,4 @@
+description: Text-to-speech node using Parler-TTS; receives text and plays synthesized audio on the local speaker.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

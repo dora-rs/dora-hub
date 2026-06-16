@@ -1,0 +1,4 @@
+description: Records dataflow image + ground-truth inputs into LLaMA-Factory ShareGPT training data (JSON + saved PNG frames).
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

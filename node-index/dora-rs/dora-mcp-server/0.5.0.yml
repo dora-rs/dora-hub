@@ -1,0 +1,49 @@
+manifest:
+  apiVersion: 1
+  name: dora-mcp-server
+  namespace: dora-rs
+  description: Model Context Protocol (MCP) server node — exposes the dataflow as MCP tools over HTTP. Tool calls are forwarded to other dora nodes as outputs and their replies are returned as MCP results.
+  categories:
+  - communication
+  keywords:
+  - mcp
+  - model-context-protocol
+  - server
+  - tools
+  - http
+  - llm
+  runtime: rust
+  entrypoint: target/release/dora-mcp-server
+  build: cargo build --release --target-dir target
+  dora: '>=0.3.9'
+  inputs:
+    request:
+      required: false
+      description: A JSON-RPC MCP request (e.g. initialize, tools/list, tools/call) as a UTF-8 string. The response is emitted on `response`.
+    tick:
+      required: false
+      description: Tool-call replies from downstream nodes. Each reply must carry the originating `__dora_call_id` metadata key so it is matched to the pending MCP call; the reply body (UTF-8 string) is returned as the MCP CallToolResult.
+  outputs:
+    response:
+      description: The JSON-RPC MCP result (UTF-8 string) for a `request` input.
+  env:
+    CONFIG:
+      type: string
+      default: config.toml
+      description: Path to the MCP server config file (TOML/JSON/YAML; format inferred from extension). Defines the server name/version, listen address, HTTP endpoint, and the MCP tools to expose.
+  example: |-
+    - id: dora-mcp-server
+      hub: dora-mcp-server@^0.3
+      inputs:
+        request: client/request
+        tick: my-tool-node/result
+      outputs:
+        - response
+      env:
+        CONFIG: config.toml
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-mcp-server
+published: 2026-06-16T21:22:18Z
+yanked: false

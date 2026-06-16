@@ -1,0 +1,41 @@
+manifest:
+  apiVersion: 1
+  name: dora-mistral-rs
+  namespace: dora-rs
+  description: LLM text generation via mistral.rs — receives a prompt string and emits the generated completion.
+  categories:
+  - llm
+  keywords:
+  - llm
+  - mistral
+  - inference
+  - text-generation
+  - chat
+  runtime: rust
+  entrypoint: target/release/dora-mistral-rs
+  build: cargo build --release --target-dir target
+  dora: '>=0.3.9'
+  inputs:
+    text:
+      description: Prompt string sent to the model as a user message.
+  outputs:
+    text:
+      description: Generated completion text returned by the model.
+  env:
+    MODEL_PATH_OR_NAME:
+      type: string
+      default: Qwen/Qwen2.5-0.5B-Instruct
+      description: Hugging Face model id or local path loaded by mistral.rs TextModelBuilder.
+  example: |-
+    - id: dora-mistral-rs
+      hub: dora-mistral-rs@^0.1
+      inputs:
+        text: prompt-source/text
+      env:
+        MODEL_PATH_OR_NAME: Qwen/Qwen2.5-0.5B-Instruct
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-mistral-rs
+published: 2026-06-16T21:22:18Z
+yanked: false

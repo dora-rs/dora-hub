@@ -1,0 +1,4 @@
+description: InternVL vision-language model — image + text prompt in, generated text out.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

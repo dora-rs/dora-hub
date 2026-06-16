@@ -1,0 +1,89 @@
+manifest:
+  apiVersion: 1
+  name: dora-rerun
+  namespace: dora-rs
+  description: Log images, depth, boxes, points, series, text, and URDF robot state to a Rerun.io viewer.
+  categories:
+  - visualization
+  - debug
+  keywords:
+  - rerun
+  - visualization
+  - viewer
+  - image
+  - robot
+  runtime: rust
+  entrypoint: target/release/dora-rerun
+  build: cargo build --release --target-dir target
+  dora: '>=0.3.9'
+  inputs:
+    boxes2d:
+      required: false
+      description: 2D bounding boxes (struct with bbox/labels or a float/int array); uses format metadata (xyxy/xywh).
+    boxes3d:
+      required: false
+      description: 3D bounding boxes (struct or float/int array); uses format metadata (min_max/center_size/center_half_size), optional color/solid.
+    depth:
+      required: false
+      description: Float32/Float64/UInt16 depth map; logged as a DepthImage when camera metadata (camera_position, camera_orientation, focal) is present.
+    image:
+      required: false
+      description: RGB/BGR or encoded (jpeg/png/avif) image bytes; uses width/height/encoding metadata.
+    jointstate:
+      required: false
+      description: Joint positions (float array) applied to a loaded URDF chain matched by the input id suffix.
+    lines3d:
+      required: false
+      description: Flat float array of 3D line-strip points (xyz triples); uses color/radius metadata.
+    masks:
+      required: false
+      description: Float32 or boolean mask array cached for later painting.
+    points2d:
+      required: false
+      description: Flat float array of 2D points (xy pairs); color assigned per input id.
+    points3d:
+      required: false
+      description: Flat float array of 3D points (xyz triples); uses color/radii metadata.
+    pose:
+      required: false
+      description: Joint positions (float array) applied to a loaded URDF chain matched by the input id suffix.
+    series:
+      required: false
+      description: Float64 array logged as scalar time series, one entity per index.
+    text:
+      required: false
+      description: UTF-8 string array logged as a TextLog (Chinese characters are transliterated to pinyin).
+  env:
+    OPERATING_MODE:
+      type: string
+      default: SPAWN
+      description: Viewer mode — SPAWN (launch viewer), CONNECT (gRPC to a running viewer), or SAVE (write a .rerun archive). Unknown values fall back to SPAWN.
+    README:
+      type: string
+      description: Optional Markdown text logged as a README TextDocument in the viewer.
+    RERUN_MEMORY_LIMIT:
+      type: string
+      default: 25%
+      description: Rerun viewer memory limit (e.g. "25%" or "4GB") used in SPAWN mode.
+    RERUN_SERVER_ADDR:
+      type: string
+      default: 127.0.0.1:9876
+      description: gRPC address of the Rerun viewer to connect to when OPERATING_MODE is CONNECT.
+  example: |-
+    nodes:
+      - id: camera
+        path: opencv-video-capture
+        outputs:
+          - image
+      - id: dora-rerun
+        hub: dora-rerun@^0.5
+        inputs:
+          image: camera/image
+        env:
+          OPERATING_MODE: SPAWN
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-rerun
+published: 2026-06-16T21:22:20Z
+yanked: false

@@ -1,0 +1,60 @@
+manifest:
+  apiVersion: 1
+  name: mujoco-client
+  namespace: dora-rs
+  description: Dora node client for a MuJoCo simulation — steps the physics, publishes generalised joint coordinates, and applies incoming actuator commands.
+  categories:
+  - simulator
+  - robot
+  - actuator
+  - sensor
+  keywords:
+  - mujoco
+  - simulation
+  - robot
+  - physics
+  - joints
+  - actuator
+  runtime: python
+  entrypoint: mujoco-client
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    action:
+      description: Flat actuator command array. Length must equal the model's actuator count (m.nu); values are written to data.ctrl in XML actuator order.
+    tick:
+      description: Step trigger. On each tick the node echoes a tick, advances the physics one step, and publishes the joint state.
+  outputs:
+    joint_state:
+      description: Full generalised coordinates (data.qpos) as a float32 array, published after each physics step.
+    tick:
+      description: Echo of the tick input, sent before stepping so downstream nodes do not stall during mj_step.
+  env:
+    IMAGE_HEIGHT:
+      default: 600
+      description: Height in pixels of rendered camera images (only used when camera rendering is enabled).
+    IMAGE_WIDTH:
+      default: 960
+      description: Width in pixels of rendered camera images (only used when camera rendering is enabled).
+    JPEG_QUALITY:
+      default: 90
+      description: JPEG encoding quality 0-100 for rendered camera frames (only used when camera rendering is enabled).
+    SCENE:
+      description: Path to the MuJoCo scene XML file to load. Required — the node errors at startup if unset.
+  example: |-
+    - id: mujoco-client
+      hub: mujoco-client@^0.5
+      inputs:
+        tick: dora/timer/millis/10
+        action: controller/action
+      env:
+        SCENE: scene.xml
+      outputs:
+        - tick
+        - joint_state
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/mujoco-client
+published: 2026-06-16T21:22:21Z
+yanked: false

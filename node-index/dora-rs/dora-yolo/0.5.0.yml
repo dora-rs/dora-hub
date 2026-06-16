@@ -1,0 +1,44 @@
+manifest:
+  apiVersion: 1
+  name: dora-yolo
+  namespace: dora-rs
+  description: Object detection with Ultralytics YOLO — image in, bounding boxes out.
+  categories:
+  - ml-inference
+  keywords:
+  - vision
+  - detection
+  - yolo
+  - ultralytics
+  - object-detection
+  runtime: python
+  entrypoint: dora-yolo
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    image:
+      required: true
+      description: Image frame as a UInt8 Arrow array, with metadata fields `width`, `height`, and `encoding` (`bgr8` or `rgb8`).
+  outputs:
+    bbox:
+      description: Detected objects as an Arrow struct array with fields `bbox` (flattened box coordinates), `conf` (confidence scores), and `labels` (class names). Output metadata carries `format` (the bbox format) and `primitive` set to `boxes2d`.
+  env:
+    FORMAT:
+      default: xyxy
+      description: Bounding-box coordinate format — `xyxy` or `xywh`.
+    MODEL:
+      default: yolov8n.pt
+      description: Ultralytics YOLO model file to load (e.g. yolov8n.pt).
+  example: |-
+    - id: object-detection
+      hub: dora-yolo@^0.5
+      inputs:
+        image: camera/image
+      outputs:
+        - bbox
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-yolo
+published: 2026-06-16T21:22:21Z
+yanked: false

@@ -1,0 +1,4 @@
+description: Reachy 1 camera node. On any input tick, grabs the latest frame from the robot's selected (left or right) head camera over the Reachy SDK and emits it as a bgr8 image with width/height/encoding metadata.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

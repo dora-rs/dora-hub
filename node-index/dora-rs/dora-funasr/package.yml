@@ -1,0 +1,4 @@
+description: Speech-to-text (ASR) node using FunASR's paraformer-zh model with ct-punc punctuation. Receives raw audio samples and emits recognized text.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

@@ -1,0 +1,43 @@
+manifest:
+  apiVersion: 1
+  name: dora-openai-server
+  namespace: dora-rs
+  description: OpenAI-compatible HTTP server that bridges a dataflow with OpenAI-style chat completion requests.
+  categories:
+  - llm
+  - communication
+  keywords:
+  - openai
+  - api
+  - server
+  - chat-completion
+  - fastapi
+  runtime: python
+  entrypoint: dora-openai-server
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    v1_chat_completions:
+      description: The dataflow's reply to a forwarded user message. Its first element is returned as the assistant content of the HTTP chat-completion response.
+  outputs:
+    v1_chat_completions:
+      description: The user message extracted from an incoming POST /v1/chat/completions HTTP request, forwarded into the dataflow.
+  example: |-
+    - id: dora-openai-server
+      hub: dora-openai-server@^0.5
+      inputs:
+        v1_chat_completions: echo/data
+      outputs:
+        - v1_chat_completions
+    - id: echo
+      hub: dora-echo@^0.5
+      inputs:
+        data: dora-openai-server/v1_chat_completions
+      outputs:
+        - data
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-openai-server
+published: 2026-06-16T21:22:19Z
+yanked: false

@@ -1,0 +1,58 @@
+manifest:
+  apiVersion: 1
+  name: dora-mujoco
+  namespace: dora-rs
+  description: MuJoCo physics simulation node — loads a robot model, steps physics on each tick, applies actuator control inputs, and emits joint/sensor state.
+  categories:
+  - simulator
+  - robot
+  keywords:
+  - simulation
+  - mujoco
+  - physics
+  - robot
+  - robot-descriptions
+  runtime: python
+  entrypoint: dora-mujoco
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    control_input:
+      required: false
+      description: Actuator commands as a float64 Arrow array. Applied to the model's actuators in order (clamped to each actuator's control range); extra values beyond the actuator count are ignored.
+    tick:
+      required: true
+      description: Drives the simulation. Each received event steps the physics once and emits the current state outputs. Wire to a timer, e.g. `dora/timer/millis/2` for ~500 Hz.
+  outputs:
+    actuator_controls:
+      description: Current actuator commands (MuJoCo `ctrl`) as a float64 Arrow array. Metadata carries `timestamp` (simulation time).
+    joint_positions:
+      description: 'Joint positions (MuJoCo `qpos`) as a float64 Arrow array. Metadata carries `timestamp` (simulation time) and `encoding: jointstate`.'
+    joint_velocities:
+      description: Joint velocities (MuJoCo `qvel`) as a float64 Arrow array. Metadata carries `timestamp` (simulation time).
+    sensor_data:
+      description: Sensor readings (MuJoCo `sensordata`) as a float64 Arrow array. Emitted only when the model defines sensors. Metadata carries `timestamp` (simulation time).
+  env:
+    MODEL_NAME:
+      type: string
+      default: go2_mj_description
+      description: Robot to load — a `robot_descriptions` name (the `scene` variant is loaded) or a path to a MuJoCo `.xml` model file.
+  example: |-
+    - id: mujoco-sim
+      hub: dora-mujoco@^0.5
+      inputs:
+        tick: dora/timer/millis/2
+        control_input: controller/output
+      outputs:
+        - joint_positions
+        - joint_velocities
+        - actuator_controls
+        - sensor_data
+      env:
+        MODEL_NAME: go2_mj_description
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-mujoco
+published: 2026-06-16T21:22:19Z
+yanked: false

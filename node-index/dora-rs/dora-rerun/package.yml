@@ -1,0 +1,4 @@
+description: Log images, depth, boxes, points, series, text, and URDF robot state to a Rerun.io viewer.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

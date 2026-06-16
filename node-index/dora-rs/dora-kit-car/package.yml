@@ -1,0 +1,4 @@
+description: Differential-drive ("kit car") mobile-robot controller. Receives velocity commands as a 6-element Float64 array ([x, y, z, rx, ry, rz], ROS geometry_msgs/Twist layout — only linear x and angular z are used) and writes the corresponding chassis speed frame to a serial port at 115200 baud.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

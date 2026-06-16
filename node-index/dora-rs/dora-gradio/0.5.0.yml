@@ -1,0 +1,42 @@
+manifest:
+  apiVersion: 1
+  name: dora-gradio
+  namespace: dora-rs
+  description: Gradio web UI that streams text, audio, and camera video from a browser into a dataflow.
+  categories:
+  - sensor
+  - visualization
+  keywords:
+  - gradio
+  - ui
+  - audio
+  - video
+  - webrtc
+  runtime: python
+  entrypoint: dora-gradio
+  build: pip install .
+  dora: '>=0.3.9'
+  outputs:
+    audio:
+      description: '16 kHz mono float32 audio chunks captured from the microphone. Metadata: sample_rate, channels, timestamp (nanoseconds).'
+    image:
+      description: '640x480 BGR8 camera frame (flattened uint8) captured over WebRTC. Metadata: encoding ("bgr8"), width, height, timestamp, _time.'
+    text:
+      description: UTF-8 string sent when a message is submitted in the chat box.
+  example: |-
+    - id: dora-gradio
+      hub: dora-gradio@^0.5
+      outputs:
+        - text
+        - audio
+        - image
+    - id: terminal-print
+      hub: terminal-print@^0.5
+      inputs:
+        data: dora-gradio/text
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-gradio
+published: 2026-06-16T21:22:17Z
+yanked: false

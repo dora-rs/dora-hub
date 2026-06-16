@@ -1,0 +1,4 @@
+description: Servo/motor bus control over serial via the rustypot library (Feetech STS3215, protocol v1). Writes goal positions from a `pose` input and reads present positions on `tick`, emitting them as a `pose` output.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

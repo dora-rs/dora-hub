@@ -1,0 +1,4 @@
+description: Qwen2.5-VL vision-language node — takes images and text prompts and emits a generated text response.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

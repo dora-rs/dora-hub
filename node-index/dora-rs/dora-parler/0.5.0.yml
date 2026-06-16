@@ -1,0 +1,50 @@
+manifest:
+  apiVersion: 1
+  name: dora-parler
+  namespace: dora-rs
+  description: Text-to-speech node using Parler-TTS; receives text and plays synthesized audio on the local speaker.
+  categories:
+  - speech
+  keywords:
+  - tts
+  - text-to-speech
+  - parler
+  - speech
+  - audio
+  runtime: python
+  entrypoint: dora-parler
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    stop:
+      required: false
+      description: Signal to interrupt the current synthesis/playback.
+    text:
+      required: true
+      description: UTF-8 text string to synthesize and play as speech.
+  env:
+    MODEL_NAME_OR_PATH:
+      type: string
+      default: ylacombe/parler-tts-mini-jenny-30H
+      description: Parler-TTS model id or local path to load.
+    USE_MODELSCOPE_HUB:
+      type: bool
+      default: false
+      description: When true, download the model from ModelScope Hub instead of Hugging Face.
+  example: |-
+    - id: text-source
+      path: some-text-node
+      outputs:
+        - text
+    - id: dora-parler
+      hub: dora-parler@^0.5
+      inputs:
+        text: text-source/text
+      env:
+        MODEL_NAME_OR_PATH: ylacombe/parler-tts-mini-jenny-30H
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-parler
+published: 2026-06-16T21:22:19Z
+yanked: false

@@ -1,0 +1,129 @@
+manifest:
+  apiVersion: 1
+  name: dora-dataset-record
+  namespace: dora-rs
+  description: Record synchronized camera feeds and robot state/action streams into a HuggingFace LeRobot dataset, with automatic episode segmentation and reset phases.
+  categories:
+  - recorder
+  - robot
+  keywords:
+  - lerobot
+  - dataset
+  - recording
+  - imitation-learning
+  - camera
+  - robot
+  runtime: python
+  entrypoint: dora-dataset-record
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    front:
+      required: false
+      description: 'Second camera frame stored as observation.images.front. Same contract as laptop; declared because the example sets `CAMERA_NAMES: laptop,front`.'
+    laptop:
+      required: false
+      description: Camera frame stored as observation.images.<camera-name>. The input id must match a name in CAMERA_NAMES (which has no default and must be set), and the frame must carry height/width metadata. Declare one input per camera you list (laptop and front are used in the example below); the hub contract rejects camera ids not declared here.
+    rav1e_laptop:
+      required: false
+      description: Optional AVIF-encoded frame for a camera, written verbatim to disk when SAVE_AVIF_FRAMES=true. The id is rav1e_<camera-name>. Add one per camera.
+    robot_action:
+      required: false
+      description: Robot action pose as a float array of joint values (radians, one per ROBOT_JOINTS entry). Stored as action.
+    robot_state:
+      required: false
+      description: Robot observation pose as a float array of joint values (radians, one per ROBOT_JOINTS entry). Stored as observation.state.
+  outputs:
+    text:
+      description: Status messages about recording lifecycle (episode start, reset phase, episode saved, completion).
+  env:
+    CAMERA_NAMES:
+      type: string
+      default: ''
+      description: Comma-separated camera names. Each name must have a matching input id and a CAMERA_<NAME>_RESOLUTION variable. If unset, no cameras are recorded.
+    EPISODE_DURATION_S:
+      type: int
+      default: 60
+      description: Episode length in seconds.
+    FPS:
+      type: int
+      default: 30
+      description: Recording frame rate.
+    IMAGE_WRITER_PROCESSES:
+      type: int
+      default: 0
+      description: Number of image-writer subprocesses used by LeRobot.
+    IMAGE_WRITER_THREADS:
+      type: int
+      default: 4
+      description: Image-writer threads per camera used by LeRobot.
+    PRIVATE:
+      type: bool
+      default: false
+      description: Make the pushed dataset private (only used with PUSH_TO_HUB).
+    PUSH_TO_HUB:
+      type: bool
+      default: false
+      description: Upload the dataset to the HuggingFace Hub when finished.
+    REPO_ID:
+      type: string
+      description: HuggingFace dataset repo id (e.g. username/dataset_name). Required.
+    RESET_DURATION_S:
+      type: int
+      default: 15
+      description: Break in seconds between episodes to reset the environment.
+    ROBOT_JOINTS:
+      type: string
+      description: Comma-separated robot joint names defining the action / observation.state feature shape. Required.
+    ROBOT_TYPE:
+      type: string
+      default: your_robot_type
+      description: Robot type recorded in the dataset metadata.
+    ROOT_PATH:
+      type: string
+      description: Local directory to store the dataset. Defaults to the LeRobot cache location when empty.
+    SAVE_AVIF_FRAMES:
+      type: bool
+      default: false
+      description: Additionally save AVIF-encoded frames from rav1e_<camera> inputs to disk.
+    SINGLE_TASK:
+      type: string
+      default: Your task
+      description: Task description attached to every recorded frame.
+    TAGS:
+      type: string
+      default: ''
+      description: Comma-separated tags attached to the dataset when pushing to Hub.
+    TOTAL_EPISODES:
+      type: int
+      default: 10
+      description: Number of episodes to record before stopping.
+    USE_VIDEOS:
+      type: bool
+      default: true
+      description: Encode camera frames as MP4 video; otherwise store as images.
+  example: |-
+    - id: dataset-record
+      hub: dora-dataset-record@^0.5
+      inputs:
+        laptop: laptop-cam/image
+        front: front-cam/image
+        robot_state: robot-follower/pose
+        robot_action: leader-interface/pose
+      outputs:
+        - text
+      env:
+        REPO_ID: your_username/your_dataset_name
+        SINGLE_TASK: Pick up the cube and place it in the box
+        ROBOT_JOINTS: joint1,joint2,joint3,joint4,joint5,gripper
+        CAMERA_NAMES: laptop,front
+        CAMERA_LAPTOP_RESOLUTION: 480,640,3
+        CAMERA_FRONT_RESOLUTION: 480,640,3
+        FPS: 30
+        TOTAL_EPISODES: 50
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-dataset-record
+published: 2026-06-16T21:22:17Z
+yanked: false

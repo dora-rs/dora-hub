@@ -1,0 +1,4 @@
+description: Read a connected gamepad/joystick (via pygame) and emit robot velocity commands plus the raw controller state. Defaults target the Logitech F710.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

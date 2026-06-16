@@ -1,0 +1,4 @@
+description: Drive an AgileX Piper robot arm via the piper_sdk CAN interface — accept joint/end-effector commands and emit arm joint, pose, and gripper state.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

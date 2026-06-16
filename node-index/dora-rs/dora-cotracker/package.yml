@@ -1,0 +1,4 @@
+description: Real-time point tracking using Facebook's CoTracker model. Consumes an RGB image stream plus query points (raw points or 2D bounding boxes) and emits the tracked point positions and an annotated visualization frame.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

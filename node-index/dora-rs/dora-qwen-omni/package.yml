@@ -1,0 +1,4 @@
+description: Multimodal llama.cpp (mtmd) node. Receives prompt/image strings on a dora input, runs a GGUF model with a multimodal projection, and emits the generated text. Decodes inline base64 images and fetches image URLs found in the input.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

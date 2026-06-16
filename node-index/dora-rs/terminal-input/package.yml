@@ -1,0 +1,4 @@
+description: Reads data from the terminal (or the DATA env var) and emits it as an Arrow output.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

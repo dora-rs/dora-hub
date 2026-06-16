@@ -1,0 +1,59 @@
+manifest:
+  apiVersion: 1
+  name: dora-piper
+  namespace: dora-rs
+  description: Drive an AgileX Piper robot arm via the piper_sdk CAN interface — accept joint/end-effector commands and emit arm joint, pose, and gripper state.
+  categories:
+  - robot
+  keywords:
+  - piper
+  - agilex
+  - arm
+  - robot
+  - actuator
+  - can
+  runtime: python
+  entrypoint: dora-piper
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    eef_action:
+      required: false
+      description: Target end-effector pose (7 float values — X/Y/Z/RX/RY/RZ + gripper) applied via EndPoseCtrl/GripperCtrl. Ignored in teach mode. Rate-limited to 20Hz.
+    joint_action:
+      required: false
+      description: Target joint positions (7 float values — 6 joints + gripper, in radians/meters) applied via JointCtrl/GripperCtrl. Ignored in teach mode. Rate-limited to 20Hz.
+    tick:
+      required: false
+      description: State-poll trigger — on any input that is not joint_action/eef_action, the node reads and emits the current jointstate/pose/gripper. Wire a timer here (e.g. dora/timer/millis/20) to stream arm state.
+  outputs:
+    gripper:
+      description: Current gripper opening as a single float32. Emitted alongside jointstate on a state-poll input.
+    jointstate:
+      description: Current arm joint state — 7 float32 values (6 joints in radians + gripper opening). Emitted when any input other than joint_action/eef_action is received.
+    pose:
+      description: Current end-effector pose — 6 float32 values (X/Y/Z in meters, RX/RY/RZ in radians). Emitted alongside jointstate on a state-poll input.
+  env:
+    CAN_BUS:
+      default: ''
+      description: CAN bus interface name passed to C_PiperInterface (empty string uses the SDK default).
+    TEACH_MODE:
+      type: bool
+      default: false
+      description: When true, the arm is not enabled and command inputs are ignored — used to read state while hand-guiding the arm.
+  example: |-
+    - id: dora-piper
+      hub: dora-piper@^0.5
+      inputs:
+        joint_action: some-controller/action
+        tick: dora/timer/millis/20      # poll arm state at 50Hz
+      outputs:
+        - jointstate
+        - pose
+        - gripper
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-piper
+published: 2026-06-16T21:22:19Z
+yanked: false

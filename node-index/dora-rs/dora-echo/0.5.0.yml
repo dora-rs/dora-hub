@@ -1,0 +1,38 @@
+manifest:
+  apiVersion: 1
+  name: dora-echo
+  namespace: dora-rs
+  description: Echoes every input it receives straight back out under the same id.
+  categories:
+  - debug
+  - transform
+  keywords:
+  - echo
+  - passthrough
+  - loopback
+  - debug
+  - test
+  runtime: python
+  entrypoint: dora-echo
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    data:
+      required: false
+      description: The value to echo back. Returned unchanged on the `data` output.
+  outputs:
+    data:
+      description: The `data` input, re-sent unchanged (same value and metadata).
+  example: |-
+    - id: echo
+      hub: dora-echo@^0.5
+      inputs:
+        data: some-node/output
+      outputs:
+        - data
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-echo
+published: 2026-06-16T21:22:17Z
+yanked: false

@@ -1,0 +1,4 @@
+description: MuJoCo physics simulation node — loads a robot model, steps physics on each tick, applies actuator control inputs, and emits joint/sensor state.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

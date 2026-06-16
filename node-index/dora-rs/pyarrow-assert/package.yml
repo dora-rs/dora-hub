@@ -1,0 +1,4 @@
+description: Test sink that asserts every received input equals a fixed expected pyarrow value.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

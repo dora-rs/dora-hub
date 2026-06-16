@@ -1,0 +1,59 @@
+manifest:
+  apiVersion: 1
+  name: dora-distil-whisper
+  namespace: dora-rs
+  description: Transcribes (or translates) speech audio to text using a Whisper model (mlx-whisper on macOS, transformers pipeline elsewhere).
+  categories:
+  - speech
+  - ml-inference
+  keywords:
+  - whisper
+  - asr
+  - speech-to-text
+  - transcription
+  - stt
+  runtime: python
+  entrypoint: dora-distil-whisper
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    input:
+      required: true
+      description: Audio samples to transcribe, as an Arrow array of floats. Any input whose id does not contain "text_noise" is treated as audio. Buffered across messages when the previous transcription ended with "...".
+    text_noise:
+      required: false
+      description: Text to subtract from subsequent transcriptions (e.g. the assistant's own spoken output) to avoid echo; parentheses and brackets are stripped. Expires after a few seconds.
+  outputs:
+    speech_started:
+      description: Emitted alongside text with the same transcribed string; signals that a finalized utterance was produced.
+    text:
+      description: Transcribed (or translated) text as an Arrow string array, with metadata {language, primitive=text}. Suppressed for empty/known-bad/repetitive results or text ending in "..." (which is instead buffered).
+  env:
+    MODEL_NAME_OR_PATH:
+      default: openai/whisper-large-v3-turbo
+      description: HuggingFace model id or local path for the transformers pipeline (non-macOS). On macOS the mlx-community/whisper-large-v3-turbo model is always used.
+    TARGET_LANGUAGE:
+      default: english
+      description: Language used for transcription and for the target language when translating.
+    TRANSLATE:
+      type: bool
+      default: false
+      description: When true, translate the transcription into TARGET_LANGUAGE instead of transcribing in the source language. Ignored on macOS (mlx path always transcribes).
+    USE_MODELSCOPE_HUB:
+      type: bool
+      default: false
+      description: When true (non-macOS), download MODEL_NAME_OR_PATH from ModelScope via snapshot_download instead of HuggingFace.
+  example: |-
+    - id: dora-distil-whisper
+      hub: dora-distil-whisper@^0.5
+      inputs:
+        input: some-vad/audio
+      outputs:
+        - text
+        - speech_started
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-distil-whisper
+published: 2026-06-16T21:22:17Z
+yanked: false

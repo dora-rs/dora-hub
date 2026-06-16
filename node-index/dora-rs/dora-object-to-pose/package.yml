@@ -1,0 +1,4 @@
+description: Convert detected objects (2D bounding boxes or segmentation masks) plus a depth frame into 3D poses, projecting masked/boxed pixels to camera-space points and reducing them to xyzrpy poses.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

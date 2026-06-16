@@ -1,0 +1,51 @@
+manifest:
+  apiVersion: 1
+  name: dora-ios-lidar
+  namespace: dora-rs
+  description: Streams RGB and LiDAR depth frames from an iOS device running the Record3D app (USB), emitting the color frame on `image` and the depth frame on `depth` along with camera intrinsics (focal length and principal point).
+  categories:
+  - sensor
+  keywords:
+  - ios
+  - lidar
+  - depth
+  - rgbd
+  - record3d
+  - camera
+  runtime: python
+  entrypoint: dora-ios-lidar
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    tick:
+      required: true
+      description: Trigger to capture and emit one RGBD frame.
+  outputs:
+    depth:
+      description: 'Depth frame in millimeters as a flattened uint16 Arrow array, clipped to `[0, 4095]`. Metadata: `encoding` = `mono16`, `width`, `height`, `focal` = `[fx, fy]`, `resolution` = `[cx, cy]` principal point.'
+    image:
+      description: 'Color frame as a flattened Arrow array (`rgb.ravel()`). Metadata: `encoding` = `rgb8`, `width`, `height`.'
+  env:
+    IMAGE_HEIGHT:
+      type: string
+      description: Target output height in pixels. When set together with `IMAGE_WIDTH`, the frames are resized and the intrinsics are rescaled accordingly. Leave unset to keep the device's native resolution.
+    IMAGE_WIDTH:
+      type: string
+      description: Target output width in pixels. When set together with `IMAGE_HEIGHT`, the frames are resized and the intrinsics are rescaled accordingly. Leave unset to keep the device's native resolution.
+    ROTATE:
+      type: string
+      description: Set to `ROTATE_90_CLOCKWISE` to rotate frames 90 degrees clockwise before resizing. Only applied when both `IMAGE_WIDTH` and `IMAGE_HEIGHT` are set.
+  example: |-
+    - id: dora-ios-lidar
+      hub: dora-ios-lidar@^0.5
+      inputs:
+        tick: dora/timer/millis/33
+      outputs:
+        - image
+        - depth
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-ios-lidar
+published: 2026-06-16T21:22:18Z
+yanked: false

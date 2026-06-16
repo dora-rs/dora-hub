@@ -1,0 +1,4 @@
+description: Records incoming image frames per episode and encodes them into an H.264 MP4 video (LeRobot compatible).
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

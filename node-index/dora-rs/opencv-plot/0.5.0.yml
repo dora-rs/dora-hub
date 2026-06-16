@@ -1,0 +1,47 @@
+manifest:
+  apiVersion: 1
+  name: opencv-plot
+  namespace: dora-rs
+  description: Overlays bounding boxes, labels, and text on an image input and displays it in an OpenCV window.
+  categories:
+  - visualization
+  - debug
+  keywords:
+  - opencv
+  - plot
+  - bbox
+  - bounding-box
+  - image
+  - visualization
+  - object-detection
+  runtime: python
+  entrypoint: opencv-plot
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    bbox:
+      description: 'Bounding boxes to overlay. Arrow struct array element 0 with fields {bbox, conf, labels} and metadata {format}. Supported formats: xyxy, xywh. Stored and drawn on the next image redraw.'
+    image:
+      description: 'Base image to draw on. UInt8 Arrow array plus metadata {width, height, encoding}. Supported encodings: bgr8, rgb8, jpeg/jpg/jpe/bmp/webp/png (encoded bytes), yuv420, avif. Receiving this input triggers a redraw and display.'
+    text:
+      description: Text string to overlay at the top-left corner. Arrow array of size 1; element 0 read via as_py(). Stored and drawn on the next image redraw.
+  env:
+    PLOT_HEIGHT:
+      type: int
+      description: Resize the displayed frame to this height (pixels). Defaults to the image input height.
+    PLOT_WIDTH:
+      type: int
+      description: Resize the displayed frame to this width (pixels). Defaults to the image input width.
+  example: |-
+    - id: opencv-plot
+      hub: opencv-plot@^0.5
+      inputs:
+        image: camera/image
+        bbox: detector/bbox
+        text: detector/text
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/opencv-plot
+published: 2026-06-16T21:22:22Z
+yanked: false

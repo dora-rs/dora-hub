@@ -1,0 +1,4 @@
+description: Generate text with a Hugging Face transformers causal-LM. Receives an input string, applies the tokenizer chat template, generates a reply, and emits the decoded text. Supports an optional system prompt, activation-word gating, and multi-turn history.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

@@ -1,0 +1,4 @@
+description: OpenAI-compatible HTTP proxy server that bridges a dora dataflow with OpenAI-style chat-completion requests. Serves an HTTP API on 0.0.0.0:8000, forwards each incoming chat request into the dataflow as a `text` output, and returns the `text` input it receives back as the chat-completion response.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing

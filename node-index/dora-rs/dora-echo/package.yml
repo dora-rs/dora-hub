@@ -1,0 +1,4 @@
+description: Echoes every input it receives straight back out under the same id.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
