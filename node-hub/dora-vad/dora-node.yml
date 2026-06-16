@@ -15,11 +15,11 @@ inputs:
     description: Audio samples (8kHz or 16kHz). Optional sample_rate metadata key (defaults to 16000).
 outputs:
   audio:
-    description: The buffered audio containing detected speech, with sample_rate metadata.
-  timestamp_start:
-    description: Start sample index of the detected speech segment.
+    description: The accumulated audio buffer for a finalized utterance (whole buffer, not just the speech span), with sample_rate metadata.
   timestamp_end:
-    description: End sample index of the detected speech segment.
+    description: End sample index of the speech, emitted alongside audio when an utterance finalizes.
+  timestamp_start:
+    description: Start sample index of still-ongoing speech (emitted only while speech reaches the end of the current buffer; not emitted for an utterance that finalizes within one buffer).
 env:
   MIN_SILENCE_DURATION_MS:
     type: int

@@ -5,12 +5,19 @@ stream.
 
 ## Behavior
 
-`dora-vad` buffers incoming audio and runs the Silero VAD model to detect the
-beginning and ending of voice activity. When a complete speech segment is
-detected it emits the buffered audio together with the start/end sample indices
-of the speech. While speech is still ongoing at the end of the current buffer it
-keeps accumulating audio and emits only a `timestamp_start` marker until the
-segment closes. A maximum buffered duration bounds how long it waits.
+`dora-vad` accumulates incoming audio and runs the Silero VAD model over the
+buffer to detect voice activity. Two cases:
+
+- **Speech still ongoing** — if the detected speech runs to the end of the
+  current buffer, the node emits a `timestamp_start` marker (the start index of
+  that speech) and keeps accumulating, waiting for the speech to end.
+- **Segment finalized** — once the speech ends before the end of the buffer (or
+  after a few buffers with no further speech), the node emits the buffered
+  `audio` and a `timestamp_end`, then resets the buffer.
+
+So `timestamp_start` is a "speech is ongoing" signal, not a per-segment start —
+a short utterance that completes within a single buffer emits `audio` +
+`timestamp_end` with no preceding `timestamp_start`.
 
 ## Inputs
 
@@ -19,10 +26,14 @@ segment closes. A maximum buffered duration bounds how long it waits.
 
 ## Outputs
 
-- `audio`: the buffered audio for the detected speech segment, carrying a
-  `sample_rate` metadata key.
-- `timestamp_start`: start sample index of the detected speech segment.
-- `timestamp_end`: end sample index of the detected speech segment.
+- `audio`: the accumulated buffer for a finalized utterance, carrying a
+  `sample_rate` metadata key. (The whole buffer is sent, not just the speech
+  span.)
+- `timestamp_end`: end sample index of the speech, emitted alongside `audio`
+  when an utterance finalizes.
+- `timestamp_start`: start sample index of speech that is still ongoing (emitted
+  only while speech reaches the end of the current buffer). Not emitted for an
+  utterance that finalizes within one buffer.
 
 ## Environment variables
 
