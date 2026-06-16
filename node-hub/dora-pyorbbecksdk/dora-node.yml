@@ -1,0 +1,36 @@
+apiVersion: 1
+name: dora-pyorbbecksdk
+namespace: dora-rs
+description: Captures RGB color and depth frames from an Orbbec depth camera via the pyorbbecsdk.
+categories: [sensor]
+keywords: [orbbec, camera, depth, rgbd, pyorbbecsdk]
+runtime: python
+entrypoint: dora-pyorbbecksdk
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+inputs:
+  tick:
+    required: true
+    description: Trigger to capture one color + depth frame set.
+outputs:
+  image:
+    description: Color frame, JPEG-encoded into an Arrow array. Metadata carries encoding=jpeg.
+  depth:
+    description: Depth frame in meters (float32, values outside 0.01-15.0 m zeroed), temporally filtered, as a flattened Arrow array.
+  image_depth:
+    description: Colorized depth visualization (COLORMAP_JET), JPEG-encoded into an Arrow array. Metadata carries encoding=jpeg.
+env:
+  DEVICE_INDEX:
+    type: int
+    default: 0
+    description: Index of the Orbbec device to open from the enumerated device list.
+example: |
+  - id: dora-pyorbbecksdk
+    hub: dora-pyorbbecksdk@^0.5
+    inputs:
+      tick: dora/timer/millis/33
+    outputs:
+      - image
+      - depth
+      - image_depth

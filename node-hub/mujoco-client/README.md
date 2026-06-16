@@ -1,31 +1,70 @@
-## Mujoco Client
+# mujoco-client
 
-This node is a client for a Mujoco simulation.
+Dora node client for a MuJoCo simulation. It steps the physics loop, publishes
+the simulated robot's joint state, and applies incoming actuator commands — so a
+MuJoCo model can stand in for a real robot in a dataflow.
 
-## YAML Configuration
+## Behavior
 
-````YAML
-nodes:
-  - id: mujoco_client
-    path: client.py # modify this to the relative path from the graph file to the client script
-    inputs:
-      pull_position: dora/timer/millis/10 # pull the present position every 10ms
+The node loads a MuJoCo model from the `SCENE` XML file and opens a passive
+viewer. It then reacts to input events:
 
-      # write_goal_position: some goal position from other node
-      # end: some end signal from other node
-    outputs:
-      - position # regarding 'pull_position' input, it will output the position every 10ms
-      - end # end signal that can be sent to other nodes (sent when the simulation ends)
+- **`tick`** — echoes a `tick` output first (so downstream nodes don't stall
+  during the step), advances the physics one `mj_step`, syncs the viewer, and
+  publishes the joint state as `joint_state`. If the viewer window has been
+  closed, the node exits.
+- **`action`** — writes the incoming flat array into `data.ctrl`. Its length
+  must equal the model's actuator count (`m.nu`); the values are applied in the
+  XML `<actuator>` declaration order. A mismatched length raises an error.
+- **`render`** — renders every camera declared in the model off-screen and
+  publishes one JPEG per camera (output id = camera name). This branch only runs
+  when off-screen rendering is enabled via the `--cameras` flag; it is not
+  reachable through Hub environment configuration alone.
 
-    env:
-      SCENE: scene.xml # the scene file to be used in the simulation modify this to the relative path from the graph file to the scene file
-      CONFIG: config.json # the configuration file for the simulated arm (only retrieve joints names)
-````
+The node raises at startup if the model has no actuators (`m.nu == 0`).
 
 ## Inputs
 
+- `tick`: step trigger — advances the simulation and publishes joint state.
+- `action`: flat actuator command array, length `m.nu`, in XML actuator order.
+- `render`: render trigger — publishes camera JPEGs (requires `--cameras`).
+
 ## Outputs
 
-## License
+- `tick`: echo of the `tick` input, sent before stepping.
+- `joint_state`: full generalised coordinates (`data.qpos`) as a float32 array.
 
-This library is licensed under the [Apache License 2.0](../../LICENSE).
+Camera JPEG outputs (one per model camera, named after the camera) are produced
+only when off-screen rendering is enabled.
+
+## Environment variables
+
+- `SCENE` (required): path to the MuJoCo scene XML file.
+- `IMAGE_WIDTH` (default `960`): rendered camera image width in pixels — only
+  used when camera rendering is enabled.
+- `IMAGE_HEIGHT` (default `600`): rendered camera image height in pixels — only
+  used when camera rendering is enabled.
+- `JPEG_QUALITY` (default `90`): JPEG encoding quality 0-100 — only used when
+  camera rendering is enabled.
+
+## Usage
+
+```yaml
+nodes:
+  - id: mujoco-client
+    hub: mujoco-client@^0.5
+    inputs:
+      tick: dora/timer/millis/10
+      action: controller/action
+    outputs:
+      - tick
+      - joint_state
+    env:
+      SCENE: scene.xml
+```
+
+## Build
+
+```bash
+pip install .
+```

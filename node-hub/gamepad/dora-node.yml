@@ -1,0 +1,52 @@
+# Node manifest (the typed Hub contract) for `gamepad`.
+# Spec: docs/plan-node-hub.md §5 in dora-rs/dora. Published verbatim into the
+# Hub index by `dora hub publish`.
+apiVersion: 1
+name: gamepad
+namespace: dora-rs
+description: >-
+  Read a connected gamepad/joystick (via pygame) and emit robot velocity
+  commands plus the raw controller state. Defaults target the Logitech F710.
+categories: [sensor, robot]
+keywords: [gamepad, joystick, controller, teleop, cmd_vel, pygame]
+
+runtime: python
+entrypoint: gamepad
+build: pip install .
+platforms: []
+dora: ">=0.3.9"
+
+# The node polls the gamepad once per received event (it does not branch on the
+# input id), so it must be driven by a trigger. Wire a timer to `tick`.
+inputs:
+  tick:
+    required: true
+    description: Poll trigger. Each event reads the current gamepad state and emits outputs.
+
+outputs:
+  cmd_vel:
+    description: >-
+      6-element float64 velocity [linear_x, linear_y, linear_z, angular_x,
+      angular_y, angular_z]. Only sent when any component is non-zero; a zero
+      vector is sent once on shutdown.
+  raw_control:
+    description: >-
+      Full controller state as a single JSON string (axes, buttons, hats, and
+      the axis/button name mapping). Sent alongside each non-zero cmd_vel.
+
+env:
+  MAX_LINEAR_SPEED:
+    description: Scale applied to linear velocity components (m/s).
+    default: 0.05
+  MAX_ANGULAR_SPEED:
+    description: Scale applied to angular velocity components (rad/s).
+    default: 0.8
+  JOYSTICK_DEADZONE:
+    description: Absolute axis magnitude below which stick input is treated as zero.
+    default: 0.2
+
+example: |
+  - id: gamepad
+    hub: gamepad@^0.5
+    inputs:
+      tick: dora/timer/millis/10

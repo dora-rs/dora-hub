@@ -69,7 +69,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         data = pa.array([data])
     else:
         data = pa.array(data)  # initialize pyarrow array
-    node.send_output("v1/chat/completions", data)
+    node.send_output("v1_chat_completions", data)
 
     # Wait for response from dora-echo
     while True:
@@ -77,7 +77,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         if event["type"] == "ERROR":
             response_str = "No response received. Err: " + event["value"][0].as_py()
             break
-        if event["type"] == "INPUT" and event["id"] == "v1/chat/completions":
+        if event["type"] == "INPUT" and event["id"] == "v1_chat_completions":
             response = event["value"]
             response_str = response[0].as_py() if response else "No response received"
             break
