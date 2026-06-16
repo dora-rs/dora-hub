@@ -52,8 +52,43 @@ fn confusable_homoglyph_plus_edit_does_not_escape() {
     }
     assert!(!is_confusable("acme-robotics", "acme"));
     assert!(!is_confusable("widgetworks", "dora-rs"));
+    // a `.`-for-`-` swap is a lookalike too (the resolver key charset allows `.`)
+    assert!(is_confusable("dora.rs", "dora-rs"));
     assert_eq!(normalize("d0rn3"), "dome");
     assert_eq!(levenshtein("acme", "acme2"), 1);
+}
+
+fn validate_entry(entry: &str) -> i32 {
+    let tmp = tempfile::tempdir().unwrap();
+    let pkg = tmp.path().join("acme/widget");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(pkg.join("package.yml"), "owners:\n  - alice\n").unwrap();
+    std::fs::write(pkg.join("1.0.0.yml"), entry).unwrap();
+    dora_index_ci::validate::run(tmp.path()).unwrap()
+}
+
+#[test]
+fn validate_rejects_schema_violations() {
+    let full = "a".repeat(40);
+    assert_eq!(validate_entry(FULL_ENTRY), 0, "clean entry passes");
+    // HIGH-1: required manifest fields
+    let no_runtime = format!(
+        "manifest:\n  apiVersion: 1\n  name: widget\n  namespace: acme\n  entrypoint: x:main\nsource:\n  git: https://x/y\n  rev: {full}\n"
+    );
+    assert_eq!(validate_entry(&no_runtime), 1, "missing runtime rejected");
+    assert_eq!(
+        validate_entry(&FULL_ENTRY.replace("apiVersion: 1", "apiVersion: 2")),
+        1,
+        "apiVersion != 1"
+    );
+    assert_eq!(
+        validate_entry(&FULL_ENTRY.replace("entrypoint: widget:main", "entrypoint: ''")),
+        1,
+        "empty entrypoint"
+    );
+    // HIGH-2: binary artifact value checks
+    let bad_sha = "manifest:\n  apiVersion: 1\n  name: widget\n  namespace: acme\n  runtime: python\n  entrypoint: x:main\nsource:\n  binary:\n    - platform: linux\n      url: https://x/a\n      sha256: NOTAHASH\n";
+    assert_eq!(validate_entry(bad_sha), 1, "bad binary sha256 rejected");
 }
 
 // ---- append-only ----
@@ -153,10 +188,11 @@ fn source_validation() {
         validate_source(&source("binary: []\n")).is_err(),
         "empty binary = no source"
     );
+    let hash = "a".repeat(64);
     assert!(
-        validate_source(&source(
-            "binary:\n  - platform: linux\n    url: u\n    sha256: s\n"
-        ))
+        validate_source(&source(&format!(
+            "binary:\n  - platform: linux\n    url: u\n    sha256: {hash}\n"
+        )))
         .is_ok(),
         "non-empty binary ok"
     );
@@ -165,11 +201,11 @@ fn source_validation() {
     assert!(validate_source(&source(&with_subdir("node-hub/x"))).is_ok());
     assert!(validate_source(&source(&with_subdir("../etc"))).is_err());
     assert!(validate_source(&source(&with_subdir("\"ok\\n../../etc\""))).is_err());
-    // duplicate binary platform
+    // duplicate binary platform (both artifacts otherwise valid)
     assert!(
-        validate_source(&source(
-            "binary:\n  - platform: linux\n    url: a\n    sha256: x\n  - platform: linux\n    url: b\n    sha256: y\n"
-        ))
+        validate_source(&source(&format!(
+            "binary:\n  - platform: linux\n    url: a\n    sha256: {hash}\n  - platform: linux\n    url: b\n    sha256: {hash}\n"
+        )))
         .is_err(),
         "duplicate platform"
     );
@@ -177,7 +213,7 @@ fn source_validation() {
 
 // ---- validate: catalog walk ----
 
-const FULL_ENTRY: &str = "manifest:\n  name: widget\n  namespace: acme\n  apiVersion: 1\nsource:\n  git: https://github.com/dora-rs/dora-hub\n  rev: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
+const FULL_ENTRY: &str = "manifest:\n  apiVersion: 1\n  name: widget\n  namespace: acme\n  runtime: python\n  entrypoint: widget:main\nsource:\n  git: https://github.com/dora-rs/dora-hub\n  rev: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n";
 
 #[test]
 fn validate_accepts_clean_catalog_and_rejects_symlinks() {
@@ -251,6 +287,40 @@ fn rev_parse(dir: &Path, what: &str) -> String {
         .output()
         .unwrap();
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+#[test]
+fn append_only_flags_rename_out_of_index() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    let pkg = repo.join("node-index/acme/widget");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(pkg.join("package.yml"), "owners:\n  - alice\n").unwrap();
+    std::fs::write(pkg.join("1.0.0.yml"), ENTRY).unwrap();
+    git(repo, &["init", "-q", "-b", "main"]);
+    git(repo, &["add", "-A"]);
+    git(repo, &["commit", "-qm", "base"]);
+    let base = rev_parse(repo, "HEAD");
+
+    let _guard = CWD_LOCK.lock().unwrap();
+    let saved = std::env::current_dir().unwrap();
+    std::env::set_current_dir(repo).unwrap();
+    let result = std::panic::catch_unwind(|| {
+        // rename a published version file OUT of node-index/ — a silent removal
+        std::fs::create_dir_all(repo.join("docs")).unwrap();
+        git(
+            repo,
+            &["mv", "node-index/acme/widget/1.0.0.yml", "docs/moved.yml"],
+        );
+        git(repo, &["commit", "-qm", "rename out of index"]);
+        assert_eq!(
+            dora_index_ci::append_only::run(&base).unwrap(),
+            1,
+            "renaming a published file out of node-index/ is an append-only violation"
+        );
+    });
+    std::env::set_current_dir(saved).unwrap();
+    result.unwrap();
 }
 
 const ENTRY: &str = "manifest:\n  name: widget\n  namespace: acme\nsource:\n  git: g\n  rev: r\n";

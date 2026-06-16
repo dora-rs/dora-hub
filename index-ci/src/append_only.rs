@@ -90,7 +90,10 @@ pub fn run(base: &str) -> eyre::Result<i32> {
     let changes = git::changed_files(&mb)?;
 
     for change in &changes {
-        if !under_index(&change.path) {
+        // a rename touches the index if EITHER endpoint is under it — including
+        // a published file renamed *out* of node-index/ (a silent removal)
+        let old_under = change.old_path.as_deref().is_some_and(under_index);
+        if !under_index(&change.path) && !old_under {
             continue;
         }
         match change.status {
@@ -103,8 +106,9 @@ pub fn run(base: &str) -> eyre::Result<i32> {
                 errors += 1;
             }
             'R' | 'C' => {
+                let from = change.old_path.as_deref().unwrap_or(&change.path);
                 println!(
-                    "::error::{}: a published index file must not be renamed/moved",
+                    "::error::{from} -> {}: a published index file must not be renamed/moved",
                     change.path
                 );
                 errors += 1;

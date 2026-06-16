@@ -25,10 +25,12 @@ pub fn merge_base(base: &str) -> eyre::Result<String> {
     Ok(git(&["merge-base", base, "HEAD"])?.trim().to_owned())
 }
 
-/// A changed file in `from..HEAD`: its status letter and (new) path.
+/// A changed file in `from..HEAD`: its status letter, (new) path, and the old
+/// path for a rename/copy.
 pub struct Change {
     pub status: char,
     pub path: String,
+    pub old_path: Option<String>,
 }
 
 /// `git diff --name-status -M <from> HEAD`, parsed.
@@ -43,7 +45,12 @@ pub fn changed_files(from: &str) -> eyre::Result<Vec<Change>> {
         // rename/copy: "<R|C><score>\told\tnew" — the new path is the last column
         let status = cols[0].chars().next().unwrap_or('?');
         let path = cols.last().copied().unwrap_or("").to_owned();
-        changes.push(Change { status, path });
+        let old_path = (matches!(status, 'R' | 'C') && cols.len() >= 3).then(|| cols[1].to_owned());
+        changes.push(Change {
+            status,
+            path,
+            old_path,
+        });
     }
     Ok(changes)
 }

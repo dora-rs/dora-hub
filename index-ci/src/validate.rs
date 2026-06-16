@@ -137,6 +137,12 @@ fn validate_file(
             entry.manifest.name
         ));
     }
+    if entry.manifest.api_version != 1 {
+        errors.push(format!("{rel}: manifest.apiVersion must be 1"));
+    }
+    if entry.manifest.entrypoint.is_empty() {
+        errors.push(format!("{rel}: manifest.entrypoint must not be empty"));
+    }
     if let Err(e) = validate_source(&entry.source) {
         errors.push(format!("{rel}: {e}"));
     }
@@ -179,12 +185,18 @@ fn validate_subdir(subdir: &str) -> eyre::Result<()> {
     Ok(())
 }
 
-/// Each `platform` in a `binary` list must be unique (a duplicate lets
-/// first/last-match consumers resolve different artifacts). Recurses into
-/// `fallback-git`.
+/// Validate each `binary` artifact (non-empty platform/url, 64-hex sha256) and
+/// require a unique `platform` (a duplicate lets first/last-match consumers
+/// resolve different artifacts). Recurses into `fallback-git`.
 fn check_binary_platforms(source: &SourceSpec) -> eyre::Result<()> {
     let mut seen = std::collections::HashSet::new();
     for art in &source.binary {
+        if art.platform.is_empty() || art.url.is_empty() {
+            bail!("`source.binary` artifact has an empty `platform` or `url`");
+        }
+        if art.sha256.len() != 64 || !art.sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+            bail!("`source.binary` artifact `sha256` must be 64 hex chars");
+        }
         if !seen.insert(art.platform.as_str()) {
             bail!("duplicate `source.binary` platform `{}`", art.platform);
         }

@@ -30,12 +30,19 @@ pub struct IndexEntry {
     pub yank_reason: Option<String>,
 }
 
-/// Only the manifest fields the index *key* depends on are checked here; the
-/// rest is opaque (already validated by the publishing CLI).
+/// The manifest fields the index envelope constrains (mirrors the old
+/// `node-index-entry.schema.json` `manifest.required`). The rest of the manifest
+/// body is opaque (`rest`) — the publishing CLI validates it. Missing required
+/// fields fail deserialization; `apiVersion`/`entrypoint` values are checked in
+/// `validate`.
 #[derive(Debug, Deserialize)]
 pub struct Manifest {
+    #[serde(rename = "apiVersion")]
+    pub api_version: u32,
     pub name: String,
     pub namespace: String,
+    pub runtime: String,
+    pub entrypoint: String,
     #[serde(flatten)]
     pub rest: BTreeMap<String, Value>,
 }

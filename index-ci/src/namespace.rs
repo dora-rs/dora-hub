@@ -30,7 +30,9 @@ pub fn reserved() -> BTreeSet<String> {
 /// *combined* to slip past the distance check (e.g. `d0rars` vs `dora-rs`).
 /// Best-effort and intentionally over-eager — a miss only routes to review.
 pub fn normalize(ns: &str) -> String {
-    let mut s = ns.to_ascii_lowercase().replace(['-', '_'], "");
+    // drop the separators a namespace key may contain (`.` is allowed by the
+    // resolver's key charset, so a `dora.rs`-style squat must fold too)
+    let mut s = ns.to_ascii_lowercase().replace(['-', '_', '.'], "");
     for (from, to) in [("rn", "m"), ("cl", "d"), ("vv", "w"), ("nn", "m")] {
         s = s.replace(from, to);
     }
