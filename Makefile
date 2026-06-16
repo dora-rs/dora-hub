@@ -35,11 +35,11 @@ test-rust:
 
 .PHONY: index-ci
 index-ci:
-	@if [ -d scripts/index-ci ]; then \
-	  python3 scripts/index-ci/tests/test_index_ci.py && \
-	  python3 scripts/index-ci/validate_entries.py && \
-	  python3 scripts/index-ci/check_append_only.py && \
-	  python3 scripts/index-ci/check_namespace.py; \
+	@if [ -d index-ci ]; then \
+	  cargo test -p dora-index-ci && \
+	  cargo run -q -p dora-index-ci -- validate && \
+	  cargo run -q -p dora-index-ci -- append-only --base origin/main && \
+	  cargo run -q -p dora-index-ci -- namespace --base origin/main; \
 	else echo "index-ci: no node-index/ catalog in this tree — skipping"; fi
 
 .PHONY: typos

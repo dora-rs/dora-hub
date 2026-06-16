@@ -43,34 +43,44 @@ dora hub publish            # validates the manifest, resolves the commit pin,
 ```
 
 Then open a PR adding the `node-index/<ns>/<name>/<version>.yml` file. CI
-validates it and (once the auto-merge bot lands) merges it without a review
+validates it and the auto-merge bot merges a routine publish without a review
 queue — publishing latency is CI latency.
 
-## Rules (machine-enforced by `node-index CI`)
+## Rules (machine-enforced by the `dora-index-ci` Rust gate)
+
+All enforcement lives in the [`index-ci/`](../index-ci) crate, which reuses the
+same envelope types as the `dora hub` CLI (`dora-hub-client`) so the validator
+and the publisher can't drift.
 
 - **Append-only.** A PR may *add* version files. The only permitted edit to an
-  existing version file is flipping `yanked` (with a `yank_reason`) or
-  *appending* late `source.binary` platform entries. Any other change to a
-  published version fails CI — published versions are immutable.
-- **Schema + pins.** Entries validate against
-  [`schemas/node-index-entry.schema.json`](../schemas/node-index-entry.schema.json);
-  `source.rev` must be a full 40-/64-hex commit, and the directory must match
-  `manifest.namespace` / `manifest.name`.
-- **Namespaces.** A new namespace claim (`package.yml`) for a
-  [reserved name](../scripts/index-ci/reserved_namespaces.txt) needs an index
-  admin. Owner-identity and confusable-name checks land with the governance
-  workstream (P2.3 PR 2).
+  existing version file is flipping `yanked` (with a non-empty `yank_reason`) or
+  *appending* `source.binary` entries for platforms not already pinned. Any
+  other change to a published version fails CI — published versions are immutable.
+- **Schema + pins.** Entries deserialize into the typed envelope (a stray key
+  fails); `source.rev` must be a full 40-/64-hex commit, `source.git` a
+  scheme-checked remote, `subdir` relative with no `..`, and the directory must
+  match `manifest.namespace` / `manifest.name`.
+- **Namespaces.** A new namespace claim is screened against the reserved list
+  ([`index-ci/reserved_namespaces.txt`](../index-ci/reserved_namespaces.txt) →
+  needs an index admin) and a confusable/edit-distance check (→ human review),
+  and always gets a human reviewer — see [`POLICY.md`](POLICY.md).
+- **Owner identity.** The auto-merge bot merges a version only when it is
+  published by an **owner** of its namespace (the `package.yml` OWNERS list,
+  read from the base branch — a PR can't add itself as an owner and self-approve).
 
 These checks run **only** on `node-index/**` — they never gate the
 human-reviewed `node-hub/` source path.
 
-## Status: not yet a trust boundary
+## Trust boundary
 
-This bootstrap (P2.3 PR 1) lands the schema, path/pin validation, and the
-append-only rule. It does **not** yet verify *who* may publish: the CI proves an
-entry is well-formed and immutable, not that the PR author owns the namespace.
-Until the governance workstream (PR 2) and the auto-merge bot (PR 3) land — the
-bot enforces the `package.yml` OWNERS list and reserved-namespace claims — a
-`node-index/` entry must be treated as *unverified provenance*, not an
-authoritative mapping. Resolving `hub:` references should stay opt-in/manual
-until then.
+The auto-merge bot (`.github/workflows/index-auto-merge.yml`) builds the
+`dora-index-ci` binary from the **base branch** and runs it against a PR's
+catalog *data* (never the PR's own sources), so a PR can't neuter its own gate.
+Combined with the owner-identity check, a merged `node-index/` entry has
+verified provenance: published by a namespace owner, schema-valid, pinning an
+immutable commit, never overwriting an existing version.
+
+Two repo settings make this airtight and should be enabled by an admin:
+**branch protection** requiring the `node-index CI` check + code-owner review on
+`index-ci/**` and `.github/workflows/**`; and **"Allow auto-merge"** so the bot
+can queue a merge behind those required checks.

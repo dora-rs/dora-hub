@@ -6,8 +6,7 @@ on:
   pull_request:
     paths:
       - 'node-index/**'
-      - 'schemas/node-index-*.schema.json'
-      - 'scripts/index-ci/**'
+      - 'index-ci/**'
       - '.github/workflows/node-index-ci.yml'
 
 permissions:
@@ -20,18 +19,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          python-version: '3.12'
-      - name: Install deps
-        run: pip install jsonschema pyyaml
-      - name: Unit tests (validator + append-only logic)
-        run: python3 scripts/index-ci/tests/test_index_ci.py
+          workspaces: index-ci
+      - name: Unit + integration tests
+        run: cargo test -p dora-index-ci
+      - name: Build the gate
+        run: cargo build -p dora-index-ci --release
       - name: Validate catalog entries (schema + paths + pins)
-        run: python3 scripts/index-ci/validate_entries.py
+        run: ./target/release/dora-index-ci validate
       - name: Fetch base branch
         run: git fetch --no-tags origin "${{ github.base_ref }}"
       - name: Append-only enforcement (§7.5)
-        run: python3 scripts/index-ci/check_append_only.py --base "origin/${{ github.base_ref }}"
+        run: ./target/release/dora-index-ci append-only --base "origin/${{ github.base_ref }}"
       - name: Namespace governance (§7.4 reserved + confusable)
-        run: python3 scripts/index-ci/check_namespace.py --base "origin/${{ github.base_ref }}"
+        run: ./target/release/dora-index-ci namespace --base "origin/${{ github.base_ref }}"
