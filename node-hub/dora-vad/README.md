@@ -31,10 +31,6 @@ segment closes. A maximum buffered duration bounds how long it waits.
 - `MIN_SPEECH_DURATION_MS` (int, default `300`): minimum speech duration (ms) for
   a segment to be reported.
 - `THRESHOLD` (float, default `0.4`): Silero VAD speech-probability threshold.
-- `MAX_AUDIO_DURATION_S` (float, default `75`): maximum buffered audio duration
-  (s) before flushing.
-- `MIN_AUDIO_SAMPLING_DURATION_MS` (int, default `500`): minimum sampling
-  duration (ms) accumulated before running detection.
 
 ## Usage
 

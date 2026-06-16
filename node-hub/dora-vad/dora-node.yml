@@ -33,14 +33,6 @@ env:
     type: float
     default: 0.4
     description: Silero VAD speech-probability threshold.
-  MAX_AUDIO_DURATION_S:
-    type: float
-    default: 75.0
-    description: Maximum buffered audio duration (s) before flushing.
-  MIN_AUDIO_SAMPLING_DURATION_MS:
-    type: int
-    default: 500
-    description: Minimum sampling duration (ms) accumulated before running detection.
 example: |
   - id: dora-vad
     hub: dora-vad@^0.5
