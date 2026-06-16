@@ -4,7 +4,11 @@ use eyre::Context;
 fn main() -> eyre::Result<()> {
     let mut printed_error = String::new();
     loop {
-        match DoraNode::init_from_node_id(NodeId::from("terminal-print".to_string())) {
+        // `init_flexible`: when spawned by the daemon, use the assigned id from
+        // DORA_NODE_CONFIG (so `hub: terminal-print` works under any node id, and
+        // with multiple instances); fall back to the dynamic-node id
+        // `terminal-print` when run standalone.
+        match DoraNode::init_flexible(NodeId::from("terminal-print".to_string())) {
             Ok((node, mut events)) => {
                 printed_error = String::new();
                 println!("🔥 `terminal-print` connected to: {}", node.dataflow_id());

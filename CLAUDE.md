@@ -41,7 +41,21 @@ dora-echo/
 ```
 **Packaging convention:** the PyPI dist name, the `[project.scripts]` console-script, and the value a dataflow uses as `path:` are **all the same string** (`dora-echo`). New nodes must keep this 1:1:1 mapping. Lint config lives under `[tool.ruff.lint]` — see the shared baseline in the root `ruff.toml`.
 
-**Rust node** (`node-hub/dora-rerun/`): a `Cargo.toml` workspace member (add it to the root `Cargo.toml` `members`). Rust+Python hybrids also carry a `pyproject.toml` and build a wheel with maturin.
+**Rust node** (`node-hub/dora-rerun/`): a `Cargo.toml` workspace member (add it to the root `Cargo.toml` `members`). Rust+Python hybrids also carry a `pyproject.toml` and build a wheel with maturin. **Hub-spawnability:** a Rust node must take its node id from the daemon — use `DoraNode::init_flexible(NodeId::from(...))` (or `init_from_env()`), never a hard-coded `init_from_node_id(...)`, or `hub:` only works when the dataflow names the node exactly that id. (Python `Node()` reads `DORA_NODE_CONFIG` already, so it's fine.)
+
+### Node README checklist
+
+Every node must ship a `README.md`. `dora-node.yml` is the machine contract; the README is the human one — keep them consistent (same description, same example). Use this structure (omit a section only if truly N/A; see `node-hub/terminal-print/README.md` for the reference):
+
+- [ ] **Title + one-line description** — matches `dora-node.yml`'s `description`.
+- [ ] **Behavior** — what the node actually does (the logic), not just what it is.
+- [ ] **Inputs** — each input id + type. **Declare every input a dataflow will wire**: a `hub:` build fails on any wired input not in the manifest (an empty map is *not* a wildcard). A generic sink that prints "any input" must still declare a concrete input (e.g. `data`) — don't leave `inputs` empty.
+- [ ] **Outputs** — each output id + type, or "None" for sinks.
+- [ ] **Environment variables** — name, type, default, meaning (mirror `dora-node.yml`'s `env`), or "None". Document only vars that **actually affect behavior**: a var the code reads with `os.getenv` but never uses is *not* part of the contract — leave it out of the manifest/README (don't imply it does something).
+- [ ] **Usage** — a copy-pasteable dataflow YAML snippet wiring the node. Prefer the `hub:` form. If you show a from-source `path:`, it is the built **executable** (the manifest `entrypoint`, e.g. `target/release/<bin>`), paired with `build:` — never the package directory.
+- [ ] **Build** — for workspace-member Rust nodes, note `cargo build --release --target-dir target` (package-local binary, matches `entrypoint`).
+
+No broken relative links to examples in the upstream `dora-rs/dora` repo — inline the snippet instead.
 
 ## Build & Test Commands
 

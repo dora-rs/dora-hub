@@ -1,0 +1,37 @@
+# Node manifest (the typed Hub contract) for `terminal-print`.
+# Spec: docs/plan-node-hub.md §5 in dora-rs/dora. Published verbatim into the
+# Hub index by `dora hub publish`.
+apiVersion: 1
+name: terminal-print
+namespace: dora-rs
+description: >-
+  Print received inputs to the terminal — a debug sink that pretty-prints UTF-8
+  strings and debug-dumps any other Arrow type.
+categories: [debug]
+keywords: [debug, print, terminal, sink]
+
+runtime: rust
+entrypoint: target/release/terminal-print
+# `--target-dir target` is required for workspace-member nodes: Hub builds and
+# spawns rooted at the subdir and resolves `entrypoint` confined to it, but a
+# plain `cargo build` writes to the *workspace* target dir (outside the subdir).
+# This keeps the binary package-local at <subdir>/target/release/terminal-print.
+build: cargo build --release --target-dir target
+platforms: []
+dora: ">=0.3.9"
+
+# terminal-print is a debug sink: it prints whatever it receives and produces no
+# outputs. The code accepts any input id, but a Hub contract must declare every
+# wired input (an undeclared input fails the build), so it declares one generic
+# `data` input — wire your stream to `data`. (Run it directly via `path:` if you
+# need to print arbitrary/multiple input names.)
+inputs:
+  data:
+    required: false
+    description: The stream to print. Any Arrow value; UTF-8 is shown as text, anything else is debug-dumped.
+
+example: |
+  - id: terminal-print
+    hub: terminal-print@^0.5
+    inputs:
+      data: some-node/output
