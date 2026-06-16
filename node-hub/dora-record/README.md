@@ -1,56 +1,61 @@
 # dora-record
 
-dora data recording using Apache Arrow Parquet.
+Record dataflow inputs to disk. For every input it receives, `dora-record`
+appends a row to a Brotli-compressed Apache Parquet file, capturing the value
+together with UHLC and UTC timestamps and the OpenTelemetry trace/span ids.
 
-This nodes is still experimental.
+## Behavior
 
-## Getting Started
+`dora-record` connects as a dora node and, for each input event, writes to
+`out/<dataflow-id>/<input-id>.parquet`. The first time it sees a given input id
+it creates the file, derives the schema from that input's Arrow data type, and
+spawns a dedicated writer task; subsequent events for the same id stream into
+that file. Each row contains:
 
-```bash
-cargo install dora-record --locked
-```
+- `trace_id`, `span_id` — parsed from the input's OpenTelemetry `traceparent`
+  (empty when absent).
+- `timestamp_uhlc` — the UHLC hybrid-logical-clock time as a `UInt64`.
+- `timestamp_utc` — the same instant as a millisecond UTC timestamp.
+- `<input-id>` — the input value wrapped in a single-element Arrow list.
 
-## Adding to existing graph:
+On `InputClosed` the corresponding writer is dropped (flushing and closing its
+file); remaining writers are closed when the dataflow ends.
+
+## Inputs
+
+- `data`: the stream to record. Any Arrow value — written verbatim to
+  `data.parquet` alongside timestamps and trace ids.
+
+The node itself records **any** input id it receives (one `<id>.parquet` file
+per id), but a `hub:` contract must declare every wired input (an undeclared
+input fails the build), so it declares one generic `data` input. To record
+arbitrary or multiple input names, run it directly via `path:` (where the
+contract isn't enforced) or use one instance per stream.
+
+## Outputs
+
+None — it is a sink.
+
+## Environment variables
+
+None.
+
+## Usage
+
+Wire a node's output into `dora-record`:
 
 ```yaml
-- id: dora-record
-  custom:
-    source: dora-record
+nodes:
+  - id: dora-record
+    hub: dora-record@^0.5
     inputs:
-      image: webcam/image
-      text: webcam/text
-      # You can add any input and it is going to be logged.
+      data: some-node/output
 ```
 
-## Output Files
+Recorded files land under `out/<dataflow-id>/data.parquet`.
 
-Format: Parquet file
+## Build
 
-path: `out/<DATAFLOW_ID>/<INPUT>.parquet`
-
-Columns:
-
-- trace_id: String, representing the id of the current trace
-- span_id: String, representing the unique span id
-- timestamp_uhlc: u64, representing the timestamp in [Unique Hybrid Logical Clock time](https://github.com/atolab/uhlc-rs)
-- timestamp_utc: DataType::Timestamp(Milliseconds), representing the timestamp in Coordinated Universal Time.
-- `<INPUT>` : Column containing the input in its defined format.
-
-Example:
-
-```json
-{
-  "trace_id": "2fd23ddf1b5d2aa38ddb86ceedb55928",
-  "span_id": "15aef03e0f052bbf",
-  "timestamp_uhlc": "7368873278370007008",
-  "timestamp_utc": 1715699508406,
-  "random": [1886295351360621740]
-}
+```bash
+cargo build --release --target-dir target
 ```
-
-## merging multiple file
-
-We can merge input files using the `trace_id` that is going to be shared when using opentelemetry features.
-
-- `trace_id` can also be queried from UI such as jaeger UI, influxDB and so on...
-- `trace_id` keep tracks of the logical flow of data, compared to timestamp based merging that might not reflect the actual logical flow of data.

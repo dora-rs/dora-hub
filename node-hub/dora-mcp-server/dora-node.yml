@@ -1,0 +1,61 @@
+# Node manifest (the typed Hub contract) for `dora-mcp-server`.
+# Spec: docs/plan-node-hub.md §5 in dora-rs/dora. Published verbatim into the
+# Hub index by `dora hub publish`.
+apiVersion: 1
+name: dora-mcp-server
+namespace: dora-rs
+description: >-
+  Model Context Protocol (MCP) server node — exposes the dataflow as MCP tools
+  over HTTP. Tool calls are forwarded to other dora nodes as outputs and their
+  replies are returned as MCP results.
+categories: [communication]
+keywords: [mcp, model-context-protocol, server, tools, http, llm]
+
+runtime: rust
+entrypoint: target/release/dora-mcp-server
+# `--target-dir target` is required for workspace-member nodes: Hub builds and
+# spawns rooted at the subdir and resolves `entrypoint` confined to it, but a
+# plain `cargo build` writes to the *workspace* target dir (outside the subdir).
+# This keeps the binary package-local at <subdir>/target/release/dora-mcp-server.
+build: cargo build --release --target-dir target
+platforms: []
+dora: ">=0.3.9"
+
+# The node accepts an MCP request stream (`request`) and, for each configured
+# tool, forwards the call to a downstream node via a per-tool output id (set in
+# the config file's `mcp_tools[].output`). The downstream node's reply arrives
+# back as an input carrying a `__dora_call_id` metadata key; the node matches it
+# to the pending call. Because those reply input ids are config-driven (one per
+# tool output target) and not fixed in code, they are declared here under a
+# single catch-all `tick` input — wire each tool's reply stream to `tick`.
+inputs:
+  request:
+    required: false
+    description: A JSON-RPC MCP request (e.g. initialize, tools/list, tools/call) as a UTF-8 string. The response is emitted on `response`.
+  tick:
+    required: false
+    description: Tool-call replies from downstream nodes. Each reply must carry the originating `__dora_call_id` metadata key so it is matched to the pending MCP call; the reply body (UTF-8 string) is returned as the MCP CallToolResult.
+
+# `response` is the fixed reply to a `request` input. Tool calls additionally
+# emit on per-tool output ids defined in the config file (`mcp_tools[].output`),
+# which are config-driven and not enumerable here.
+outputs:
+  response:
+    description: The JSON-RPC MCP result (UTF-8 string) for a `request` input.
+
+env:
+  CONFIG:
+    type: string
+    default: config.toml
+    description: Path to the MCP server config file (TOML/JSON/YAML; format inferred from extension). Defines the server name/version, listen address, HTTP endpoint, and the MCP tools to expose.
+
+example: |
+  - id: dora-mcp-server
+    hub: dora-mcp-server@^0.3
+    inputs:
+      request: client/request
+      tick: my-tool-node/result
+    outputs:
+      - response
+    env:
+      CONFIG: config.toml

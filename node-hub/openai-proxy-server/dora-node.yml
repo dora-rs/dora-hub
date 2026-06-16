@@ -1,0 +1,39 @@
+apiVersion: 1
+name: dora-openai-proxy-server
+namespace: dora-rs
+description: >-
+  OpenAI-compatible HTTP proxy server that bridges a dora dataflow with
+  OpenAI-style chat-completion requests. Serves an HTTP API on 0.0.0.0:8000,
+  forwards each incoming chat request into the dataflow as a `text` output, and
+  returns the `text` input it receives back as the chat-completion response.
+categories: [llm, communication]
+keywords: [openai, proxy, http, chat-completion, server, bridge]
+runtime: rust
+entrypoint: target/release/dora-openai-proxy-server
+build: cargo build --release --target-dir target
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  text:
+    description: >-
+      The completion text to return to the pending HTTP chat request. A UTF-8
+      string array; its elements are joined with newlines and sent back as the
+      assistant message of the next queued chat-completion response.
+
+outputs:
+  text:
+    description: >-
+      The flattened prompt texts extracted from an incoming OpenAI
+      chat-completion request (one string per message), emitted whenever an HTTP
+      client posts to `/v1/chat/completions`.
+
+env: {}
+
+example: |
+  - id: openai-proxy-server
+    hub: dora-openai-proxy-server@^0.5
+    inputs:
+      text: model-node/text
+    outputs:
+      - text
