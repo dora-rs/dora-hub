@@ -43,6 +43,20 @@ dora-echo/
 
 **Rust node** (`node-hub/dora-rerun/`): a `Cargo.toml` workspace member (add it to the root `Cargo.toml` `members`). Rust+Python hybrids also carry a `pyproject.toml` and build a wheel with maturin.
 
+### Node README checklist
+
+Every node must ship a `README.md`. `dora-node.yml` is the machine contract; the README is the human one — keep them consistent (same description, same example). Use this structure (omit a section only if truly N/A; see `node-hub/terminal-print/README.md` for the reference):
+
+- [ ] **Title + one-line description** — matches `dora-node.yml`'s `description`.
+- [ ] **Behavior** — what the node actually does (the logic), not just what it is.
+- [ ] **Inputs** — each input id + type, or "accepts any input" for generic sinks.
+- [ ] **Outputs** — each output id + type, or "None" for sinks.
+- [ ] **Environment variables** — name, type, default, meaning (mirror `dora-node.yml`'s `env`), or "None".
+- [ ] **Usage** — a copy-pasteable dataflow YAML snippet wiring the node (`hub:` and/or `path:`).
+- [ ] **Build** — for workspace-member Rust nodes, note `cargo build --release --target-dir target` (package-local binary, matches `entrypoint`).
+
+No broken relative links to examples in the upstream `dora-rs/dora` repo — inline the snippet instead.
+
 ## Build & Test Commands
 
 ### Rust workspace
