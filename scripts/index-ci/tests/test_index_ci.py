@@ -22,6 +22,7 @@ sys.path.insert(0, str(SCRIPTS))
 os.environ["DORA_INDEX_ROOT"] = str(FIXTURES)
 
 import check_append_only as cao  # noqa: E402
+import check_namespace as cns  # noqa: E402
 import validate_entries as ve  # noqa: E402
 
 PASSED = 0
@@ -193,9 +194,34 @@ def test_subdir_no_traversal() -> None:
     check("newline-smuggled dotdot rejected", not subdir_ok("ok\n../../etc"))
 
 
+def test_namespace_screening() -> None:
+    print("check_namespace.screen_namespace:")
+    existing = {"dora-rs", "acme"}
+    reserved = {"dora", "dora-rs", "std", "hub"}
+
+    def needs_review(ns: str) -> bool:
+        return cns.screen_namespace(ns, existing - {ns}, reserved) is not None
+
+    check("fresh distinct namespace auto-merges", not needs_review("widgetworks"))
+    check("publishing into an existing namespace is fine", not needs_review("acme"))
+    check("reserved namespace flagged", needs_review("std"))
+    check("homoglyph of reserved flagged", needs_review("d0ra"))
+    check("homoglyph of existing flagged (0->o)", needs_review("d0ra-rs"))
+    check("rn->m confusable flagged", needs_review("acrne"))
+    check("edit-distance-1 of existing flagged", needs_review("acme2"))
+    # a name far from everything is fine even if it shares a prefix
+    check("distinct longer name auto-merges", not needs_review("acme-robotics"))
+
+    # the homoglyph normalizer and metric the gate is built on
+    check("normalize collapses 0/1/3/5 and rn", cns.normalize("d0rn3") == "dome")
+    check("levenshtein basic", cns.levenshtein("acme", "acme2") == 1)
+    check("levenshtein rn vs m is 2", cns.levenshtein("acrne", "acme") == 2)
+
+
 if __name__ == "__main__":
     test_validate()
     test_append_only()
+    test_namespace_screening()
     test_subdir_no_traversal()
     test_empty_binary_rejected()
     test_symlink_rejected()
