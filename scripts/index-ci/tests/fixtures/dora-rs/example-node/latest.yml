@@ -1,0 +1,9 @@
+manifest:
+  apiVersion: 1
+  name: example-node
+  namespace: dora-rs
+  runtime: python
+  entrypoint: x
+source:
+  git: https://example.com/repo
+  rev: 0123456789abcdef0123456789abcdef01234567

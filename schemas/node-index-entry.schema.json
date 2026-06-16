@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/dora-rs/dora-hub/schemas/node-index-entry.schema.json",
+  "title": "Dora Hub node-index version entry",
+  "description": "One published version: a manifest snapshot plus a source pointer. Mirrors the `IndexEntry` the dora CLI writes (`dora hub publish`). The manifest is already validated by the CLI at publish time; this schema checks the index envelope structurally.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest", "source"],
+  "properties": {
+    "manifest": {
+      "type": "object",
+      "description": "The node's dora-node.yml, copied verbatim at publish time.",
+      "required": ["apiVersion", "name", "namespace", "runtime", "entrypoint"],
+      "properties": {
+        "apiVersion": { "type": "integer", "enum": [1] },
+        "name": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+        "namespace": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,38}$" },
+        "runtime": { "type": "string" },
+        "entrypoint": { "type": "string", "minLength": 1 }
+      }
+    },
+    "source": { "$ref": "#/definitions/source" },
+    "published": {
+      "type": "string",
+      "description": "RFC 3339 publish timestamp (informational)."
+    },
+    "yanked": { "type": "boolean" },
+    "yank_reason": { "type": "string" }
+  },
+  "definitions": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Where the bytes live. The git form is the v1 source-of-record; the binary form records per-platform artifacts. At least one must be usable.",
+      "properties": {
+        "git": { "type": "string", "minLength": 1 },
+        "rev": {
+          "type": "string",
+          "description": "A full, immutable git object id (SHA-1 = 40 hex, SHA-256 = 64 hex). A branch/tag name would make the pin mutable.",
+          "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
+        },
+        "subdir": {
+          "type": "string",
+          "description": "Where in the repository the node lives (monorepo support). Forward slashes, relative, no `..`, single line.",
+          "pattern": "^(?!/)(?!.*\\.\\.)[^\\\\\\n\\r]+$"
+        },
+        "binary": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/binaryArtifact" }
+        },
+        "fallback-git": { "$ref": "#/definitions/source" }
+      },
+      "anyOf": [
+        { "required": ["git", "rev"] },
+        { "required": ["binary"] }
+      ]
+    },
+    "binaryArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "url", "sha256"],
+      "properties": {
+        "platform": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    }
+  }
+}

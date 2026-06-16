@@ -1,0 +1,35 @@
+name: node-index CI
+
+# Path-scoped to the catalog: this never runs for, and never gates, the
+# human-reviewed `node-hub/` source path (Hub spec §7.5 / P2.3).
+on:
+  pull_request:
+    paths:
+      - 'node-index/**'
+      - 'schemas/node-index-*.schema.json'
+      - 'scripts/index-ci/**'
+      - '.github/workflows/node-index-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  index-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install deps
+        run: pip install jsonschema pyyaml
+      - name: Unit tests (validator + append-only logic)
+        run: python3 scripts/index-ci/tests/test_index_ci.py
+      - name: Validate catalog entries (schema + paths + pins)
+        run: python3 scripts/index-ci/validate_entries.py
+      - name: Fetch base branch
+        run: git fetch --no-tags origin "${{ github.base_ref }}"
+      - name: Append-only enforcement (§7.5)
+        run: python3 scripts/index-ci/check_append_only.py --base "origin/${{ github.base_ref }}"

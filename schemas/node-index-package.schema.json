@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/dora-rs/dora-hub/schemas/node-index-package.schema.json",
+  "title": "Dora Hub node-index package metadata",
+  "description": "Namespace/package-level metadata (`package.yml`): description, repo, and the OWNERS list that index CI checks publishes against. Mirrors the CLI's `PackageMeta`.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["owners"],
+  "properties": {
+    "description": { "type": "string" },
+    "repo": { "type": "string" },
+    "owners": {
+      "type": "array",
+      "description": "GitHub accounts (or orgs) allowed to publish into this package. Enforced by index CI (§7.5).",
+      "minItems": 1,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$" }
+    }
+  }
+}
