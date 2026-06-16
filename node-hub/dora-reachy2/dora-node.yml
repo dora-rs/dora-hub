@@ -1,5 +1,5 @@
 apiVersion: 1
-name: dora-reachy2-camera
+name: dora-reachy2
 namespace: dora-rs
 description: >-
   Streams stereo teleop (left/right) and depth camera frames from a Reachy 2
@@ -31,7 +31,7 @@ env:
     description: IP address of the Reachy 2 robot to connect to.
 example: |
   - id: dora-reachy2-camera
-    hub: dora-reachy2-camera@^0.5
+    hub: dora-reachy2@^0.5
     inputs:
       tick: dora/timer/millis/33
     outputs:
