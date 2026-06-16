@@ -1,5 +1,5 @@
 apiVersion: 1
-name: dora-reachy1-vision
+name: dora-reachy1
 namespace: dora-rs
 description: >-
   Reachy 1 camera node. On any input tick, grabs the latest frame from the
@@ -38,7 +38,7 @@ env:
 
 example: |
   - id: dora-reachy1-vision
-    hub: dora-reachy1-vision@^0.5
+    hub: dora-reachy1@^0.5
     inputs:
       tick: dora/timer/millis/100
     outputs:

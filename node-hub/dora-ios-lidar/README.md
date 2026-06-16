@@ -16,6 +16,12 @@ dora node and, on each input event, waits for the next frame from the device and
   (when `ROTATE` = `ROTATE_90_CLOCKWISE`), resizes RGB and depth to the requested
   resolution, and rescales the focal length and principal point accordingly.
   Otherwise the native intrinsics are used.
+
+> Note: intrinsics rescaling is only correct when `ROTATE` is unset. With
+> `ROTATE_90_CLOCKWISE` the focal length and principal point are scaled but not
+> transformed for the rotation (a 90° rotation should swap the x/y axes and remap
+> the principal point), so the published `focal`/`resolution` metadata is
+> approximate in that mode.
 - Sends the RGB frame on `image` (encoding `rgb8`).
 - Converts depth to millimeters (`* 1000`), clips to `[0, 4095]` (uint12 range)
   as `uint16`, and sends it on `depth` (encoding `mono16`) with the focal length
