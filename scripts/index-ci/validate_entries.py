@@ -118,6 +118,13 @@ def validate_file(
     stem = filename[:-4] if filename.endswith(".yml") else filename
     if not SEMVER_RE.match(stem):
         errors.append(f"{rp}: filename `{filename}` is not a `<semver>.yml`")
+    # every published version needs package metadata (owners) to anchor the
+    # later owner/bot checks; a version with no sibling package.yml is orphaned
+    if not (path.parent / "package.yml").is_file():
+        errors.append(
+            f"{rp}: no sibling `package.yml` — every node needs package metadata "
+            f"(description, repo, owners) alongside its versions"
+        )
     _schema_check(entry_schema, doc, rp, errors)
 
     manifest = doc.get("manifest", {})
@@ -159,6 +166,14 @@ def main(argv: list[str]) -> int:
             # handles deletions; nothing to validate here
             continue
         if path.suffix != ".yml":
+            continue
+        # A catalog entry must be a real file inside the index. A symlink can
+        # resolve outside INDEX_ROOT and would otherwise be silently skipped by
+        # the containment check below, smuggling unvalidated content into the
+        # catalog (check_append_only treats added files as allowed).
+        if path.is_symlink():
+            checked += 1
+            errors.append(f"{rel(path)}: catalog entries must be regular files, not symlinks")
             continue
         try:
             path.resolve().relative_to(INDEX_ROOT)

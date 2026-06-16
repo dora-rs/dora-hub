@@ -66,6 +66,40 @@ def test_validate() -> None:
     rc, out = run_validate("std/example-node/package.yml")
     check("reserved namespace warns but passes", rc == 0 and "reserved" in out, out)
 
+    rc, out = run_validate("nopkg/example-node/0.1.0.yml")
+    check("version without sibling package.yml rejected", rc == 1 and "package.yml" in out, out)
+
+
+def test_empty_binary_rejected() -> None:
+    print("node-index-entry.schema empty-binary guard:")
+    check("git+rev source accepted", _source_ok({"git": "g", "rev": "f" * 40}))
+    check("non-empty binary source accepted", _source_ok({"binary": [{"platform": "x", "url": "u", "sha256": "a" * 64}]}))
+    # an empty binary list is not a usable source — must not satisfy the anyOf
+    check("empty binary list rejected", not _source_ok({"binary": []}))
+
+
+def test_symlink_rejected() -> None:
+    import tempfile
+
+    print("validate_entries symlink guard:")
+    with tempfile.TemporaryDirectory() as td:
+        tdp = pathlib.Path(td)
+        outside = tdp / "secret.yml"
+        outside.write_text("manifest: {}\n")
+        entry = tdp / "index" / "ns" / "pkg"
+        entry.mkdir(parents=True)
+        link = entry / "1.0.0.yml"
+        link.symlink_to(outside)
+        saved = ve.INDEX_ROOT
+        ve.INDEX_ROOT = tdp / "index"
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc = ve.main([str(link)])
+        finally:
+            ve.INDEX_ROOT = saved
+        check("symlinked catalog entry rejected", rc == 1 and "symlink" in buf.getvalue(), buf.getvalue())
+
 
 def test_append_only() -> None:
     print("check_append_only.allowed_version_edit:")
@@ -107,15 +141,29 @@ def test_append_only() -> None:
     check("changing the manifest rejected", cao.allowed_version_edit(base, changed_manifest) is not None)
 
 
-def test_subdir_no_traversal() -> None:
-    print("node-index-entry.schema subdir traversal guard:")
+def _source_ok(source: dict) -> bool:
+    """Validate a `source` stanza against the real entry schema (refs resolved)."""
     import jsonschema
 
-    schema = ve.load_schema("node-index-entry.schema.json")["definitions"]["source"]
+    schema = ve.load_schema("node-index-entry.schema.json")
+    doc = {
+        "manifest": {
+            "apiVersion": 1,
+            "name": "n",
+            "namespace": "ns",
+            "runtime": "python",
+            "entrypoint": "x:main",
+        },
+        "source": source,
+    }
+    return not list(jsonschema.Draft7Validator(schema).iter_errors(doc))
+
+
+def test_subdir_no_traversal() -> None:
+    print("node-index-entry.schema subdir traversal guard:")
 
     def subdir_ok(value: str) -> bool:
-        doc = {"git": "g", "rev": "f" * 40, "subdir": value}
-        return not list(jsonschema.Draft7Validator(schema).iter_errors(doc))
+        return _source_ok({"git": "g", "rev": "f" * 40, "subdir": value})
 
     check("plain subdir accepted", subdir_ok("node-hub/dora-yolo"))
     check("leading-slash subdir rejected", not subdir_ok("/etc"))
@@ -128,4 +176,6 @@ if __name__ == "__main__":
     test_validate()
     test_append_only()
     test_subdir_no_traversal()
+    test_empty_binary_rejected()
+    test_symlink_rejected()
     print(f"\nall index-ci tests passed ({PASSED} checks)")
