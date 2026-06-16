@@ -91,6 +91,36 @@ fn validate_rejects_schema_violations() {
     assert_eq!(validate_entry(bad_sha), 1, "bad binary sha256 rejected");
 }
 
+fn validate_pkg(pkg_yaml: &str) -> i32 {
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("acme/widget");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("package.yml"), pkg_yaml).unwrap();
+    dora_index_ci::validate::run(tmp.path()).unwrap()
+}
+
+#[test]
+fn validate_package_metadata() {
+    assert_eq!(
+        validate_pkg("owners:\n  - alice\n"),
+        0,
+        "valid owner passes"
+    );
+    assert_eq!(validate_pkg("owners: []\n"), 1, "no owners rejected");
+    // owners are decide's merge authority — each must be a valid GitHub login
+    assert_eq!(
+        validate_pkg("owners:\n  - bad/name\n"),
+        1,
+        "malformed owner rejected"
+    );
+    // package.yml is the owner authority — unknown fields must not slip in
+    assert_eq!(
+        validate_pkg("owners:\n  - alice\nbogus: 1\n"),
+        1,
+        "unknown field rejected"
+    );
+}
+
 // ---- append-only ----
 
 fn val(yaml: &str) -> Value {
@@ -208,6 +238,21 @@ fn source_validation() {
         )))
         .is_err(),
         "duplicate platform"
+    );
+    // fallback-git must itself be a valid source (recursive, full-hash pin)
+    let with_fallback = |fb: &str| {
+        format!("binary:\n  - platform: linux\n    url: u\n    sha256: {hash}\nfallback-git:\n{fb}")
+    };
+    assert!(
+        validate_source(&source(&with_fallback("  rev: main\n"))).is_err(),
+        "mutable/incomplete fallback-git rejected"
+    );
+    assert!(
+        validate_source(&source(&with_fallback(&format!(
+            "  git: https://x/y\n  rev: {full}\n"
+        ))))
+        .is_ok(),
+        "valid fallback-git accepted"
     );
 }
 

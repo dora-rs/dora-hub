@@ -74,6 +74,7 @@ pub struct BinaryArtifact {
 
 /// Namespace-level metadata (`package.yml`, spec §7.1/§7.4).
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageMeta {
     #[serde(default)]
     pub description: Option<String>,

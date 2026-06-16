@@ -41,10 +41,15 @@ jobs:
       - name: Checkout PR head (data only — never built or executed)
         uses: actions/checkout@v4
         with:
+          # forked publish PRs live in the contributor's repo; the head SHA is
+          # not fetchable from the base repo. Still only DATA — never executed.
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - name: Make the base commit reachable for merge-base
-        run: git fetch --no-tags origin "${{ github.event.pull_request.base.sha }}"
+        # origin is now the (possibly forked) head repo, which may not have the
+        # base commit — fetch it from the base repo explicitly
+        run: git fetch --no-tags "https://github.com/${{ github.repository }}.git" "${{ github.event.pull_request.base.sha }}"
       - name: Run the trusted gate and auto-merge routine publishes
         env:
           GATE: ${{ runner.temp }}/dora-index-ci

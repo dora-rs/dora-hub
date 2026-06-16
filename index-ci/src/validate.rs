@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use eyre::bail;
 
 use crate::is_valid_key_part;
-use crate::model::{IndexEntry, PackageMeta, SourceSpec};
+use crate::model::{BinaryArtifact, IndexEntry, PackageMeta, SourceSpec};
 use crate::namespace::reserved;
 
 /// Validate the whole catalog under `root` (the `node-index/` directory).
@@ -93,7 +93,15 @@ fn validate_file(
             Ok(meta) if meta.owners.is_empty() => {
                 errors.push(format!("{rel}: package.yml must list at least one owner"));
             }
-            Ok(_) => {}
+            Ok(meta) => {
+                // owners are the merge authority for `decide`; each must be a
+                // valid GitHub login/org so a malformed entry can't slip in
+                for owner in &meta.owners {
+                    if !is_valid_owner(owner) {
+                        errors.push(format!("{rel}: invalid owner `{owner}` (GitHub login/org)"));
+                    }
+                }
+            }
             Err(e) => errors.push(format!("{rel}: invalid package metadata: {e}")),
         }
         if reserved.contains(namespace) {
@@ -167,8 +175,25 @@ pub fn validate_source(source: &SourceSpec) -> eyre::Result<()> {
     if let Some(subdir) = &source.subdir {
         validate_subdir(subdir)?;
     }
-    check_binary_platforms(source)?;
+    check_binary_artifacts(&source.binary)?;
+    // a `fallback-git` source must itself be a valid source — same full-hash pin,
+    // URL, subdir, and binary rules (the old schema applied $ref recursively)
+    if let Some(fb) = &source.fallback_git {
+        validate_source(fb)?;
+    }
     Ok(())
+}
+
+/// A valid GitHub login or org: 1–39 chars, alphanumeric with single internal
+/// hyphens (no leading/trailing/double hyphen). Mirrors the old package schema's
+/// `owners` pattern.
+fn is_valid_owner(owner: &str) -> bool {
+    !owner.is_empty()
+        && owner.len() <= 39
+        && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !owner.starts_with('-')
+        && !owner.ends_with('-')
+        && !owner.contains("--")
 }
 
 /// Reject a `subdir` that could escape the checkout: relative, no `..`, single
@@ -185,12 +210,12 @@ fn validate_subdir(subdir: &str) -> eyre::Result<()> {
     Ok(())
 }
 
-/// Validate each `binary` artifact (non-empty platform/url, 64-hex sha256) and
-/// require a unique `platform` (a duplicate lets first/last-match consumers
-/// resolve different artifacts). Recurses into `fallback-git`.
-fn check_binary_platforms(source: &SourceSpec) -> eyre::Result<()> {
+/// Validate one level's `binary` artifacts: non-empty platform/url, 64-hex
+/// sha256, and a unique `platform` (a duplicate lets first/last-match consumers
+/// resolve different artifacts). `validate_source` recurses into `fallback-git`.
+fn check_binary_artifacts(binary: &[BinaryArtifact]) -> eyre::Result<()> {
     let mut seen = std::collections::HashSet::new();
-    for art in &source.binary {
+    for art in binary {
         if art.platform.is_empty() || art.url.is_empty() {
             bail!("`source.binary` artifact has an empty `platform` or `url`");
         }
@@ -200,9 +225,6 @@ fn check_binary_platforms(source: &SourceSpec) -> eyre::Result<()> {
         if !seen.insert(art.platform.as_str()) {
             bail!("duplicate `source.binary` platform `{}`", art.platform);
         }
-    }
-    if let Some(fb) = &source.fallback_git {
-        check_binary_platforms(fb)?;
     }
     Ok(())
 }
