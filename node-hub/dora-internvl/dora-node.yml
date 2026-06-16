@@ -27,7 +27,7 @@ outputs:
     description: >-
       Generated model response as a UTF-8 Arrow array. Emitted only when a
       `text` input arrives after at least one `image` has been received. Carries
-      the metadata of the triggering `text` input.
+      the metadata of the most recently received `image` input.
 env:
   MODEL:
     default: OpenGVLab/InternVL2-1B

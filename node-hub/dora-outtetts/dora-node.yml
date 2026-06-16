@@ -22,8 +22,9 @@ inputs:
     required: true
   tick:
     description: |
-      Any other input (the code matches `TICK`); it is only logged and produces
-      no audio. Declared so a wired heartbeat/timer input passes the contract.
+      Optional heartbeat input matched on the exact id `tick`; it is only logged
+      and produces no audio. Declared so a wired timer/heartbeat passes the
+      contract. Inputs with any other id are ignored (no catch-all branch).
     required: false
 
 outputs:

@@ -1,4 +1,4 @@
-# dora-reachy1
+# dora-reachy1-vision
 
 Reachy 1 camera node. On any input tick it grabs the latest frame from the
 robot's selected head camera over the Reachy SDK and emits it as a bgr8 image.
@@ -36,7 +36,7 @@ triggers a capture, so the input is treated as a generic `tick`.
 ```yaml
 nodes:
   - id: dora-reachy1-vision
-    hub: dora-reachy1@^0.5
+    hub: dora-reachy1-vision@^0.5
     inputs:
       tick: dora/timer/millis/100
     outputs:

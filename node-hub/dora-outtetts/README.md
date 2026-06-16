@@ -16,7 +16,8 @@ For each input event:
 - `text`: takes the first string element of the value, calls
   `interface.generate(...)` (temperature 0.1, repetition penalty 1.1), and emits
   the resulting waveform on `audio`.
-- any other input (the code matches `TICK`): logs the event and produces nothing.
+- `tick`: an input with the exact id `tick` is logged and produces nothing.
+  Inputs with any other id are ignored (there is no catch-all branch).
 
 The CLI entrypoint also supports `--create-speaker <audio>` (builds and saves
 `speaker.json`) and `--test` (runs the package tests); neither is part of the
@@ -25,7 +26,7 @@ dataflow path.
 ## Inputs
 
 - `text`: UTF-8 text to synthesize, read as a single string element.
-- `tick`: any other input id; only logged, no audio produced.
+- `tick`: optional heartbeat matched on the exact id `tick`; only logged, no audio produced.
 
 ## Outputs
 
