@@ -1,46 +1,47 @@
-# Collect data from microphone
+# dora-microphone
 
-This node will send data as soon as the microphone volume is higher than a threshold.
+Captures audio from the system microphone and emits raw PCM chunks.
 
-This is using python Sounddevice.
+## Behavior
 
-It detects beginning and ending of voice activity within a stream of audio and returns the parts that contains activity.
+`dora-microphone` opens the default input device with Python
+[`sounddevice`](https://python-sounddevice.readthedocs.io/) as a single-channel
+(mono) `int16` stream at `SAMPLE_RATE`. Incoming samples are buffered, and once
+`MAX_DURATION` seconds have elapsed the buffer is flushed: the samples are
+converted to `float32` and normalized to the `[-1, 1]` range (divided by
+32768.0), then sent on the `audio` output.
 
-There's a maximum amount of voice duration, to avoid having no input for too long.
+The node polls its own inputs while recording; when an input event returns
+`None` (the dataflow is finishing), it stops the stream and exits.
 
-## Input/Output Specification
+## Inputs
 
-- inputs:
-  - tick: This is used to detect when the dataflow is finished.
-- outputs:
-  - audio: 16kHz sampled audio sent by chunk
+- `tick` — any event. Used only to detect when the dataflow is finished so the
+  node can stop recording. Not required.
 
-## YAML Specification
+## Outputs
+
+- `audio` — mono microphone audio sent in chunks as `float32` samples
+  normalized to `[-1, 1]`, captured at `SAMPLE_RATE`.
+
+## Environment variables
+
+- `MAX_DURATION` (float, default `0.1`) — maximum buffering duration in seconds
+  before a chunk is flushed as an `audio` output.
+- `SAMPLE_RATE` (int, default `16000`) — microphone capture sample rate in Hz.
+
+## Usage
 
 ```yaml
-- id: dora-vad
-  description: Voice activity detection. See; <a href='https://github.com/snakers4/silero-vad'>sidero</a>
-  build: pip install dora-vad
-  path: dora-vad
-  inputs:
-    audio: dora-microphone/audio
-  outputs:
-    - audio
+nodes:
+  - id: dora-microphone
+    hub: dora-microphone@^0.5
+    outputs:
+      - audio
 ```
 
-## Reference documentation
+## Build
 
-- dora-microphone
-  - github: https://github.com/dora-rs/dora-hub/blob/main/node-hub/dora-microphone
-- sounddevice
-  - website: https://python-sounddevice.readthedocs.io/en/0.5.1/
-  - github: https://github.com/spatialaudio/python-sounddevice/tree/master
-
-## Examples
-
-- Speech to Text
-  - github: https://github.com/dora-rs/dora-hub/blob/main/examples/speech-to-text
-
-## License
-
-The code and model weights are released under the MIT License.
+```bash
+pip install .
+```

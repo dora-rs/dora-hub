@@ -1,0 +1,16 @@
+apiVersion: 1
+name: dora-echo
+namespace: dora-rs
+description: Echoes every input it receives straight back out under the same id.
+categories: [debug, transform]
+keywords: [echo, passthrough, loopback, debug, test]
+runtime: python
+entrypoint: dora-echo
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+example: |
+  - id: echo
+    hub: dora-echo@^0.5
+    inputs:
+      my-input: some-node/output

@@ -1,0 +1,32 @@
+apiVersion: 1
+name: dora-microphone
+namespace: dora-rs
+description: Captures audio from the system microphone and emits raw PCM chunks.
+categories: [sensor, speech]
+keywords: [microphone, audio, sounddevice, capture, speech]
+runtime: python
+entrypoint: dora-microphone
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+inputs:
+  tick:
+    required: false
+    description: Any event; used only to detect when the dataflow has finished so the node can stop recording.
+outputs:
+  audio:
+    description: Mono audio captured from the microphone, sent in chunks as float32 samples normalized to [-1, 1] at SAMPLE_RATE.
+env:
+  MAX_DURATION:
+    type: float
+    default: 0.1
+    description: Maximum buffering duration in seconds before a chunk is flushed as an audio output.
+  SAMPLE_RATE:
+    type: int
+    default: 16000
+    description: Microphone capture sample rate in Hz.
+example: |
+  - id: dora-microphone
+    hub: dora-microphone@^0.5
+    outputs:
+      - audio
