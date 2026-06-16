@@ -24,7 +24,7 @@ env:
     description: >-
       Expected value, parsed with ast.literal_eval then wrapped in a pyarrow
       array. Scalars (str/int/float) become a 1-element array; lists become an
-      array of their elements. Unparseable text is kept as a string.
+      array of their elements. Unparsable text is kept as a string.
     default: ""
 example: |
   - id: sender

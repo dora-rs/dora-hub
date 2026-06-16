@@ -29,7 +29,7 @@ None.
 
 - `DATA` (string, required): the payload to send. Evaluated with
   `ast.literal_eval`; a list/tuple becomes an Arrow array of its elements, a
-  scalar becomes a 1-element array, and an unparseable value is sent as a string.
+  scalar becomes a 1-element array, and an unparsable value is sent as a string.
 
 ## Usage
 
