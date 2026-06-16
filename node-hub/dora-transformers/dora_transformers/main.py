@@ -76,12 +76,13 @@ def generate_response(model, tokenizer, text: str, history) -> tuple[str, list]:
 
 def main():
     """TODO: Add docstring."""
+    # Connect to the dataflow first so a misconfigured run fails fast (raising a
+    # dora RuntimeError) before the slow, network-bound model download.
+    node = Node()
+
     # Initialize model and conversation history
     model, tokenizer = load_model()
-    # Initialize history with system prompt
-
     history = [{"role": "system", "content": SYSTEM_PROMPT}] if SYSTEM_PROMPT else []
-    node = Node()
 
     for event in node:
         if event["type"] == "INPUT":

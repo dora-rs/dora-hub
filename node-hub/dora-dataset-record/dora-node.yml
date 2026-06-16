@@ -27,14 +27,15 @@ inputs:
   laptop:
     description: >-
       Camera frame stored as observation.images.<camera-name>. The input id must
-      match a name in CAMERA_NAMES, and the frame must carry height/width
-      metadata. Declare one input per camera in CAMERA_NAMES (laptop and front
-      are the defaults); the hub contract rejects camera ids not declared here.
+      match a name in CAMERA_NAMES (which has no default and must be set), and the
+      frame must carry height/width metadata. Declare one input per camera you
+      list (laptop and front are used in the example below); the hub contract
+      rejects camera ids not declared here.
     required: false
   front:
     description: >-
       Second camera frame stored as observation.images.front. Same contract as
-      laptop; declared because the default CAMERA_NAMES is `laptop,front`.
+      laptop; declared because the example sets `CAMERA_NAMES: laptop,front`.
     required: false
   rav1e_laptop:
     description: >-
