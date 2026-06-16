@@ -305,6 +305,27 @@ All inputs require a `"primitive"` field in the metadata to specify the visualiz
   - `"color"`: [r, g, b] RGB values 0-255
   - `"radius"`: float line thickness
 
+### 13. debug
+
+- **Data**: StringArray
+- **Required metadata**: `{ "primitive": "debug" }`
+- **Optional metadata**: `"level"` to override severity (default `"DEBUG"`)
+- **Entity path**: `logs/<input_id>`
+- **Note**: auto-detected when input ID contains "debug" as a word (e.g. `debug_status`, `my_debug` but not `debugger`)
+
+### 14. log
+
+- **Data**: StringArray
+- **Required metadata**: `{ "primitive": "log" }`
+- **Optional metadata**: `"level"` to override severity (default `"INFO"`)
+- **Entity path**: `logs/<input_id>`
+- **Note**: auto-detected when input ID contains "log" as a word (e.g. `log_planner`, `my_log` but not `analog`, `catalog`)
+
+Both support severity levels: `CRITICAL`, `ERROR`, `WARN`, `INFO`, `DEBUG`, `TRACE`.
+
+The entity path uses `input_id` not `node_id` since the event API doesn't expose the sender's node ID. You can encode the source node in the input name if needed (e.g. `debug_camera_node`).
+
+
 ## (Experimental) For plotting 3D URDF
 
 ```bash
