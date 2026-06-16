@@ -16,6 +16,9 @@ inputs:
   eef_action:
     required: false
     description: Target end-effector pose (7 float values — X/Y/Z/RX/RY/RZ + gripper) applied via EndPoseCtrl/GripperCtrl. Ignored in teach mode. Rate-limited to 20Hz.
+  tick:
+    required: false
+    description: State-poll trigger — on any input that is not joint_action/eef_action, the node reads and emits the current jointstate/pose/gripper. Wire a timer here (e.g. dora/timer/millis/20) to stream arm state.
 outputs:
   jointstate:
     description: Current arm joint state — 7 float32 values (6 joints in radians + gripper opening). Emitted when any input other than joint_action/eef_action is received.
@@ -36,6 +39,7 @@ example: |
     hub: dora-piper@^0.5
     inputs:
       joint_action: some-controller/action
+      tick: dora/timer/millis/20      # poll arm state at 50Hz
     outputs:
       - jointstate
       - pose

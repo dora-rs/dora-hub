@@ -15,6 +15,8 @@ isn't connected yet it waits and retries, so wiring order doesn't matter.
   `Received: <value>`.
 - **Single-shot mode** (`DATA` env var set, or `DORA_NODE_CONFIG` present): it
   parses the value once, wraps it in a `pyarrow` array, and sends it as `data`.
+  Under Hub (`DORA_NODE_CONFIG` is set), the node is non-interactive, so `DATA`
+  **must** be provided — otherwise there is nothing to send and it errors.
 
 ## Inputs
 
@@ -29,8 +31,9 @@ wired to it and prints them, but there is no fixed or typed input contract (so
 
 ## Environment variables
 
-- `DATA` — if set, sends this value once instead of prompting interactively on
-  stdin.
+- `DATA` — the value to send (parsed via `ast.literal_eval`). **Required under
+  Hub** (a daemon-spawned node is non-interactive). Only when run standalone on a
+  terminal does the node prompt for input instead.
 
 ## Usage
 
@@ -38,6 +41,8 @@ wired to it and prints them, but there is no fixed or typed input contract (so
 nodes:
   - id: terminal-input
     hub: terminal-input@^0.5
+    env:
+      DATA: "Hello, dora!"
     outputs:
       - data
 ```

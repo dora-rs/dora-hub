@@ -21,17 +21,18 @@ outputs:
     description: Reference to the encoded video file as an Arrow struct {path, timestamp}; emitted once at startup and per recorded frame.
 env:
   VIDEO_NAME:
-    default: cam_up
-    description: Required. Base name used for the per-episode output directory and the resulting .mp4 file.
+    description: Base name used for the per-episode output directory and the resulting .mp4 file. Required — the node raises at startup if unset (no default).
   FPS:
     type: int
-    default: 30
-    description: Required. Frames per second used to compute frame timestamps and as the ffmpeg input/encode rate.
+    description: Frames per second used to compute frame timestamps and as the ffmpeg input/encode rate. Required — the node raises at startup if unset (no default).
 example: |
   - id: video-encoder
     hub: video-encoder@^0.5
     inputs:
       image: camera/image
       episode_index: recorder/episode_index
+    env:
+      VIDEO_NAME: cam_up
+      FPS: 30
     outputs:
       - image

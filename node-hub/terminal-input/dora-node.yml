@@ -14,9 +14,11 @@ outputs:
     description: The value typed at the prompt (or taken from the DATA env var), parsed via ast.literal_eval and wrapped in an Arrow array.
 env:
   DATA:
-    description: If set, sends this value once instead of prompting interactively on stdin.
+    description: The value to send (parsed via ast.literal_eval). Required under Hub — a daemon-spawned node is non-interactive, so without DATA there is nothing to prompt for and the node errors. (Only when run standalone on a terminal does it prompt for input instead.)
 example: |
   - id: terminal-input
     hub: terminal-input@^0.5
+    env:
+      DATA: "Hello, dora!"
     outputs:
       - data

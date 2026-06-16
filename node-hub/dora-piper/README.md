@@ -30,7 +30,9 @@ leader arm is connected.
 
 - `joint_action` — target joint positions (7 floats: 6 joints + gripper). Ignored in teach mode.
 - `eef_action` — target end-effector pose (7 floats: X/Y/Z/RX/RY/RZ + gripper). Ignored in teach mode.
-- any other input id triggers a one-shot read of the current arm state (see Outputs).
+- `tick` — state-poll trigger: any input that is not `joint_action`/`eef_action`
+  makes the node read and emit the current arm state. Wire a timer here (e.g.
+  `dora/timer/millis/20`) to stream `jointstate`/`pose`/`gripper`.
 
 ## Outputs
 
@@ -54,6 +56,7 @@ nodes:
     hub: dora-piper@^0.5
     inputs:
       joint_action: some-controller/action
+      tick: dora/timer/millis/20      # poll arm state at 50Hz
     outputs:
       - jointstate
       - pose
