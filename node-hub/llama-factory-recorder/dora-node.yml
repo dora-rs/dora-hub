@@ -1,0 +1,62 @@
+apiVersion: 1
+name: llama-factory-recorder
+namespace: dora-rs
+description: Records dataflow image + ground-truth inputs into LLaMA-Factory ShareGPT training data (JSON + saved PNG frames).
+categories: [recorder]
+keywords: [llama-factory, recorder, training-data, vlm, sharegpt, dataset]
+runtime: python
+entrypoint: llama-factory-recorder
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  image:
+    description: >-
+      An image frame to record. Any input whose id contains the substring
+      "image" is treated as an image (e.g. image_right). Metadata must carry
+      encoding (bgr8/rgb8/jpeg), width and height. Frames are buffered until a
+      ground_truth arrives.
+  text:
+    description: >-
+      Optional prompt/question text. A non-empty value overrides DEFAULT_QUESTION
+      for the next recorded sample.
+  ground_truth:
+    description: >-
+      The assistant answer text. Receiving it writes a ShareGPT sample (the
+      buffered images + question/answer messages) to the dataset and saves the
+      images as PNG files. Ignored if no image frames are buffered yet.
+
+outputs:
+  text:
+    description: Echoes the recorded ground_truth text after writing the sample.
+
+env:
+  DEFAULT_QUESTION:
+    type: string
+    default: Describe this image
+    description: Default user prompt used when no text input overrides it.
+  LLAMA_FACTORY_ROOT_PATH:
+    type: string
+    description: >-
+      Required. Path to the LLaMA-Factory checkout. Recorded JSON, dataset_info.json
+      and image folders are written under "<path>/data".
+  ENTRY_NAME:
+    type: string
+    default: dora_demo
+    description: >-
+      Dataset name. Used for the JSON file, image subfolder and dataset_info.json
+      key; an incremental suffix is appended if it already exists.
+
+example: |
+  - id: llama-factory-recorder
+    hub: llama-factory-recorder@^0.5
+    inputs:
+      image: camera/image
+      text: planner/text
+      ground_truth: planner/ground_truth
+    outputs:
+      - text
+    env:
+      DEFAULT_QUESTION: Describe this image
+      LLAMA_FACTORY_ROOT_PATH: /path/to/LLaMA-Factory

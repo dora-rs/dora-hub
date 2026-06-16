@@ -1,0 +1,77 @@
+apiVersion: 1
+name: dora-policy-inference
+namespace: dora-rs
+description: >-
+  LeRobot policy inference node. Buffers camera image observations and robot
+  state, runs a pre-trained LeRobot policy when the lead camera ticks, and emits
+  the predicted robot action (in radians).
+categories: [ml-inference, robot]
+keywords: [lerobot, policy, inference, imitation-learning, robot-control]
+runtime: python
+entrypoint: dora-policy-inference
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  laptop:
+    description: >-
+      Lead camera image observation (Arrow uint8, reshaped via metadata
+      height/width to H x W x 3). Receiving this input triggers inference. The
+      input id must match the first entry of CAMERA_NAMES.
+  front:
+    description: >-
+      Secondary camera image observation (Arrow uint8, reshaped via metadata
+      height/width to H x W x 3). The input id must match an entry of
+      CAMERA_NAMES. To use more cameras, add each one to CAMERA_NAMES AND
+      declare a matching input here — the hub contract rejects camera ids that
+      are not declared in this manifest, so extending CAMERA_NAMES alone fails.
+  robot_state:
+    description: >-
+      Current robot joint state in radians (Arrow numeric). Converted to degrees
+      and float32 before being passed to the policy as observation.state.
+
+outputs:
+  robot_action:
+    description: Predicted robot action, converted from degrees to radians.
+  status:
+    description: Status / log messages emitted by the node (e.g. policy loaded).
+
+env:
+  MODEL_PATH:
+    type: string
+    description: >-
+      Path to the trained LeRobot policy model directory (loaded via
+      PreTrainedConfig.from_pretrained). Required.
+  CAMERA_NAMES:
+    type: string
+    default: "laptop,front"
+    description: >-
+      Comma-separated camera input ids. The first name is the lead camera that
+      triggers inference; each name must be wired as an input.
+  TASK_DESCRIPTION:
+    type: string
+    default: ""
+    description: Task description string passed to task-conditioned policies.
+  INFERENCE_FPS:
+    type: int
+    default: 30
+    description: >-
+      Maximum inference frequency; inference is skipped if the lead camera ticks
+      faster than 1/INFERENCE_FPS seconds since the last run.
+
+example: |
+  - id: dora-policy-inference
+    hub: dora-policy-inference@^0.5
+    inputs:
+      laptop: laptop_cam/image
+      front: front_cam/image
+      robot_state: robot/pose
+    outputs:
+      - robot_action
+      - status
+    env:
+      MODEL_PATH: /path/to/your/lerobot/model
+      CAMERA_NAMES: "laptop,front"
+      TASK_DESCRIPTION: "pick up the cup"
+      INFERENCE_FPS: 30

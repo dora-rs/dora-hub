@@ -1,168 +1,68 @@
 # dora-transformers
 
-A Dora node that provides access to Hugging Face transformer models for efficient text generation and chat completion.
+Generate text with a Hugging Face transformers causal-LM (text in → text out).
 
-## Features
+## Behavior
 
-- Multi-platform GPU acceleration support (CUDA, CPU, MPS)
-- Memory-efficient model loading with 8-bit quantization
-- Seamless integration with speech-to-text and text-to-speech pipelines
-- Configurable system prompts and activation words
-- Support for various transformer models
-- Conversation history management
-- Optimized for both small and large language models
+`dora-transformers` loads a Hugging Face `AutoModelForCausalLM` and
+`AutoTokenizer` for `MODEL_NAME` at startup, then runs as a dora node.
 
-## Getting Started
+For each input event it reads the first element of the Arrow array as a user
+message. If `ACTIVATION_WORDS` is set, the message is answered only when it
+contains at least one of those words; otherwise every input is answered. The
+message is fed through the tokenizer's chat template (optionally prefixed with
+`SYSTEM_PROMPT`), generated with `repetition_penalty=1.2` and up to
+`MAX_TOKENS` new tokens, decoded, and emitted on `text`.
 
-### Installation
+When `HISTORY` is true the assistant reply is appended to the running
+conversation so subsequent inputs see prior turns; otherwise each input is
+answered independently.
 
-```bash
-uv venv -p 3.11 --seed
-uv pip install -e .
-```
+The node reads the value of **any** input id it receives, but a `hub:` contract
+must declare every wired input, so it declares one `text` input.
+
+## Inputs
+
+- `text`: prompt string. The first element of the Arrow array is read as the
+  user message.
+
+## Outputs
+
+- `text`: generated response as a single-element UTF-8 Arrow array.
+
+## Environment variables
+
+- `MODEL_NAME` (string, default `Qwen/Qwen2.5-0.5B-Instruct`): Hugging Face
+  model identifier or local path.
+- `SYSTEM_PROMPT` (string, default empty): optional system message prepended to
+  the conversation.
+- `MAX_TOKENS` (int, default `512`): maximum new tokens per response.
+- `DEVICE` (string, default `auto`): `device_map` passed to `from_pretrained`
+  (e.g. `auto`, `cpu`, `cuda`, `mps`).
+- `TORCH_DTYPE` (string, default `auto`): `torch_dtype` passed to
+  `from_pretrained` (e.g. `auto`, `float16`).
+- `HISTORY` (bool, default `false`): keep multi-turn history across inputs.
+- `ACTIVATION_WORDS` (string, default empty): space-separated trigger words;
+  when set, only inputs containing one respond.
 
 ## Usage
 
-Configure the node in your dataflow YAML file:
-
-```yaml
-- id: dora-transformers
-  build: pip install -e path/to/dora-transformers
-  path: dora-transformers
-  inputs:
-    text: source_node/text # Input text to generate response for
-  outputs:
-    - text # Generated response text
-  env:
-    MODEL_NAME: "Qwen/Qwen2.5-0.5B-Instruct" # Model from Hugging Face
-    SYSTEM_PROMPT: "You're a very succinct AI assistant with short answers."
-    ACTIVATION_WORDS: "what how who where you"
-    MAX_TOKENS: "128" # Reduced for concise responses
-    DEVICE: "cuda" # Use "cpu" for CPU, "cuda" for NVIDIA GPU, "mps" for Apple Silicon
-    ENABLE_MEMORY_EFFICIENT: "true" # Enable 8-bit quantization and memory optimizations
-    TORCH_DTYPE: "float16" # Use half precision for better memory efficiency
-```
-
-### Configuration Options
-
-- `MODEL_NAME`: Hugging Face model identifier (default: "Qwen/Qwen2.5-0.5B-Instruct")
-- `SYSTEM_PROMPT`: Customize the AI assistant's personality/behavior
-- `ACTIVATION_WORDS`: Space-separated list of words that trigger model response
-- `MAX_TOKENS`: Maximum number of tokens to generate (default: 128)
-- `DEVICE`: Computation device to use (default: "cpu")
-- `ENABLE_MEMORY_EFFICIENT`: Enable memory optimizations (default: "true")
-- `TORCH_DTYPE`: Model precision type (default: "auto")
-
-### Memory Management
-
-The node includes several memory optimization features:
-
-- 8-bit quantization for CUDA devices
-- Automatic CUDA cache clearing
-- Memory-efficient model loading
-- Half-precision support
-
-## Example: Voice Assistant Pipeline
-
-Create a conversational AI pipeline that:
-
-1. Captures audio from microphone
-2. Converts speech to text
-3. Generates AI responses using transformers
-4. Converts responses back to speech
-
 ```yaml
 nodes:
-  - id: dora-microphone
-    build: pip install -e ../../dora-microphone
-    path: dora-microphone
-    inputs:
-      tick: dora/timer/millis/2000
-    outputs:
-      - audio
-
-  - id: dora-vad
-    build: pip install -e ../../dora-vad
-    path: dora-vad
-    inputs:
-      audio: dora-microphone/audio
-    outputs:
-      - audio
-      - timestamp_start
-
-  - id: dora-distil-whisper
-    build: pip install -e ../../dora-distil-whisper
-    path: dora-distil-whisper
-    inputs:
-      input: dora-vad/audio
-    outputs:
-      - text
-    env:
-      TARGET_LANGUAGE: english
-
   - id: dora-transformers
-    build: pip install -e ../../dora-transformers
-    path: dora-transformers
+    hub: dora-transformers
     inputs:
-      text: dora-distil-whisper/text
+      text: source-node/text
     outputs:
       - text
     env:
       MODEL_NAME: "Qwen/Qwen2.5-0.5B-Instruct"
-      SYSTEM_PROMPT: "You are an AI assistant that gives extremely concise responses, never more than one or two sentences. Always be direct and to the point."
-      ACTIVATION_WORDS: "what how who where you"
+      SYSTEM_PROMPT: "You are a succinct AI assistant with short answers."
       MAX_TOKENS: "128"
-      DEVICE: "cuda"
-      ENABLE_MEMORY_EFFICIENT: "true"
-      TORCH_DTYPE: "float16"
-
-  - id: dora-kokoro-tts
-    build: pip install -e ../../dora-kokoro-tts
-    path: dora-kokoro-tts
-    inputs:
-      text: dora-transformers/text
-    outputs:
-      - audio
 ```
 
-### Running the Example
+## Build
 
 ```bash
-dora build test.yml
-dora run test.yml
+pip install .
 ```
-
-### Troubleshooting
-
-If you encounter CUDA out of memory errors:
-
-1. Set `DEVICE: "cpu"` for CPU-only inference
-2. Enable memory optimizations with `ENABLE_MEMORY_EFFICIENT: "true"`
-3. Use a smaller model or reduce `MAX_TOKENS`
-4. Set `TORCH_DTYPE: "float16"` for reduced memory usage
-
-## Contribution Guide
-
-Format with [ruff](https://docs.astral.sh/ruff/):
-
-```bash
-uv pip install ruff
-uv run ruff check . --fix
-```
-
-Lint with ruff:
-
-```bash
-uv run ruff check .
-```
-
-Test with [pytest](https://github.com/pytest-dev/pytest):
-
-```bash
-uv pip install pytest
-uv run pytest . # Test
-```
-
-## License
-
-dora-transformers is released under the MIT License

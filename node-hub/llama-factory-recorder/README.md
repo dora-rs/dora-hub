@@ -1,50 +1,76 @@
-# Dora Llama factory recorder
+# llama-factory-recorder
 
-Experimental node for recording for training llama based model.
+Records dataflow image and ground-truth inputs into [LLaMA-Factory](https://github.com/hiyouga/LLaMA-Factory)
+training data: it writes ShareGPT-format JSON samples and saves the corresponding
+image frames as PNG files, ready for fine-tuning a vision-language model.
 
-## Get started
+## Behavior
 
-- Git clone llama-factory:
+The node connects as a dora node and buffers inputs to assemble training samples:
 
-```bash
-git clone https://github.com/hiyouga/LLaMA-Factory --depth 1 $HOME
-```
+- Any input whose id contains the substring `image` (e.g. `image_right`) is
+  decoded from its `encoding`/`width`/`height` metadata (`bgr8`, `rgb8` or
+  `jpeg`) and buffered as a frame.
+- A non-empty `text` input overrides the prompt question (default
+  `DEFAULT_QUESTION`) for the next sample.
+- A `ground_truth` input triggers a write: the buffered frames are saved as PNG files
+  and a ShareGPT message pair (`user` prompt with one `<image>` token per frame +
+  `assistant` ground-truth) is appended to the dataset JSON. If no frames are
+  buffered yet, the `ground_truth` is ignored.
 
-- Replace your AI model node with llama-factory-recorder node.
+On startup it requires `LLAMA_FACTORY_ROOT_PATH` and writes the dataset JSON,
+`dataset_info.json` and image folders under `<LLAMA_FACTORY_ROOT_PATH>/data`. If
+the dataset name already exists, an incremental suffix is appended so existing
+data is not overwritten.
 
-Example:
+## Inputs
+
+- `image`: an image frame to record. Any input id containing `image` is treated
+  as an image; metadata must carry `encoding` (`bgr8`/`rgb8`/`jpeg`), `width` and
+  `height`.
+- `text`: optional prompt text; a non-empty value overrides `DEFAULT_QUESTION`.
+- `ground_truth`: the assistant answer; receiving it writes a sample.
+
+The node matches image inputs by substring, so multiple image streams can be
+wired under distinct ids (each must contain `image`); the contract declares one
+generic `image` input. To record arbitrary image-input names, run it directly via
+`path:` (where the contract isn't enforced).
+
+## Outputs
+
+- `text`: echoes the recorded `ground_truth` text after a sample is written.
+
+## Environment variables
+
+- `DEFAULT_QUESTION` (string, default `Describe this image`): default user prompt
+  used when no `text` input overrides it.
+- `LLAMA_FACTORY_ROOT_PATH` (string, required): path to the LLaMA-Factory
+  checkout. Output is written under `<path>/data`.
+- `ENTRY_NAME` (string, default `dora_demo`): dataset name used for the JSON
+  file, image subfolder and `dataset_info.json` key.
+
+## Usage
 
 ```yaml
-- id: dora-qwenvl-recorder
-  build: pip install -e ../../llama-factory-recorder
-  path: llama-factory-recorder
-  inputs:
-    image_right: reachy/image_right
-    ground_truth: key-interpolation/text
-  outputs:
-    - text
-  env:
-    DEFAULT_QUESTION: Respond to people. # Prompt to use
-    LLAMA_FACTORY_ROOT_PATH: $HOME/LLaMA-Factory # path to llama factory
+nodes:
+  - id: llama-factory-recorder
+    hub: llama-factory-recorder@^0.5
+    inputs:
+      image: camera/image
+      text: planner/text
+      ground_truth: planner/ground_truth
+    outputs:
+      - text
+    env:
+      DEFAULT_QUESTION: Describe this image
+      LLAMA_FACTORY_ROOT_PATH: /path/to/LLaMA-Factory
 ```
 
-- Run your dataflow and at the end of the run you will find your data within the llama factory folder.
-- Modify `llama-factory/examples/train_lora/qwen2vl_lora_sft.yaml` so that the dataset is the one you want to use,
+After the run, the recorded dataset is in `<LLAMA_FACTORY_ROOT_PATH>/data`; point
+your LLaMA-Factory training config's `dataset:` at the `ENTRY_NAME` you used.
 
-```yaml,diff
-- dataset: mllm_demo,identity  # video: mllm_video_demo
-+ dataset: dora_demo_1,identity`
-```
-
-- You can also choose the 2B model instead of the 7B model with
-
-```yaml,diff
-- model_name_or_path: Qwen/Qwen2-VL-7B-Instruct
-+ model_name_or_path: Qwen/Qwen2.5-VL-3B-Instruct
-```
-
-- Then
+## Build
 
 ```bash
-llamafactory-cli train examples/train_lora/qwen2vl_lora_sft.yaml
+pip install .
 ```
