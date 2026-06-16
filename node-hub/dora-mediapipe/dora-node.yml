@@ -26,6 +26,7 @@ example: |
     hub: dora-mediapipe@^0.5
     inputs:
       image: camera/image
+      depth: camera/depth      # required for the points3d output
     outputs:
       - points2d
       - points3d
