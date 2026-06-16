@@ -54,7 +54,7 @@ def main():
 
     pygame.display.set_caption("Pygame minimalistic interface")
 
-    node = Node(args.name)
+    node = Node()
 
     episode_index = 1
     recording = False

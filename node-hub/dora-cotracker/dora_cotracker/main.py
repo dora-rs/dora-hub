@@ -12,7 +12,7 @@ INTERACTIVE_MODE = os.getenv("INTERACTIVE_MODE", "false").lower() == "true"
 
 class VideoTrackingNode:
     def __init__(self):
-        self.node = Node("video-tracking-node")
+        self.node = Node()
         # Initialize CoTracker
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = torch.hub.load("facebookresearch/co-tracker", "cotracker3_online")
