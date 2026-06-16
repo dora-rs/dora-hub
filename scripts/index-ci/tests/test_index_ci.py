@@ -202,23 +202,30 @@ def test_namespace_screening() -> None:
     def tier(ns: str) -> str:
         return cns.review_tier(ns, existing - {ns}, reserved)[0]
 
+    def reason(ns: str) -> str:
+        return cns.review_tier(ns, existing - {ns}, reserved)[1]
+
     # every new namespace needs at least a human reviewer — never auto-merge
     check("fresh distinct namespace needs human review", tier("widgetworks") == "human")
     check("distinct longer name needs human review", tier("acme-robotics") == "human")
-    # reserved / confusable claims escalate to an index admin
+    # only RESERVED claims escalate to an index admin (§7.4)
     check("reserved namespace needs admin", tier("std") == "admin")
-    check("homoglyph of reserved needs admin", tier("d0ra") == "admin")
-    check("homoglyph of existing needs admin (0->o)", tier("d0ra-rs") == "admin")
-    check("rn->m confusable needs admin", tier("acrne") == "admin")
-    check("edit-distance-1 of existing needs admin", tier("acme2") == "admin")
+    # confusables get mandatory HUMAN review (not admin), but flagged in the
+    # reason so the detection is still proven (not silently defaulting to "new")
+    check("homoglyph of reserved is human review", tier("d0ra") == "human")
+    check("homoglyph of reserved is flagged confusable", "confusable" in reason("d0ra"))
+    check("homoglyph of existing is human review (0->o)", tier("d0ra-rs") == "human")
+    check("homoglyph of existing flagged", "confusable" in reason("d0ra-rs"))
+    check("rn->m confusable flagged", "confusable" in reason("acrne"))
+    check("edit-distance-1 of existing flagged", "confusable" in reason("acme2"))
 
     # homoglyph + structural edit must not compose past the gate (the d0rars
     # class): a 0->o swap AND a dropped/extra hyphen is still one skeleton
-    check("homoglyph + dropped hyphen needs admin", tier("d0rars") == "admin")
-    check("homoglyph + double hyphen needs admin", tier("d0ra--rs") == "admin")
-    check("dropped hyphen alone needs admin", tier("dorars") == "admin")
+    check("homoglyph + dropped hyphen flagged", "confusable" in reason("d0rars"))
+    check("homoglyph + double hyphen flagged", "confusable" in reason("d0ra--rs"))
+    check("dropped hyphen alone flagged", "confusable" in reason("dorars"))
     # bigram lookalikes: cl->d, vv->w, nn->m
-    check("cl->d homoglyph needs admin", tier("clora-rs") == "admin")
+    check("cl->d homoglyph flagged", "confusable" in reason("clora-rs"))
 
     # the homoglyph normalizer and metric the gate is built on
     check("normalize collapses 0/1/3/5 and rn", cns.normalize("d0rn3") == "dome")

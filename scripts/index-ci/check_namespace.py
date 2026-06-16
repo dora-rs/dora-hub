@@ -9,8 +9,9 @@ reviewer — and reserved or confusable claims escalate to an index admin:
     system and needs an index admin (`reserved_namespaces.txt`).
   - **Confusable.** `<ns>` that looks like an existing or reserved namespace —
     homoglyph-normalized equality (`d0ra-rs` == `dora-rs`, `acrne` == `acme`)
-    or Levenshtein distance <= 1 — is the dependency-confusion vector and needs
-    an index admin.
+    or Levenshtein distance <= 1 — is the dependency-confusion vector and gets
+    mandatory human review (flagged, but the same human-review tier as any new
+    namespace — not an admin-only action).
 
 This is a *routing signal, not a hard gate*: it emits a warning per new claim
 and exits 0. A new namespace is never a CI failure — that would force a
@@ -85,14 +86,15 @@ def is_confusable(a: str, b: str) -> bool:
 def review_tier(ns: str, existing: set[str], reserved: set[str]) -> tuple[str, str]:
     """Classify a *new* namespace claim. Every new namespace needs at least a
     human reviewer (§7.4) — that is the contract the auto-merge bot enforces by
-    withholding auto-merge, NOT a CI failure. Reserved or confusable claims
-    escalate to an index admin. Returns (tier, reason), tier in {"admin",
-    "human"}."""
+    withholding auto-merge, NOT a CI failure. Per §7.4 a *reserved* claim needs
+    an index admin specifically; a *confusable* claim is the dependency-confusion
+    vector and gets mandatory human review (same tier as any new namespace, but
+    flagged in the reason). Returns (tier, reason), tier in {"admin", "human"}."""
     if ns in reserved:
         return "admin", f"namespace `{ns}` is reserved"
     for ref in sorted(existing | reserved):
         if is_confusable(ns, ref):
-            return "admin", f"namespace `{ns}` is confusable with `{ref}`"
+            return "human", f"namespace `{ns}` is confusable with `{ref}`"
     return "human", f"namespace `{ns}` is newly claimed"
 
 

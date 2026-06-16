@@ -38,8 +38,8 @@ index-ci:
 	@if [ -d scripts/index-ci ]; then \
 	  python3 scripts/index-ci/tests/test_index_ci.py && \
 	  python3 scripts/index-ci/validate_entries.py && \
-	  python3 scripts/index-ci/check_append_only.py --base main && \
-	  python3 scripts/index-ci/check_namespace.py --base main; \
+	  python3 scripts/index-ci/check_append_only.py && \
+	  python3 scripts/index-ci/check_namespace.py; \
 	else echo "index-ci: no node-index/ catalog in this tree — skipping"; fi
 
 .PHONY: typos
