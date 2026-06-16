@@ -13,14 +13,16 @@ wiring, latency, and dynamic-node connections.
 
 ## Inputs
 
-Accepts **any** input, under **any** name — it echoes whatever you wire to it.
-There is no fixed or typed input contract (so `dora-node.yml` declares none).
+- `data`: the value to echo. Re-sent unchanged on the `data` output.
+
+The node re-sends **any** input id it receives back under that same id, but a
+`hub:` contract must declare every wired input/output (undeclared ones fail the
+build), so it declares one generic `data` in/out. Wire to `data` for Hub usage,
+or run it directly via `path:` to echo arbitrary input names.
 
 ## Outputs
 
-For each input received, emits an output **with the same id** as that input,
-carrying the unchanged value and metadata. The set of output ids is therefore
-determined entirely by the inputs you wire in (so `dora-node.yml` declares none).
+- `data`: the `data` input, re-sent unchanged (same value and metadata).
 
 ## Environment variables
 
@@ -34,10 +36,12 @@ nodes:
   - id: echo
     hub: dora-echo@^0.5
     inputs:
-      my-input: some-node/output
+      data: some-node/output
+    outputs:
+      - data
 ```
 
-The output of the `echo` node is available as `echo/my-input`.
+The echoed value is available as `echo/data`.
 
 ## Build
 

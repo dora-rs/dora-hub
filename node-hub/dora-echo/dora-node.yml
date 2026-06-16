@@ -9,8 +9,21 @@ entrypoint: dora-echo
 build: pip install .
 dora: ">=0.3.9"
 platforms: []
+# dora-echo re-sends any input back under the same id. The code handles any id,
+# but a Hub contract must declare every wired input/output (undeclared ones fail
+# the build), so it declares one generic `data` in/out. Wire to `data` for Hub
+# usage, or run via `path:` for arbitrary ids.
+inputs:
+  data:
+    required: false
+    description: The value to echo back. Returned unchanged on the `data` output.
+outputs:
+  data:
+    description: The `data` input, re-sent unchanged (same value and metadata).
 example: |
   - id: echo
     hub: dora-echo@^0.5
     inputs:
-      my-input: some-node/output
+      data: some-node/output
+    outputs:
+      - data
