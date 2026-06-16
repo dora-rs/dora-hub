@@ -201,7 +201,7 @@ def main():
                     response = model.create_chat_completion(
                         messages=history,  # Prompt
                         max_tokens=150,
-                        tools=tools,
+                        tools=tmp_tools,
                     )["choices"][0]["message"]["content"]
 
                     history += [{"role": "assistant", "content": response}]
