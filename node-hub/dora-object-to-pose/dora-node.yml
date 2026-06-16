@@ -1,0 +1,65 @@
+# Node manifest (the typed Hub contract) for `dora-object-to-pose`.
+# Spec: docs/plan-node-hub.md §5 in dora-rs/dora. Published verbatim into the
+# Hub index by `dora hub publish`.
+apiVersion: 1
+name: dora-object-to-pose
+namespace: dora-rs
+description: >-
+  Convert detected objects (2D bounding boxes or segmentation masks) plus a
+  depth frame into 3D poses, projecting masked/boxed pixels to camera-space
+  points and reducing them to xyzrpy poses.
+categories: [transform, robot]
+keywords: [pose, depth, bounding-box, mask, 3d, projection, perception]
+
+runtime: rust
+entrypoint: target/release/dora-object-to-pose
+# `--target-dir target` is required for workspace-member nodes: Hub builds and
+# spawns rooted at the subdir and resolves `entrypoint` confined to it, but a
+# plain `cargo build` writes to the *workspace* target dir (outside the subdir).
+# This keeps the binary package-local at <subdir>/target/release/dora-object-to-pose.
+build: cargo build --release --target-dir target
+platforms: []
+dora: ">=0.3.9"
+
+# A `pose` output is produced when a `masks` or `boxes2d` input arrives AND a
+# `depth` frame has already been cached. `depth` must therefore be wired and
+# arrive first. `image` is cached but not used to compute poses.
+inputs:
+  depth:
+    required: true
+    description: >-
+      UInt16 depth frame (millimetres), row-major width*height. Optional
+      metadata parameters `height`, `width`, `focal` (ListInt[2]),
+      `resolution` (ListInt[2]) override the projection defaults.
+  masks:
+    required: false
+    description: >-
+      Segmentation masks, Float32 (>0 = set) or Boolean, flattened in
+      chunks of height*width pixels — one chunk per object. Produces `pose`.
+  boxes2d:
+    required: false
+    description: >-
+      2D bounding boxes as Int64 in chunks of 4 [x_min, y_min, x_max, y_max].
+      Produces `pose`.
+  image:
+    required: false
+    description: UInt8 image buffer; cached on receipt but not used to compute poses.
+
+outputs:
+  pose:
+    description: >-
+      Flattened Float32 poses, 6 values per object [x, y, z, roll(0), pitch(0),
+      yaw]. Carries an `encoding: xyzrpy` metadata parameter.
+
+env:
+  CAMERA_PITCH:
+    type: float
+    default: 2.47
+    description: Camera pitch in radians, used to rotate projected points into the world frame.
+
+example: |
+  - id: dora-object-to-pose
+    hub: dora-object-to-pose@^0.5
+    inputs:
+      depth: camera/depth
+      boxes2d: detector/boxes2d

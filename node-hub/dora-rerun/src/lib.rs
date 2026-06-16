@@ -123,6 +123,7 @@ pub fn lib_main() -> Result<()> {
                     "series",
                     "points3d",
                     "points2d",
+                    "lines3d",
                 ];
                 let matches: Vec<&str> = keywords
                     .iter()
@@ -160,6 +161,8 @@ pub fn lib_main() -> Result<()> {
                     Some("points3d")
                 } else if id_str.contains("points2d") {
                     Some("points2d")
+                } else if id_str.contains("lines3d") {
+                    Some("lines3d")
                 } else {
                     None
                 };
@@ -171,7 +174,7 @@ pub fn lib_main() -> Result<()> {
                     bail!(
                         "No visualization primitive specified in metadata for input '{}'. \
                         Please add 'primitive: <type>' to metadata, where <type> is one of: \
-                        image, depth, text, boxes2d, boxes3d, masks, jointstate, pose, series, points3d, points2d",
+                        image, depth, text, boxes2d, boxes3d, masks, jointstate, pose, series, points3d, points2d, lines3d",
                         id
                     );
                 }

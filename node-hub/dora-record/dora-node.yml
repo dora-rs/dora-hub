@@ -1,0 +1,41 @@
+# Node manifest (the typed Hub contract) for `dora-record`.
+# Spec: docs/plan-node-hub.md §5 in dora-rs/dora. Published verbatim into the
+# Hub index by `dora hub publish`.
+apiVersion: 1
+name: dora-record
+namespace: dora-rs
+description: >-
+  Record dataflow inputs to disk — writes each received input to a Brotli-
+  compressed Parquet file under out/<dataflow-id>/<input-id>.parquet, capturing
+  the value plus UHLC/UTC timestamps and OpenTelemetry trace/span ids.
+categories: [recorder]
+keywords: [record, recorder, parquet, sink, logging, dataset]
+
+runtime: rust
+entrypoint: target/release/dora-record
+# `--target-dir target` is required for workspace-member nodes: Hub builds and
+# spawns rooted at the subdir and resolves `entrypoint` confined to it, but a
+# plain `cargo build` writes to the *workspace* target dir (outside the subdir).
+# This keeps the binary package-local at <subdir>/target/release/dora-record.
+build: cargo build --release --target-dir target
+platforms: []
+dora: ">=0.3.9"
+
+# dora-record is a sink: it records whatever it receives and produces no outputs.
+# The code records *any* input id (one Parquet file per id, named <id>.parquet),
+# but a Hub contract must declare every wired input (an undeclared input fails
+# the build), so it declares one generic `data` input — wire your stream to
+# `data`. To record arbitrary/multiple input names, run it directly via `path:`
+# (where the contract isn't enforced) or use one instance per stream.
+inputs:
+  data:
+    required: false
+    description: The stream to record. Any Arrow value; written verbatim to data.parquet alongside timestamps and trace ids.
+
+outputs: {}
+
+example: |
+  - id: dora-record
+    hub: dora-record@^0.5
+    inputs:
+      data: some-node/output

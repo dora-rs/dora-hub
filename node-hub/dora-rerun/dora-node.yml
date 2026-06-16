@@ -1,0 +1,77 @@
+apiVersion: 1
+name: dora-rerun
+namespace: dora-rs
+description: Log images, depth, boxes, points, series, text, and URDF robot state to a Rerun.io viewer.
+categories: [visualization, debug]
+keywords: [rerun, visualization, viewer, image, robot]
+runtime: rust
+entrypoint: target/release/dora-rerun
+build: cargo build --release --target-dir target
+dora: ">=0.3.9"
+platforms: []
+inputs:
+  image:
+    description: RGB/BGR or encoded (jpeg/png/avif) image bytes; uses width/height/encoding metadata.
+    required: false
+  depth:
+    description: Float32/Float64/UInt16 depth map; logged as a DepthImage when camera metadata (camera_position, camera_orientation, focal) is present.
+    required: false
+  text:
+    description: UTF-8 string array logged as a TextLog (Chinese characters are transliterated to pinyin).
+    required: false
+  boxes2d:
+    description: 2D bounding boxes (struct with bbox/labels or a float/int array); uses format metadata (xyxy/xywh).
+    required: false
+  boxes3d:
+    description: 3D bounding boxes (struct or float/int array); uses format metadata (min_max/center_size/center_half_size), optional color/solid.
+    required: false
+  masks:
+    description: Float32 or boolean mask array cached for later painting.
+    required: false
+  jointstate:
+    description: Joint positions (float array) applied to a loaded URDF chain matched by the input id suffix.
+    required: false
+  pose:
+    description: Joint positions (float array) applied to a loaded URDF chain matched by the input id suffix.
+    required: false
+  series:
+    description: Float64 array logged as scalar time series, one entity per index.
+    required: false
+  points3d:
+    description: Flat float array of 3D points (xyz triples); uses color/radii metadata.
+    required: false
+  points2d:
+    description: Flat float array of 2D points (xy pairs); color assigned per input id.
+    required: false
+  lines3d:
+    description: Flat float array of 3D line-strip points (xyz triples); uses color/radius metadata.
+    required: false
+outputs: {}
+env:
+  OPERATING_MODE:
+    type: string
+    default: "SPAWN"
+    description: Viewer mode — SPAWN (launch viewer), CONNECT (gRPC to a running viewer), or SAVE (write a .rerun archive). Unknown values fall back to SPAWN.
+  RERUN_SERVER_ADDR:
+    type: string
+    default: "127.0.0.1:9876"
+    description: gRPC address of the Rerun viewer to connect to when OPERATING_MODE is CONNECT.
+  RERUN_MEMORY_LIMIT:
+    type: string
+    default: "25%"
+    description: Rerun viewer memory limit (e.g. "25%" or "4GB") used in SPAWN mode.
+  README:
+    type: string
+    description: Optional Markdown text logged as a README TextDocument in the viewer.
+example: |
+  nodes:
+    - id: camera
+      path: opencv-video-capture
+      outputs:
+        - image
+    - id: dora-rerun
+      hub: dora-rerun@^1.0
+      inputs:
+        image: camera/image
+      env:
+        OPERATING_MODE: SPAWN

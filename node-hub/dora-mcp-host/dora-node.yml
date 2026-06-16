@@ -1,0 +1,88 @@
+apiVersion: 1
+name: dora-mcp-host
+namespace: dora-rs
+description: >-
+  A Model Context Protocol (MCP) host node. Exposes an OpenAI-compatible HTTP
+  API, routes chat completions to multiple AI providers (OpenAI, Gemini,
+  Deepseek) or back into the dataflow, and connects to MCP servers to expose
+  their tools.
+categories: [communication]
+keywords:
+  - mcp
+  - model-context-protocol
+  - openai
+  - llm
+  - chat-completions
+runtime: rust
+entrypoint: target/release/dora-mcp-host
+build: cargo build --release --target-dir target
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  tick:
+    description: >-
+      Reply stream for the Dora provider. A node wired here receives the chat
+      prompt on the configured output and must reply with a UTF-8 string array
+      carrying the same `__dora_call_id` metadata parameter that was sent with
+      the prompt. The input id is matched by metadata, not by name, so any id
+      may be wired.
+
+outputs:
+  tick:
+    description: >-
+      Chat prompt forwarded to the dataflow when a request routes to the Dora
+      provider. Emitted as a UTF-8 string array with a `__dora_call_id`
+      metadata parameter used to correlate the reply. The actual output id is
+      set by the `output` field of the Dora provider in the config file.
+
+env:
+  CONFIG:
+    type: string
+    default: config.toml
+    description: >-
+      Path to the host config file (toml, json, or yaml). The node exits if
+      the file does not exist.
+  GEMINI_API_KEY:
+    type: string
+    description: >-
+      Fallback API key for a Gemini provider when its `api_key` is not set in
+      the config file.
+  GEMINI_API_URL:
+    type: string
+    default: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent
+    description: >-
+      Fallback API URL for a Gemini provider when its `api_url` is not set in
+      the config file.
+  DEEPSEEK_API_KEY:
+    type: string
+    description: >-
+      Fallback API key for a Deepseek provider when its `api_key` is not set in
+      the config file.
+  DEEPSEEK_API_URL:
+    type: string
+    default: https://api.deepseek.com
+    description: >-
+      Fallback API URL for a Deepseek provider when its `api_url` is not set in
+      the config file.
+  OPENAI_API_KEY:
+    type: string
+    description: >-
+      Fallback API key for an OpenAI provider when its `api_key` is not set in
+      the config file.
+  OPENAI_API_URL:
+    type: string
+    default: https://api.openai.com/v1/chat/completions
+    description: >-
+      Fallback API URL for an OpenAI provider when its `api_url` is not set in
+      the config file.
+
+example: |
+  - id: dora-mcp-host
+    hub: dora-mcp-host
+    outputs:
+      - text
+    inputs:
+      text: dora-echo/echo
+    env:
+      CONFIG: mcp_host.toml

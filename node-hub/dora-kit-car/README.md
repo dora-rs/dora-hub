@@ -1,55 +1,61 @@
-# dora-kit-car control
+# dora-kit-car
 
-## Introduce
+Differential-drive ("kit car") mobile-robot controller. Receives velocity
+commands and drives the robot forward/backward and turns it left/right by
+writing chassis speed frames to a serial port.
 
-Dora Kit Car is a DORA node for controlling a differential-drive mobile robot to move forward/backward and turn left/right. Developed in Rust with Python API support.
+## Behavior
 
-## Highlights
+`dora-kit-car` connects as a dora node and opens the serial port named by the
+`SERIAL_PORT` environment variable at 115200 baud (8N1, no flow control). For
+every input event it receives, it interprets the payload as an Apache Arrow
+`Float64Array`. When the array has exactly 6 elements it reads them as a ROS
+`geometry_msgs/Twist` vector `[x, y, z, rx, ry, rz]`, takes the linear `x`
+(index 0) and angular `rz` (index 5), encodes them into a chassis command frame,
+and writes that frame to the serial port. Arrays of any other length are
+ignored.
 
-- Compatible with the ROS geometry_msgs/Twist.msg format, utilizing only:
-- linear.x (positive: forward movement, negative: backward movement)
-- angular.z (positive: left turn, negative: right turn)
+The node listens on **any** input id (it does not match on a specific name), so
+the wired input can be called anything; the Hub contract declares it as `tick`.
+It produces no outputs.
 
-## Raw Message Definition
+## Inputs
 
-Accepts an array of six f64's
+- `tick`: velocity command as a `Float64Array` of length 6 in
+  `geometry_msgs/Twist` order `[x, y, z, rx, ry, rz]`. Only `x` (forward/back)
+  and `rz` (turn) are used.
 
-- six f64 array [x, y, z, rx, ry, rz] only used x, rz
+## Outputs
 
-see [https://docs.ros.org/en/noetic/api/geometry_msgs/html/msg/Twist.html](https://docs.ros.org/en/noetic/api/geometry_msgs/html/msg/Twist.html)
+None — it is an actuator sink.
 
-## Environment
+## Environment variables
 
-Adds an environment variable `SERIAL_PORT` to specify the serial port for the car device, with `/dev/ttyUSB0` as the default value
+- `SERIAL_PORT` (string, default `/dev/ttyUSB0`): serial port device the car
+  chassis is connected to.
 
-## Demo Video
-
-[![Dora Kit Car Video](https://yt3.ggpht.com/92FGXQL59VsiXim13EJQek4IB7CRI-9SjmW3LhH8PFY16oBXqKUvkKhg5UdzLiGCOmoSuTvdpQxIuw=s640-rw-nd-v1)](https://youtu.be/B7zGHtRUZSo)
-
-## Getting Started
+## Usage
 
 ```yaml
 nodes:
-  - id: keyboard-listener # Run on car
+  - id: keyboard-listener
     build: pip install dora-keyboard
     path: dora-keyboard
     inputs:
       tick: dora/timer/millis/10
     outputs:
-      - twist # for example [2.0,0.0,0.0,0.0,0.0,1.0]
+      - twist # e.g. [2.0, 0.0, 0.0, 0.0, 0.0, 1.0]
 
-  - id: car
-    build: pip install dora-kit-car
-    path: dora-kit-car
+  - id: dora-kit-car
+    hub: dora-kit-car@^0.3
     inputs:
-      keyboard: keyboard-listener/twist
+      tick: keyboard-listener/twist
     env:
       SERIAL_PORT: /dev/ttyUSB0
-
 ```
 
-## License
+## Build
 
-The MIT License (MIT)
-
-Copyright (c) 2024-present, Leon
+```bash
+cargo build --release --target-dir target
+```
