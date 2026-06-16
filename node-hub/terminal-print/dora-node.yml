@@ -12,7 +12,11 @@ keywords: [debug, print, terminal, sink]
 
 runtime: rust
 entrypoint: target/release/terminal-print
-build: cargo build --release
+# `--target-dir target` is required for workspace-member nodes: Hub builds and
+# spawns rooted at the subdir and resolves `entrypoint` confined to it, but a
+# plain `cargo build` writes to the *workspace* target dir (outside the subdir).
+# This keeps the binary package-local at <subdir>/target/release/terminal-print.
+build: cargo build --release --target-dir target
 platforms: []
 dora: ">=0.3.9"
 
