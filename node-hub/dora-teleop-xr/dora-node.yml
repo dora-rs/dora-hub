@@ -1,0 +1,76 @@
+apiVersion: 1
+name: dora-teleop-xr
+namespace: dora-rs
+description: >-
+  XR teleoperation node: serves a WebXR/VR teleop session, runs inverse
+  kinematics on incoming controller poses, and on each tick emits the latest
+  head/hand poses, robot joint state, and the raw XR state.
+categories:
+  - robot
+  - transform
+keywords:
+  - teleop
+  - xr
+  - webxr
+  - vr
+  - inverse-kinematics
+runtime: python
+entrypoint: dora-teleop-xr
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  tick:
+    description: >-
+      Poll trigger. On each tick the node reads the latest received XR state and
+      publishes head/hand poses, the current robot joint state, and the raw XR
+      state. If no XR state has been received yet the tick is ignored.
+    required: true
+
+outputs:
+  head_pose:
+    description: >-
+      Headset pose as a float32[7] array [x, y, z, qx, qy, qz, qw]. Emitted only
+      when a head device pose is present. Metadata: primitive=pose,
+      encoding=xyzquat.
+  left_hand_pose:
+    description: >-
+      Left controller/hand grip pose as a float32[7] array
+      [x, y, z, qx, qy, qz, qw]. Emitted only when a left grip pose is present.
+      Metadata: primitive=pose, encoding=xyzquat.
+  right_hand_pose:
+    description: >-
+      Right controller/hand grip pose as a float32[7] array
+      [x, y, z, qx, qy, qz, qw]. Emitted only when a right grip pose is present.
+      Metadata: primitive=pose, encoding=xyzquat.
+  joint_state:
+    description: >-
+      Current robot joint configuration as a float32 array, reordered into the
+      robot's rerun URDF joint order when available. Metadata:
+      primitive=jointstate, encoding=jointstate.
+  raw_xr_state:
+    description: >-
+      Complete raw XR state for the tick as a single JSON string.
+
+env:
+  ROBOT_CLASS:
+    type: string
+    default: "teleop_xr.ik.robots.so101:SO101Robot"
+    description: >-
+      Python class path (module:ClassName) of the robot used to build the IK
+      solver and report joint names.
+
+example: |
+  - id: teleop-xr
+    hub: dora-teleop-xr@^0.5
+    inputs:
+      tick: dora/timer/millis/10
+    outputs:
+      - head_pose
+      - left_hand_pose
+      - right_hand_pose
+      - joint_state
+      - raw_xr_state
+    env:
+      ROBOT_CLASS: "teleop_xr.ik.robots.so101:SO101Robot"

@@ -1,160 +1,59 @@
-# Dora Gradio UI Interface
+# dora-gradio
 
-A versatile UI interface for Dora-rs that provides text, audio, and video input capabilities using Gradio.
+A Gradio web UI that bridges a browser into a dataflow, letting you stream text,
+microphone audio, and camera video from `http://localhost:7860` as dora outputs.
 
-## Features
+## Behavior
 
-- **Text Input**: Direct text input through a chat-like interface
-- **Audio Input**: Real-time audio streaming in 16kHz format
-- **Video Input**: WebRTC camera streaming at 640x480
-- **Multiple Output Channels**: 
-  - `text`: For direct text messages
-  - `audio`: For raw audio stream
-  - `image`: For camera feed
-- **Clean Interface**: Simple and intuitive UI with tabbed sections
-- **Auto Port Management**: Automatically handles port conflicts
+On start the node launches a Gradio app on `0.0.0.0:7860` with two tabs:
 
-## Installation
+- **Camera**: a WebRTC video stream. Each frame is resized to 640x480 and sent
+  on `image` as flattened BGR8 bytes with `encoding`, `width`, `height`,
+  `timestamp`, and `_time` metadata.
+- **Audio and Text Input**: a streaming microphone input and a chat box. Mic
+  audio is converted to mono float32, resampled to 16 kHz, buffered, and sent on
+  `audio` (with `sample_rate`, `channels`, `timestamp` metadata) roughly every
+  0.1 s. Submitting text sends it on `text` as a UTF-8 string.
 
-Using `pip`:
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e .
-```
+A **Stop Server** button exits the process. The node reads no dataflow inputs —
+it is a source driven entirely by the browser UI.
+
+## Inputs
+
+None — this node is a source.
+
+## Outputs
+
+- `text`: UTF-8 string from the chat box.
+- `audio`: 16 kHz mono float32 audio chunks from the microphone, with
+  `sample_rate`, `channels`, and `timestamp` (nanoseconds) metadata.
+- `image`: 640x480 BGR8 camera frame (flattened uint8) from WebRTC, with
+  `encoding`, `width`, `height`, `timestamp`, and `_time` metadata.
+
+## Environment variables
+
+None.
 
 ## Usage
 
-### 1. Web Interface
-
-The interface will be available at: `http://localhost:7860`
-
-### 2. As a Dora Node
-
-Create a YAML configuration:
 ```yaml
 nodes:
-  - id: ui
-    build: pip install -e .
-    path: dora-gradio
+  - id: dora-gradio
+    hub: dora-gradio@^0.5
     outputs:
-      - text     # Text from chat interface
-      - audio    # Raw audio stream
-      - image    # Camera feed
-    env:
-      VIRTUAL_ENV: path to your venv   # comment this if not using venv
-
+      - text
+      - audio
+      - image
+  - id: terminal-print
+    hub: terminal-print@^0.5
+    inputs:
+      data: dora-gradio/text
 ```
 
-Run with Dora:
+Open `http://localhost:7860` and type in the chat box to emit `text`.
+
+## Build
+
 ```bash
-dora run demo.yml
+pip install .
 ```
-
-### 3. Integration Examples
-
-#### Video Processing Pipeline
-```yaml
-nodes:
-  - id: ui
-    build: pip install -e .
-    path: dora-gradio
-    outputs:
-      - image    # Camera feed
-
-  - id: video_processor
-    build: pip install -e path/to/processor
-    path: video-processor
-    inputs:
-      video: ui/image
-```
-
-#### Audio Processing Pipeline
-```yaml
-nodes:
-  - id: ui
-    build: pip install -e .
-    path: dora-gradio
-    outputs:
-      - audio    # Raw audio stream
-
-  - id: audio_processor
-    build: pip install -e path/to/processor
-    path: audio-processor
-    inputs:
-      audio: ui/audio
-```
-
-### 4. Demo Example
-
-Here's a complete demo pipeline using the UI with visualization and audio processing:
-
-```yaml
-nodes:
-  - id: ui
-    build: pip install -e .
-    path: dora-gradio
-    outputs:
-      - text     # Text messages
-      - audio    # Raw audio stream
-      - image    # Camera feed
-
-  - id: plot
-    build: pip install dora-rerun
-    path: dora-rerun
-    inputs:
-      text_input: ui/text
-      audio: ui/audio
-      image: ui/image
-
-  - id: dora-vad
-    build: pip install -e path/to/dora-vad
-    path: dora-vad
-    inputs:
-      audio: ui/audio
-
-  - id: dora-distil-whisper
-    build: pip install -e path/to/dora-distil-whisper
-    path: dora-distil-whisper
-    inputs:
-      audio: ui/audio
-```
-
-This demo showcases:
-- Real-time visualization with dora-rerun
-- Voice Activity Detection with dora-vad
-- Speech processing with dora-distil-whisper
-
-## Interface Features
-
-### Camera Tab
-- Real-time WebRTC video streaming
-- Fixed 640x480 resolution
-- BGR8 color format
-- Automatic timestamp synchronization
-
-### Audio and Text Input Tab
-- Chat-like interface for text input
-- Real-time audio streaming (16kHz, mono)
-- Status indicators for streaming state
-- Immediate output through respective channels
-
-### Controls
-- Send Text button for chat messages
-- Stop Server button for graceful shutdown
-
-## System Requirements
-
-- Python ≥ 3.10
-- Required ports:
-  - 7860 (Gradio interface)
-
-## Known Limitations
-
-- Fixed video resolution (640x480)
-- Fixed audio sample rate (16kHz)
-- Requires port 7860 to be available
-
-## License
-
-dora-gradio's code are released under the MIT License

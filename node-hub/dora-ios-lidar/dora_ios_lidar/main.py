@@ -97,10 +97,10 @@ class DemoApp:
                 if depth.shape != rgb.shape:
                     rgb = cv2.resize(rgb, (depth.shape[1], depth.shape[0]))
                 if image_width is not None and image_height is not None:
-                    f_0 = intrinsic_mat[0, 0] * (int(image_height) / rgb.shape[0])
-                    f_1 = intrinsic_mat[1, 1] * (int(image_width) / rgb.shape[1])
-                    r_0 = intrinsic_mat[0, 2] * (int(image_height) / rgb.shape[0])
-                    r_1 = intrinsic_mat[1, 2] * (int(image_width) / rgb.shape[1])
+                    f_0 = intrinsic_mat[0, 0] * (int(image_width) / rgb.shape[1])
+                    f_1 = intrinsic_mat[1, 1] * (int(image_height) / rgb.shape[0])
+                    r_0 = intrinsic_mat[0, 2] * (int(image_width) / rgb.shape[1])
+                    r_1 = intrinsic_mat[1, 2] * (int(image_height) / rgb.shape[0])
                     if ROTATE == "ROTATE_90_CLOCKWISE":
                         rgb = cv2.rotate(rgb, cv2.ROTATE_90_CLOCKWISE)
                         depth = cv2.rotate(depth, cv2.ROTATE_90_CLOCKWISE)

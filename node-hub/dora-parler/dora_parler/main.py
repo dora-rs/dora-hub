@@ -128,6 +128,9 @@ def generate_base(
 
         event = node.next(timeout=0.01)
 
+        if event is None:
+            continue
+
         if event["type"] == "ERROR":
             pass
         elif event["type"] == "INPUT":

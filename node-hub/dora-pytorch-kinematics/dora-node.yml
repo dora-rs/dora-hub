@@ -1,0 +1,99 @@
+apiVersion: 1
+name: dora-pytorch-kinematics
+namespace: dora-rs
+description: >-
+  Forward and inverse kinematics for a serial robot chain using
+  pytorch_kinematics. Converts between joint states and end-effector poses
+  (and computes the Jacobian), dispatching on the input's `encoding` metadata.
+categories:
+  - transform
+  - robot
+keywords:
+  - kinematics
+  - forward-kinematics
+  - inverse-kinematics
+  - pytorch-kinematics
+  - urdf
+  - jacobian
+runtime: python
+entrypoint: dora-pytorch-kinematics
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  cmd_vel:
+    description: >-
+      End-effector velocity command as a float32 array. The node runs FK on its
+      last known joint state, adds this velocity, then solves IK back to joint
+      angles. Output is emitted on the `cmd_vel` id with encoding `jointstate`.
+    required: false
+  pose:
+    description: >-
+      A generic kinematics request whose behavior is selected by the input's
+      `encoding` metadata field. Supported encodings:
+      `xyzquat` (pos + wxyz quaternion -> IK -> joint angles),
+      `xyzrpy` (pos + roll/pitch/yaw -> IK -> joint angles),
+      `jointstate` (joint angles -> FK -> xyzrpy pose), and
+      `jacobian` (joint angles -> flattened 6xN Jacobian). Wire these requests
+      on the `pose` id; the node echoes the result on the same id, so the output
+      is also `pose`. The code accepts any non-`cmd_vel` id, but the hub contract
+      only permits the declared `cmd_vel` and `pose` inputs.
+    required: false
+
+outputs:
+  cmd_vel:
+    description: >-
+      IK solution joint angles (float32) produced from a `cmd_vel` input.
+      Metadata `encoding` is set to `jointstate`.
+  pose:
+    description: >-
+      Result of the kinematics request, emitted on the same id as the input.
+      Encoding is `xyzrpy` for FK results, `jointstate` for IK results, and
+      `jacobian_result` (with a `jacobian_shape` metadata field) for Jacobian
+      requests.
+
+env:
+  URDF_PATH:
+    type: string
+    description: >-
+      Path to the robot URDF file. Required unless MODEL_NAME is set: if this
+      path is unset or does not exist, the node falls back to MODEL_NAME. Example
+      value, the absolute path to your robot's URDF.
+  MODEL_NAME:
+    type: string
+    description: >-
+      robot_descriptions module name (e.g. `iiwa7_description`) used to fetch a
+      URDF/MJCF when URDF_PATH is unset or missing. Required if URDF_PATH is not
+      provided.
+  END_EFFECTOR_LINK:
+    type: string
+    description: >-
+      Name of the end-effector link in the URDF used to build the serial chain.
+      Required.
+  TRANSFORM:
+    type: string
+    default: "0. 0. 0. 1. 0. 0. 0."
+    description: >-
+      Base transform applied to FK results and inverted for IK targets, as a
+      space-separated string `x y z qw qx qy qz` (position + wxyz quaternion).
+  POSITION_TOLERANCE:
+    type: float
+    default: 0.005
+    description: IK position convergence tolerance, in meters.
+  ROTATION_TOLERANCE:
+    type: float
+    default: 0.05
+    description: IK rotation convergence tolerance, in radians.
+
+example: |
+  - id: dora-pytorch-kinematics
+    build: pip install dora-pytorch-kinematics
+    path: dora-pytorch-kinematics
+    inputs:
+      pose: robot-controller/target_pose
+    outputs:
+      - pose
+    env:
+      MODEL_NAME: iiwa7_description
+      END_EFFECTOR_LINK: iiwa_link_ee

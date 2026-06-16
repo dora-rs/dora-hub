@@ -181,6 +181,7 @@ def main():
                 text = result["text"]
                 print(f"Raw text: {text}")
                 text = text.replace(" ", "")
+                text = remove_text_noise(text, text_noise)
                 if text.strip() == "" or text.strip() == ".":
                     continue
 

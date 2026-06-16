@@ -88,7 +88,7 @@ def main(arg_list: list[str] | None = None):
 
     for event in node:
         if event["type"] == "INPUT":
-            if event["id"] == "TICK":
+            if event["id"] == "tick":
                 print(
                     f"""Node received:
                 id: {event["id"]},
