@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
 """Screen newly-claimed `node-index/` namespaces (Hub P2.3, spec §7.4).
 
-A namespace is claimed by adding `node-index/<ns>/.../package.yml`. A *new*
-claim (a namespace not present in the base branch) must clear two structural
-gates before it can auto-merge:
+A namespace is claimed by adding `node-index/<ns>/.../package.yml`. Per §7.4
+*every* new namespace (one not present in the base branch) gets a human
+reviewer — and reserved or confusable claims escalate to an index admin:
 
-  - **Reserved.** `<ns>` must not be on the reserved list — those belong to the
-    project / type system and need an index admin (`reserved_namespaces.txt`).
-  - **Confusable.** `<ns>` must not look like an existing namespace (or a
-    reserved one): homoglyph-normalized equality (`d0ra-rs` == `dora-rs`,
-    `acrne` == `acme`) or Levenshtein distance <= 1. Lookalikes are the
-    dependency-confusion vector, so they get mandatory human review.
+  - **Reserved.** `<ns>` on the reserved list belongs to the project / type
+    system and needs an index admin (`reserved_namespaces.txt`).
+  - **Confusable.** `<ns>` that looks like an existing or reserved namespace —
+    homoglyph-normalized equality (`d0ra-rs` == `dora-rs`, `acrne` == `acme`)
+    or Levenshtein distance <= 1 — is the dependency-confusion vector and needs
+    an index admin.
+
+This is a *routing signal, not a hard gate*: it emits a warning per new claim
+and exits 0. A new namespace is never a CI failure — that would force a
+legitimate human/admin to bypass a red check instead of approving-and-merging
+normally. The auto-merge bot (PR 3) reads `review_tier()` from the trusted base
+to decide what to withhold from auto-merge; this run only surfaces it. Routine
+publishing *within* an existing namespace produces no warning (it isn't new).
 
 This does NOT verify owner identity (that the PR author owns `<ns>`) — that
-needs the trusted GitHub actor + API and lands with the auto-merge bot (PR 3).
-
-Failing a gate is not "rejected forever": it means the PR needs a human/admin,
-not auto-merge. Routine publishing *within* an existing namespace never trips
-this (the namespace isn't new).
+needs the trusted GitHub actor + API and lands with the bot (PR 3).
 
 Usage: check_namespace.py [--base <ref>]
   base defaults to origin/$GITHUB_BASE_REF, else origin/main.
@@ -29,7 +32,6 @@ import argparse
 import os
 import pathlib
 import subprocess
-import sys
 
 RESERVED_FILE = pathlib.Path(__file__).resolve().parent / "reserved_namespaces.txt"
 
@@ -80,17 +82,18 @@ def is_confusable(a: str, b: str) -> bool:
     return na == nb or levenshtein(na, nb) <= 1
 
 
-def screen_namespace(ns: str, existing: set[str], reserved: set[str]) -> str | None:
-    """None if `ns` may auto-merge; else a reason it needs human review."""
+def review_tier(ns: str, existing: set[str], reserved: set[str]) -> tuple[str, str]:
+    """Classify a *new* namespace claim. Every new namespace needs at least a
+    human reviewer (§7.4) — that is the contract the auto-merge bot enforces by
+    withholding auto-merge, NOT a CI failure. Reserved or confusable claims
+    escalate to an index admin. Returns (tier, reason), tier in {"admin",
+    "human"}."""
     if ns in reserved:
-        return f"namespace `{ns}` is reserved — needs an index admin (§7.4)"
+        return "admin", f"namespace `{ns}` is reserved"
     for ref in sorted(existing | reserved):
         if is_confusable(ns, ref):
-            return (
-                f"namespace `{ns}` is confusable with `{ref}` "
-                f"— needs human review (§7.4)"
-            )
-    return None
+            return "admin", f"namespace `{ns}` is confusable with `{ref}`"
+    return "human", f"namespace `{ns}` is newly claimed"
 
 
 def load_reserved() -> set[str]:
@@ -145,20 +148,23 @@ def main() -> int:
         return 1
 
     new = sorted(head_ns - base_ns)
-    errors = 0
+    # A new namespace is never a CI *failure* — it is a routing signal. We emit
+    # a warning per claim so the reviewer (and, later, the bot) sees it, and
+    # exit 0 so a legitimate human/admin can approve-and-merge normally rather
+    # than bypass a red check. The bot (PR 3) reads review_tier() from the
+    # trusted base to decide what NOT to auto-merge.
     for ns in new:
-        # screen against everything that already existed plus the other new
+        # classify against everything that already existed plus the other new
         # claims in this same PR
         existing = (base_ns | set(new)) - {ns}
-        reason = screen_namespace(ns, existing, reserved)
-        if reason:
-            emit("error", reason)
-            errors += 1
+        tier, reason = review_tier(ns, existing, reserved)
+        who = "an index admin" if tier == "admin" else "a human reviewer"
+        emit("warning", f"{reason} — needs {who} before merge (§7.4); not auto-merge")
 
-    if errors:
-        print(f"\ncheck_namespace: {errors} namespace claim(s) need human review")
-        return 1
-    print(f"check_namespace: OK ({len(new)} new namespace(s))")
+    if new:
+        print(f"check_namespace: {len(new)} new namespace claim(s) flagged for review (not a failure)")
+        return 0
+    print("check_namespace: OK (no new namespaces)")
     return 0
 
 

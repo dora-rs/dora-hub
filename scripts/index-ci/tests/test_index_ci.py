@@ -195,30 +195,30 @@ def test_subdir_no_traversal() -> None:
 
 
 def test_namespace_screening() -> None:
-    print("check_namespace.screen_namespace:")
+    print("check_namespace.review_tier:")
     existing = {"dora-rs", "acme"}
     reserved = {"dora", "dora-rs", "std", "hub"}
 
-    def needs_review(ns: str) -> bool:
-        return cns.screen_namespace(ns, existing - {ns}, reserved) is not None
+    def tier(ns: str) -> str:
+        return cns.review_tier(ns, existing - {ns}, reserved)[0]
 
-    check("fresh distinct namespace auto-merges", not needs_review("widgetworks"))
-    check("publishing into an existing namespace is fine", not needs_review("acme"))
-    check("reserved namespace flagged", needs_review("std"))
-    check("homoglyph of reserved flagged", needs_review("d0ra"))
-    check("homoglyph of existing flagged (0->o)", needs_review("d0ra-rs"))
-    check("rn->m confusable flagged", needs_review("acrne"))
-    check("edit-distance-1 of existing flagged", needs_review("acme2"))
-    # a name far from everything is fine even if it shares a prefix
-    check("distinct longer name auto-merges", not needs_review("acme-robotics"))
+    # every new namespace needs at least a human reviewer — never auto-merge
+    check("fresh distinct namespace needs human review", tier("widgetworks") == "human")
+    check("distinct longer name needs human review", tier("acme-robotics") == "human")
+    # reserved / confusable claims escalate to an index admin
+    check("reserved namespace needs admin", tier("std") == "admin")
+    check("homoglyph of reserved needs admin", tier("d0ra") == "admin")
+    check("homoglyph of existing needs admin (0->o)", tier("d0ra-rs") == "admin")
+    check("rn->m confusable needs admin", tier("acrne") == "admin")
+    check("edit-distance-1 of existing needs admin", tier("acme2") == "admin")
 
     # homoglyph + structural edit must not compose past the gate (the d0rars
     # class): a 0->o swap AND a dropped/extra hyphen is still one skeleton
-    check("homoglyph + dropped hyphen flagged", needs_review("d0rars"))
-    check("homoglyph + double hyphen flagged", needs_review("d0ra--rs"))
-    check("dropped hyphen alone flagged", needs_review("dorars"))
+    check("homoglyph + dropped hyphen needs admin", tier("d0rars") == "admin")
+    check("homoglyph + double hyphen needs admin", tier("d0ra--rs") == "admin")
+    check("dropped hyphen alone needs admin", tier("dorars") == "admin")
     # bigram lookalikes: cl->d, vv->w, nn->m
-    check("cl->d homoglyph flagged", needs_review("clora-rs"))
+    check("cl->d homoglyph needs admin", tier("clora-rs") == "admin")
 
     # the homoglyph normalizer and metric the gate is built on
     check("normalize collapses 0/1/3/5 and rn", cns.normalize("d0rn3") == "dome")
