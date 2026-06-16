@@ -36,8 +36,9 @@ IK requests that fail to converge are skipped (no output for that frame).
   velocity path described above.
 - `pose`: a generic kinematics request. The operation is chosen by the input's
   `encoding` metadata (`xyzquat`, `xyzrpy`, `jointstate`, or `jacobian`), not by
-  the id. The node echoes its result on whatever id it received, so this id is
-  illustrative — wire the id your dataflow uses.
+  the id. Wire these requests on the `pose` id: the code accepts any non-`cmd_vel`
+  id and echoes its result on the same id, but the hub contract only permits the
+  declared `cmd_vel` and `pose` inputs.
 
 ## Outputs
 

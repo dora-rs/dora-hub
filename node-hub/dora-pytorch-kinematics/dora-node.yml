@@ -35,8 +35,10 @@ inputs:
       `xyzquat` (pos + wxyz quaternion -> IK -> joint angles),
       `xyzrpy` (pos + roll/pitch/yaw -> IK -> joint angles),
       `jointstate` (joint angles -> FK -> xyzrpy pose), and
-      `jacobian` (joint angles -> flattened 6xN Jacobian). The node echoes the
-      result on the same id it received, so wire whatever id your dataflow uses.
+      `jacobian` (joint angles -> flattened 6xN Jacobian). Wire these requests
+      on the `pose` id; the node echoes the result on the same id, so the output
+      is also `pose`. The code accepts any non-`cmd_vel` id, but the hub contract
+      only permits the declared `cmd_vel` and `pose` inputs.
     required: false
 
 outputs:
