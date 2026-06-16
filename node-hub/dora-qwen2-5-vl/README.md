@@ -36,6 +36,10 @@ The generated text is sent on the `text` output.
   is treated as text — a UTF-8 string array. Empty values fall back to the
   cached question.
 
+When run via `hub:`, wire these on the declared ids `image` and `text`: the
+substring match only adds flexibility for `path:` dataflows, but the hub
+contract permits only declared input ids.
+
 ## Outputs
 
 - `text`: the generated UTF-8 text response (a single-element string array),

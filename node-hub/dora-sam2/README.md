@@ -28,7 +28,10 @@ The node connects as a dora node and processes input events:
   `masks`. If no image has been received yet, the event is skipped.
 
 Input ids are matched by substring (`"image" in id`, `"boxes2d" in id`,
-`"points" in id`), so any id containing those tokens is accepted.
+`"points" in id`). When run via `hub:`, wire each input on its declared id
+(`image`/`boxes2d`/`points`): the hub contract only permits declared input ids,
+even though the code would also accept any id containing those tokens (e.g.
+`camera_image`) when run via `path:`.
 
 ## Inputs
 
@@ -41,7 +44,8 @@ Input ids are matched by substring (`"image" in id`, `"boxes2d" in id`,
 ## Outputs
 
 - `masks`: boolean segmentation masks flattened into an Arrow array. Metadata
-  carries `image_id`, `width`, `height`, and `primitive: masks`.
+  carries `image_id`, `width`, `height` (and `primitive: masks` for masks
+  derived from a `boxes2d` request; the `points` path omits `primitive`).
 
 ## Environment variables
 

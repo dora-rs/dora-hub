@@ -13,7 +13,7 @@ The node connects as a dora node and buffers inputs to assemble training samples
   `jpeg`) and buffered as a frame.
 - A non-empty `text` input overrides the prompt question (default
   `DEFAULT_QUESTION`) for the next sample.
-- A `ground_truth` input triggers a write: the buffered frames are saved as PNGs
+- A `ground_truth` input triggers a write: the buffered frames are saved as PNG files
   and a ShareGPT message pair (`user` prompt with one `<image>` token per frame +
   `assistant` ground-truth) is appended to the dataset JSON. If no frames are
   buffered yet, the `ground_truth` is ignored.

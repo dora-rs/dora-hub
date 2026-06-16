@@ -94,7 +94,6 @@ env:
     description: Robot type recorded in the dataset metadata.
   ROOT_PATH:
     type: string
-    default: ""
     description: >-
       Local directory to store the dataset. Defaults to the LeRobot cache
       location when empty.

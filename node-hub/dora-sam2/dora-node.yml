@@ -36,7 +36,8 @@ outputs:
   masks:
     description: >-
       Boolean segmentation masks, flattened (`masks.ravel()`) into an Arrow array.
-      Metadata carries `image_id`, `width`, `height`, and `primitive: masks`.
+      Metadata carries `image_id`, `width`, `height` (and `primitive: masks`
+      for masks derived from a `boxes2d` request; the `points` path omits it).
 
 env: {}
 

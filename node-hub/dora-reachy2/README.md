@@ -1,4 +1,4 @@
-# dora-reachy2
+# dora-reachy2-camera
 
 Camera node for the Reachy 2 robot package — streams stereo teleop (left/right)
 and depth frames from a Reachy 2 over the network. This Hub manifest covers the
@@ -41,7 +41,7 @@ set of frames and emits them:
 ```yaml
 nodes:
   - id: dora-reachy2-camera
-    hub: dora-reachy2@^0.5
+    hub: dora-reachy2-camera@^0.5
     inputs:
       tick: dora/timer/millis/33
     outputs:

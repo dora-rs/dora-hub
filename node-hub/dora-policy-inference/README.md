@@ -23,7 +23,9 @@ Robot state is converted from radians to degrees and float32 before inference.
 - `laptop`: lead camera image (Arrow uint8). Its arrival triggers inference.
   Must match the first entry of `CAMERA_NAMES`.
 - `front`: secondary camera image (Arrow uint8). Must match an entry of
-  `CAMERA_NAMES`. Add one input per camera you list.
+  `CAMERA_NAMES`. To use more cameras, add each to `CAMERA_NAMES` **and** declare
+  a matching input in this node's manifest — the hub contract rejects camera ids
+  that aren't declared, so extending `CAMERA_NAMES` alone is not enough.
 - `robot_state`: current robot joint state in radians (Arrow numeric).
 
 Image inputs rely on `height`, `width`, and optional `encoding` metadata.

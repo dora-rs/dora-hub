@@ -20,7 +20,10 @@ first run.
 
 The node keys off the substring `image` in the input id: the depth output id is
 that id with `image` replaced by `depth`, and the RGB output reuses the input id
-unchanged.
+unchanged. When run via `hub:`, wire the input on the declared id `image` (so the
+outputs are exactly the declared `depth` and `image`); the hub contract permits
+only declared input ids, even though `path:` dataflows may use any id containing
+`image`.
 
 ## Inputs
 

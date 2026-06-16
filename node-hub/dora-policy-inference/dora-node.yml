@@ -23,7 +23,9 @@ inputs:
     description: >-
       Secondary camera image observation (Arrow uint8, reshaped via metadata
       height/width to H x W x 3). The input id must match an entry of
-      CAMERA_NAMES. Add one input per camera listed in CAMERA_NAMES.
+      CAMERA_NAMES. To use more cameras, add each one to CAMERA_NAMES AND
+      declare a matching input here — the hub contract rejects camera ids that
+      are not declared in this manifest, so extending CAMERA_NAMES alone fails.
   robot_state:
     description: >-
       Current robot joint state in radians (Arrow numeric). Converted to degrees
