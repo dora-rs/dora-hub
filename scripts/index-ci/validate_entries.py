@@ -67,7 +67,10 @@ def rel(path: pathlib.Path) -> str:
 
 
 def index_files() -> list[pathlib.Path]:
-    return sorted(p for p in INDEX_ROOT.rglob("*.yml") if p.is_file())
+    # include symlinks (even dangling ones) so they get rejected, not skipped
+    return sorted(
+        p for p in INDEX_ROOT.rglob("*.yml") if p.is_file() or p.is_symlink()
+    )
 
 
 def validate_file(
@@ -126,6 +129,7 @@ def validate_file(
             f"(description, repo, owners) alongside its versions"
         )
     _schema_check(entry_schema, doc, rp, errors)
+    _check_binary_platforms(doc.get("source"), rp, errors)
 
     manifest = doc.get("manifest", {})
     if isinstance(manifest, dict):
@@ -138,6 +142,25 @@ def validate_file(
             errors.append(
                 f"{rp}: manifest.name `{manifest.get('name')}` != directory `{name}`"
             )
+
+
+def _check_binary_platforms(source, rp: str, errors: list[str]) -> None:
+    """Each `platform` in a `source.binary` list must be unique — a duplicate
+    lets first/last-match consumers resolve different artifacts for one platform
+    (the same ambiguity the append-only shadow check guards against). Recurses
+    into `fallback-git`."""
+    if not isinstance(source, dict):
+        return
+    seen: set[str] = set()
+    for art in source.get("binary") or []:
+        if not isinstance(art, dict):
+            continue
+        plat = art.get("platform")
+        if plat in seen:
+            errors.append(f"{rp}: duplicate `source.binary` platform `{plat}`")
+        elif plat is not None:
+            seen.add(plat)
+    _check_binary_platforms(source.get("fallback-git"), rp, errors)
 
 
 def _schema_check(schema: dict, doc: dict, rp: str, errors: list[str]) -> None:
@@ -161,19 +184,21 @@ def main(argv: list[str]) -> int:
     warnings: list[str] = []
     checked = 0
     for path in targets:
-        if not path.exists():
-            # a deleted file shows up in a changed-files list — append-only CI
-            # handles deletions; nothing to validate here
-            continue
         if path.suffix != ".yml":
             continue
         # A catalog entry must be a real file inside the index. A symlink can
-        # resolve outside INDEX_ROOT and would otherwise be silently skipped by
-        # the containment check below, smuggling unvalidated content into the
-        # catalog (check_append_only treats added files as allowed).
+        # resolve outside INDEX_ROOT (or dangle) and would otherwise be silently
+        # skipped — by the exists() guard below if dangling, or the containment
+        # check if it escapes — smuggling unvalidated content into the catalog
+        # (check_append_only treats added files as allowed). Check before
+        # exists() so a dangling symlink is rejected, not skipped.
         if path.is_symlink():
             checked += 1
             errors.append(f"{rel(path)}: catalog entries must be regular files, not symlinks")
+            continue
+        if not path.exists():
+            # a deleted file shows up in a changed-files list — append-only CI
+            # handles deletions; nothing to validate here
             continue
         try:
             path.resolve().relative_to(INDEX_ROOT)

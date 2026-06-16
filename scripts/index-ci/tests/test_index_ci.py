@@ -69,6 +69,9 @@ def test_validate() -> None:
     rc, out = run_validate("nopkg/example-node/0.1.0.yml")
     check("version without sibling package.yml rejected", rc == 1 and "package.yml" in out, out)
 
+    rc, out = run_validate("dupplat/example-node/0.1.0.yml")
+    check("duplicate binary platform rejected", rc == 1 and "duplicate" in out and "platform" in out, out)
+
 
 def test_empty_binary_rejected() -> None:
     print("node-index-entry.schema empty-binary guard:")
@@ -88,17 +91,29 @@ def test_symlink_rejected() -> None:
         outside.write_text("manifest: {}\n")
         entry = tdp / "index" / "ns" / "pkg"
         entry.mkdir(parents=True)
+        # an escaping symlink and a dangling one (missing target) — both must be
+        # rejected, not silently skipped by the containment / exists() guards
         link = entry / "1.0.0.yml"
         link.symlink_to(outside)
+        dangling = entry / "2.0.0.yml"
+        dangling.symlink_to(tdp / "does-not-exist.yml")
         saved = ve.INDEX_ROOT
         ve.INDEX_ROOT = tdp / "index"
         try:
+            # explicit-arg path
+            for label, target in (("escaping", link), ("dangling", dangling)):
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    rc = ve.main([str(target)])
+                check(f"{label} symlink rejected (explicit)", rc == 1 and "symlink" in buf.getvalue(), buf.getvalue())
+            # whole-tree scan must surface both, not skip them
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                rc = ve.main([str(link)])
+                rc = ve.main([])
+            out = buf.getvalue()
+            check("dangling symlink caught by tree scan", rc == 1 and out.count("symlink") >= 2, out)
         finally:
             ve.INDEX_ROOT = saved
-        check("symlinked catalog entry rejected", rc == 1 and "symlink" in buf.getvalue(), buf.getvalue())
 
 
 def test_append_only() -> None:
@@ -112,6 +127,12 @@ def test_append_only() -> None:
 
     yanked = {**base, "yanked": True, "yank_reason": "broken"}
     check("yank flip allowed", cao.allowed_version_edit(base, yanked) is None)
+
+    yanked_no_reason = {**base, "yanked": True}
+    check("yank without reason rejected", cao.allowed_version_edit(base, yanked_no_reason) is not None)
+
+    yanked_blank_reason = {**base, "yanked": True, "yank_reason": "   "}
+    check("yank with blank reason rejected", cao.allowed_version_edit(base, yanked_blank_reason) is not None)
 
     unyank = {**base, "yanked": False}
     check("no-op allowed", cao.allowed_version_edit(base, unyank) is None)

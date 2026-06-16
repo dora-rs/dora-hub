@@ -1,0 +1,17 @@
+manifest:
+  apiVersion: 1
+  name: example-node
+  namespace: dupplat
+  runtime: python
+  entrypoint: example_node.main:main
+  description: Two artifacts claim the same platform.
+source:
+  binary:
+    - platform: x86_64-unknown-linux-gnu
+      url: https://example.com/a.tar.gz
+      sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    - platform: x86_64-unknown-linux-gnu
+      url: https://example.com/b.tar.gz
+      sha256: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+published: "2026-07-01T12:00:00Z"
+yanked: false

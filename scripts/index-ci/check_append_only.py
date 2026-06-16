@@ -71,6 +71,13 @@ def show(ref_path: str) -> dict:
 def allowed_version_edit(old: dict, new: dict) -> str | None:
     """None if the edit is an allowed yank/binary-add; else a reason string."""
 
+    # a yank must carry a non-empty reason (§7.5); otherwise the yank/yank_reason
+    # pair is stripped below and any yank state would pass unchecked
+    if new.get("yanked") is True:
+        reason = new.get("yank_reason")
+        if not (isinstance(reason, str) and reason.strip()):
+            return "`yanked: true` requires a non-empty `yank_reason`"
+
     def strip_mutable(entry: dict) -> dict:
         e = copy.deepcopy(entry)
         e.pop("yanked", None)
