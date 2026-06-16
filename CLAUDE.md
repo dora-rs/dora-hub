@@ -51,7 +51,7 @@ Every node must ship a `README.md`. `dora-node.yml` is the machine contract; the
 - [ ] **Behavior** — what the node actually does (the logic), not just what it is.
 - [ ] **Inputs** — each input id + type, or "accepts any input" for generic sinks.
 - [ ] **Outputs** — each output id + type, or "None" for sinks.
-- [ ] **Environment variables** — name, type, default, meaning (mirror `dora-node.yml`'s `env`), or "None".
+- [ ] **Environment variables** — name, type, default, meaning (mirror `dora-node.yml`'s `env`), or "None". Document only vars that **actually affect behavior**: a var the code reads with `os.getenv` but never uses is *not* part of the contract — leave it out of the manifest/README (don't imply it does something).
 - [ ] **Usage** — a copy-pasteable dataflow YAML snippet wiring the node. Prefer the `hub:` form. If you show a from-source `path:`, it is the built **executable** (the manifest `entrypoint`, e.g. `target/release/<bin>`), paired with `build:` — never the package directory.
 - [ ] **Build** — for workspace-member Rust nodes, note `cargo build --release --target-dir target` (package-local binary, matches `entrypoint`).
 
