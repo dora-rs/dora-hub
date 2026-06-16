@@ -5,7 +5,7 @@ authors = [
   { name = "Haixuan Xavier Tao", email = "tao.xavier@outlook.com" },
   { name = "Enzo Le Van", email = "dev@enzo-le-van.fr" },
 ]
-description = "Dora Node for plotting text and bbox on image with OpenCV"
+description = "Dora test sink that asserts each received input equals an expected pyarrow value"
 license = { text = "MIT" }
 readme = "README.md"
 

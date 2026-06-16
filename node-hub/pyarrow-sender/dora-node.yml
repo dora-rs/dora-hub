@@ -1,0 +1,28 @@
+apiVersion: 1
+name: pyarrow-sender
+namespace: dora-rs
+description: Sends a single Apache Arrow array, parsed from the DATA env var, then exits.
+categories: [debug]
+keywords: [pyarrow, arrow, source, test, sender]
+runtime: python
+entrypoint: pyarrow-sender
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+outputs:
+  data:
+    description: The Arrow array built from the DATA env var (a Python literal, or a 1-element array if DATA is a scalar). Emitted once at startup.
+env:
+  DATA:
+    description: >-
+      Required. The payload to send, evaluated with ast.literal_eval. A list/tuple
+      becomes a pyarrow array of its elements; a scalar (str/int/float) becomes a
+      1-element array; anything that fails to parse is sent as a single string.
+example: |
+  nodes:
+    - id: pyarrow-sender
+      hub: pyarrow-sender@^0.5
+      env:
+        DATA: "[1, 2, 3]"
+      outputs:
+        - data

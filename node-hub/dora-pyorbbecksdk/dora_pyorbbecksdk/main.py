@@ -75,27 +75,20 @@ def uyvy_to_bgr(frame: np.ndarray, width: int, height: int) -> np.ndarray:
 
 def i420_to_bgr(frame: np.ndarray, width: int, height: int) -> np.ndarray:
     """TODO: Add docstring."""
-    y = frame[0:height, :]
-    u = frame[height : height + height // 4].reshape(height // 2, width // 2)
-    v = frame[height + height // 4 :].reshape(height // 2, width // 2)
-    yuv_image = cv2.merge([y, u, v])
-    return cv2.cvtColor(yuv_image, cv2.COLOR_YUV2BGR_I420)
+    yuv = frame.reshape((height * 3 // 2, width))
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_I420)
 
 
 def nv21_to_bgr(frame: np.ndarray, width: int, height: int) -> np.ndarray:
     """TODO: Add docstring."""
-    y = frame[0:height, :]
-    uv = frame[height : height + height // 2].reshape(height // 2, width)
-    yuv_image = cv2.merge([y, uv])
-    return cv2.cvtColor(yuv_image, cv2.COLOR_YUV2BGR_NV21)
+    yuv = frame.reshape((height * 3 // 2, width))
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV21)
 
 
 def nv12_to_bgr(frame: np.ndarray, width: int, height: int) -> np.ndarray:
     """TODO: Add docstring."""
-    y = frame[0:height, :]
-    uv = frame[height : height + height // 2].reshape(height // 2, width)
-    yuv_image = cv2.merge([y, uv])
-    return cv2.cvtColor(yuv_image, cv2.COLOR_YUV2BGR_NV12)
+    yuv = frame.reshape((height * 3 // 2, width))
+    return cv2.cvtColor(yuv, cv2.COLOR_YUV2BGR_NV12)
 
 
 def frame_to_bgr_image(frame: VideoFrame):

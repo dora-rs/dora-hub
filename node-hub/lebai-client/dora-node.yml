@@ -1,0 +1,60 @@
+apiVersion: 1
+name: lebai-client
+namespace: dora-rs
+description: Dora node client for Lebai robotic arms — drives the arm from Cartesian/joint move commands, claw control, teach mode, and a JSON-backed pose/recording library.
+categories:
+  - actuator
+  - robot
+keywords:
+  - lebai
+  - robot-arm
+  - manipulator
+  - motion
+  - teleop
+runtime: python
+entrypoint: lebai-client
+build: pip install .
+dora: ">=0.3.9"
+platforms: []
+
+inputs:
+  claw:
+    description: Single value setting the claw position (calls set_claw at force 10).
+  movec:
+    description: Relative Cartesian move [dx, dy, dz, drx, dry, drz, t]; solved via inverse kinematics then executed. Ignored while in teach mode.
+  movej:
+    description: Relative joint move; first 6 values are added to the current joint position and executed. Ignored while in teach mode.
+  stop:
+    description: Stop the current motion and resync cached TCP/joint state from the arm.
+  save:
+    description: Save the current joint pose into the pose library under the given name (string value).
+  go_to:
+    description: Move to a previously saved pose by name (string value). Ignored while in teach mode.
+  record:
+    description: Start a named recording; subsequent movej/movec/go_to events are appended to it.
+  cut:
+    description: Stop the active recording.
+  teach:
+    description: Toggle teach mode on (enter free-drive); a second teach event toggles it off.
+  end_teach:
+    description: Exit teach mode.
+  play:
+    description: Replay a named recording, issuing each stored move; a stop input during playback aborts it.
+
+outputs: {}
+
+env:
+  LEBAI_IP:
+    description: IP address of the Lebai arm to connect to.
+    default: "10.42.0.253"
+
+example: |
+  - id: lebai-client
+    hub: lebai-client@^0.5
+    env:
+      LEBAI_IP: "10.42.0.253"
+    inputs:
+      movej: commander/movej
+      movec: commander/movec
+      claw: commander/claw
+      stop: commander/stop

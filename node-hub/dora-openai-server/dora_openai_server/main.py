@@ -69,15 +69,18 @@ async def create_chat_completion(request: ChatCompletionRequest):
         data = pa.array([data])
     else:
         data = pa.array(data)  # initialize pyarrow array
-    node.send_output("v1/chat/completions", data)
+    node.send_output("v1_chat_completions", data)
 
     # Wait for response from dora-echo
     while True:
         event = node.next(timeout=DORA_RESPONSE_TIMEOUT)
-        if event["type"] == "ERROR":
-            response_str = "No response received. Err: " + event["value"][0].as_py()
+        if event is None:
+            response_str = "No response received (timeout)."
             break
-        if event["type"] == "INPUT" and event["id"] == "v1/chat/completions":
+        if event["type"] == "ERROR":
+            response_str = "No response received. Err: " + event["error"]
+            break
+        if event["type"] == "INPUT" and event["id"] == "v1_chat_completions":
             response = event["value"]
             response_str = response[0].as_py() if response else "No response received"
             break
@@ -127,7 +130,7 @@ async def run_fastapi():
     while True:
         await asyncio.sleep(1)
         event = node.next(0.001)
-        if event["type"] == "STOP":
+        if event is not None and event["type"] == "STOP":
             break
 
 

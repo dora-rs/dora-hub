@@ -1,93 +1,89 @@
-# Dora Node for plotting data with OpenCV
+# opencv-plot
 
-This node is used to plot a text and a list of bbox on a base image (ideal for object detection).
+Overlays bounding boxes, labels, and text on an image input and displays it in
+an OpenCV window. Ideal for visualizing object-detection output.
 
-# YAML
+## Behavior
+
+`opencv-plot` connects as a dora node and maintains a current frame, bbox set,
+and text string. Each input updates its slice of that state:
+
+- An **`image`** event decodes the frame and immediately redraws: it draws every
+  stored bbox (green rectangle + `label, conf` text), draws the stored text at
+  the top-left, optionally resizes to `PLOT_WIDTH`x`PLOT_HEIGHT`, and shows it in
+  a window titled `Dora Node: opencv-plot`. Press `q` in the window to quit.
+- A **`bbox`** or **`text`** event only updates stored state; it is drawn on the
+  next `image` redraw.
+
+Display is suppressed when the environment variable `CI` is `true` (the node
+still decodes inputs but opens no window).
+
+It produces no outputs.
+
+## Inputs
+
+- `image`: base image to draw on. UInt8 Arrow array plus metadata
+  `{width, height, encoding}`. Supported encodings: `bgr8`, `rgb8`,
+  `jpeg`/`jpg`/`jpe`/`bmp`/`webp`/`png` (encoded byte stream, decoded with
+  `cv2.imdecode`), `yuv420`, `avif`. An unsupported encoding raises an error.
+
+  ```python
+  image_data: UInt8Array            # e.g. pa.array(img.ravel())
+  metadata = {"width": 640, "height": 480, "encoding": "bgr8"}
+  node.send_output("image", image_data, metadata)
+  ```
+
+- `bbox`: bounding boxes, confidence scores, and labels. The value is an Arrow
+  struct array whose element `[0]` has fields `bbox` (flattened, reshaped to
+  `-1, 4`), `conf`, and `labels`, with metadata `{format}`. Supported formats:
+  `xyxy` and `xywh` (converted to `xyxy`). An unsupported format raises an error.
+
+  ```python
+  bbox = {
+      "bbox": np.array(...),    # flattened bounding boxes
+      "conf": np.array(...),    # confidence scores
+      "labels": np.array(...),  # class names
+  }
+  node.send_output("bbox", pa.array([bbox]), {"format": "xyxy"})
+  ```
+
+- `text`: text to overlay at the top-left. Arrow array of size 1; element `[0]`
+  is read with `.as_py()`.
+
+  ```python
+  node.send_output("text", pa.array(["hello"]))
+  ```
+
+## Outputs
+
+None — it is a display sink.
+
+## Environment variables
+
+- `PLOT_WIDTH` (optional): resize the displayed frame to this width in pixels.
+  Defaults to the image input width (no resize).
+- `PLOT_HEIGHT` (optional): resize the displayed frame to this height in pixels.
+  Defaults to the image input height (no resize).
+
+(`CI=true` suppresses the display window; it is not a configuration knob.)
+
+## Usage
 
 ```yaml
-- id: opencv-plot
-  build: pip install ../../opencv-plot
-  path: opencv-plot
-  inputs:
-    # image: Arrow array of size 1 containing the base image
-    # bbox: Arrow array of bbox
-    # text: Arrow array of size 1 containing the text to be plotted
-
-  env:
-    PLOT_WIDTH: 640 # optional, default is image input width
-    PLOT_HEIGHT: 480 # optional, default is image input height
+nodes:
+  - id: opencv-plot
+    hub: opencv-plot@^0.5
+    inputs:
+      image: camera/image
+      bbox: detector/bbox
+      text: detector/text
+    env:
+      PLOT_WIDTH: "640"
+      PLOT_HEIGHT: "480"
 ```
 
-# Inputs
+## Build
 
-- `image`: Arrow array containing the base image
-
-```python
-## Image data
-image_data: UInt8Array # Example: pa.array(img.ravel())
-metadata = {
-  "width": 640,
-  "height": 480,
-  "encoding": str, # bgr8, rgb8
-}
-
-## Example
-node.send_output(
-  image_data, {"width": 640, "height": 480, "encoding": "bgr8"}
-  )
-
-## Decoding
-storage = event["value"]
-
-metadata = event["metadata"]
-encoding = metadata["encoding"]
-width = metadata["width"]
-height = metadata["height"]
-
-if encoding == "bgr8":
-    channels = 3
-    storage_type = np.uint8
-
-frame = (
-    storage.to_numpy()
-    .astype(storage_type)
-    .reshape((height, width, channels))
-)
+```bash
+pip install .
 ```
-
-- `bbox`: an arrow array containing the bounding boxes, confidence scores, and class names of the detected objects
-
-```Python
-
-bbox: {
-    "bbox": np.array,  # flattened array of bounding boxes
-    "conf": np.array,  # flat array of confidence scores
-    "labels": np.array,  # flat array of class names
-}
-
-encoded_bbox = pa.array([bbox], {"format": "xyxy"})
-
-decoded_bbox = {
-    "bbox": encoded_bbox[0]["bbox"].values.to_numpy().reshape(-1, 4),
-    "conf": encoded_bbox[0]["conf"].values.to_numpy(),
-    "labels": encoded_bbox[0]["labels"].values.to_numpy(zero_copy_only=False),
-}
-```
-
-- `text`: Arrow array containing the text to be plotted
-
-```python
-text: str
-
-encoded_text = pa.array([text])
-
-decoded_text = encoded_text[0].as_py()
-```
-
-## Example
-
-Check example at [examples/python-dataflow](examples/python-dataflow)
-
-## License
-
-This project is licensed under Apache-2.0. Check out [NOTICE.md](../../NOTICE.md) for more information.

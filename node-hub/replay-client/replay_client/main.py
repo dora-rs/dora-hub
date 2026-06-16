@@ -29,7 +29,7 @@ class Client:
         """TODO: Add docstring."""
         self.config = config
 
-        self.node = Node(config["name"])
+        self.node = Node()
 
         dataset = pd.read_parquet(config["episode_path"] + "/dataset.parquet")
 
@@ -105,18 +105,15 @@ def main():
 
     args = parser.parse_args()
 
-    if (not os.getenv("PATH") and args.path is None) or (
+    if (not os.getenv("DATASET_PATH") and args.path is None) or (
         not os.getenv("EPISODE") and args.episode is None
     ):
-        raise ValueError("The environment variables PATH and EPISODE_ID must be set.")
-
-    if not isinstance(int(os.getenv("EPISODE")), int):
-        raise ValueError("The environment variable EPISODE_ID must be an integer.")
+        raise ValueError("The environment variables DATASET_PATH and EPISODE must be set.")
 
     # Create configuration
     config = {
         "name": args.name,
-        "episode_path": os.getenv("PATH", args.path),
+        "episode_path": os.getenv("DATASET_PATH", args.path),
         "episode_id": int(os.getenv("EPISODE", args.episode)),
     }
 
