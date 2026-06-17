@@ -2,6 +2,12 @@
 # Rust nodes that need system libs / are heavy are excluded, matching ci.yml.
 RUST_EXCLUDES := --exclude dora-dav1d --exclude dora-rav1e --exclude dora-qwen-omni
 
+# GitHub login for the §7.4 identity gate in `index-ci`. Only consulted when the
+# tree adds a NEW namespace (otherwise the gate is a no-op), so the default is
+# best-effort: your gh-authenticated login. Override for a real new-namespace
+# claim: `make index-ci AUTHOR=<your-login>`.
+AUTHOR ?= $(shell gh api user --jq .login 2>/dev/null || echo unknown)
+
 .PHONY: help
 help:
 	@echo "dora-hub dev targets:"
@@ -9,7 +15,7 @@ help:
 	@echo "  make lint                    ruff (repo Python) + rustfmt --check + clippy"
 	@echo "  make fmt                     cargo fmt + ruff format (repo Python)"
 	@echo "  make test-rust               cargo test for the Rust workspace"
-	@echo "  make index-ci                node-index schema + append-only checks"
+	@echo "  make index-ci                node-index gates: schema + append-only + namespace + identity"
 	@echo "  make typos                   spell-check (crate-ci/typos)"
 	@echo "  make qa                      pre-commit static gates: lint + index-ci + typos"
 
@@ -39,7 +45,8 @@ index-ci:
 	  cargo test -p dora-index-ci && \
 	  cargo run -q -p dora-index-ci -- validate && \
 	  cargo run -q -p dora-index-ci -- append-only --base origin/main && \
-	  cargo run -q -p dora-index-ci -- namespace --base origin/main; \
+	  cargo run -q -p dora-index-ci -- namespace --base origin/main && \
+	  cargo run -q -p dora-index-ci -- identity --author "$(AUTHOR)" --base origin/main; \
 	else echo "index-ci: no node-index/ catalog in this tree — skipping"; fi
 
 .PHONY: typos
