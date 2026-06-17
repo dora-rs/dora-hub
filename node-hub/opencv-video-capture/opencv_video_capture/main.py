@@ -361,6 +361,8 @@ def main():
         elif event_type == "ERROR":
             raise RuntimeError(event["error"])
 
+    video_capture.release()
+
 
 if __name__ == "__main__":
     main()
