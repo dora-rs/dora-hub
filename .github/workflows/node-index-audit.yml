@@ -1,0 +1,37 @@
+name: node-index audit
+
+# Periodic hardening of the catalog (Hub spec P3.4, §7.5/§11). Unlike
+# node-index-ci.yml — which gates PRs on diff-scoped rules — these checks need
+# the populated catalog and ongoing operation, so they run on a schedule:
+#   * reachability    — every pinned source still fetches
+#   * integrity-audit — entries still match the manifest at their pinned commit
+# They no-op cleanly while the catalog is empty (both exit 0 on zero entries),
+# so this is safe to land before the catalog is bootstrapped. A red run is a
+# maintainer signal; these jobs never gate the human-reviewed node-hub/ path.
+on:
+  schedule:
+    - cron: '17 6 * * 1' # weekly, Mondays 06:17 UTC
+  workflow_dispatch:
+# Schedule + manual only — not on PRs. These checks fetch every pinned source
+# over the network; gating PRs on them would be slow and flaky once the catalog
+# grows. The tooling itself is regression-tested on PRs by node-index-ci.yml's
+# `cargo test -p dora-index-ci` step (the audit-e2e tests use local repos).
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: index-ci
+      - name: Build the gate
+        run: cargo build -p dora-index-ci --release
+      - name: Pin reachability re-check
+        run: ./target/release/dora-index-ci reachability
+      - name: Integrity spot-audit (manifest vs pinned source)
+        run: ./target/release/dora-index-ci integrity-audit
