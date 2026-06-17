@@ -35,3 +35,11 @@ jobs:
         run: ./target/release/dora-index-ci append-only --base "origin/${{ github.base_ref }}"
       - name: Namespace governance (§7.4 reserved + confusable)
         run: ./target/release/dora-index-ci namespace --base "origin/${{ github.base_ref }}"
+      - name: Namespace-identity binding (§7.4 — author owns the claimed namespace)
+        env:
+          # public-API reads; lifts the unauthenticated rate limit
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ./target/release/dora-index-ci identity \
+            --author "${{ github.event.pull_request.user.login }}" \
+            --base "origin/${{ github.base_ref }}"

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use dora_index_ci::{append_only, decide, integrity, namespace, reachability, validate};
+use dora_index_ci::{append_only, decide, identity, integrity, namespace, reachability, validate};
 
 #[derive(Parser)]
 #[command(about = "Enforcement + auto-merge gate for the dora-hub node-index/ catalog")]
@@ -38,6 +38,13 @@ enum Command {
         #[arg(long)]
         base: String,
     },
+    /// Verify a new namespace matches the author's GitHub identity (§7.4).
+    Identity {
+        #[arg(long)]
+        author: String,
+        #[arg(long)]
+        base: String,
+    },
     /// Re-check that every pinned source still fetches (P3.4, periodic).
     Reachability {
         /// The catalog root (the `node-index/` directory).
@@ -62,6 +69,7 @@ fn main() -> ExitCode {
         Command::AppendOnly { base } => append_only::run(&base),
         Command::Namespace { base } => namespace::run(&base),
         Command::Decide { author, base } => decide::run(&author, &base),
+        Command::Identity { author, base } => identity::run(&author, &base),
         Command::Reachability { root } => reachability::run(&root),
         Command::IntegrityAudit { root, sample } => integrity::run(&root, sample),
     };
