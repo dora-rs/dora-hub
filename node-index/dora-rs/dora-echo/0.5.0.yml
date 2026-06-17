@@ -1,0 +1,36 @@
+manifest:
+  apiVersion: 1
+  name: dora-echo
+  namespace: dora-rs
+  description: Echoes every input it receives straight back out under the same id.
+  categories: [debug, transform]
+  keywords: [echo, passthrough, loopback, debug, test]
+  runtime: python
+  entrypoint: dora-echo
+  build: pip install .
+  dora: ">=0.3.9"
+  platforms: []
+  # dora-echo re-sends any input back under the same id. The code handles any id,
+  # but a Hub contract must declare every wired input/output (undeclared ones fail
+  # the build), so it declares one generic `data` in/out. Wire to `data` for Hub
+  # usage, or run via `path:` for arbitrary ids.
+  inputs:
+    data:
+      required: false
+      description: The value to echo back. Returned unchanged on the `data` output.
+  outputs:
+    data:
+      description: The `data` input, re-sent unchanged (same value and metadata).
+  example: |
+    - id: echo
+      hub: dora-echo@^0.5
+      inputs:
+        data: some-node/output
+      outputs:
+        - data
+source:
+  git: https://github.com/dora-rs/dora-hub
+  rev: eb118a6a637472a0703bda1317478be9a09fef10
+  subdir: node-hub/dora-echo
+published: 2026-06-17T00:00:00Z
+yanked: false
