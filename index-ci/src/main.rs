@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use dora_index_ci::{append_only, decide, namespace, validate};
+use dora_index_ci::{append_only, decide, integrity, namespace, reachability, validate};
 
 #[derive(Parser)]
 #[command(about = "Enforcement + auto-merge gate for the dora-hub node-index/ catalog")]
@@ -38,6 +38,21 @@ enum Command {
         #[arg(long)]
         base: String,
     },
+    /// Re-check that every pinned source still fetches (P3.4, periodic).
+    Reachability {
+        /// The catalog root (the `node-index/` directory).
+        #[arg(long, default_value = "node-index")]
+        root: PathBuf,
+    },
+    /// Re-check that entries still match their pinned source (P3.4, periodic).
+    IntegrityAudit {
+        /// The catalog root (the `node-index/` directory).
+        #[arg(long, default_value = "node-index")]
+        root: PathBuf,
+        /// Audit only the first N entries (sorted); omit to audit all.
+        #[arg(long)]
+        sample: Option<usize>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -47,6 +62,8 @@ fn main() -> ExitCode {
         Command::AppendOnly { base } => append_only::run(&base),
         Command::Namespace { base } => namespace::run(&base),
         Command::Decide { author, base } => decide::run(&author, &base),
+        Command::Reachability { root } => reachability::run(&root),
+        Command::IntegrityAudit { root, sample } => integrity::run(&root, sample),
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),

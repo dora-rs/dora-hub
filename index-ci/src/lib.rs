@@ -1,16 +1,21 @@
 //! Enforcement + auto-merge gate for the dora-hub `node-index/` catalog (§7).
 //!
-//! Four subcommands, mirroring the spec's machine-enforced rules:
-//! - `validate`     — schema (serde), pins, path/name, sibling package, symlinks;
-//! - `append-only`  — published versions are immutable (§7.5);
-//! - `namespace`    — reserved + confusable screening of new claims (§7.4);
-//! - `decide`       — the auto-merge MERGE/HOLD verdict for the bot (§7.5).
+//! Subcommands mirroring the spec's machine-enforced rules:
+//! - `validate`        — schema (serde), pins, path/name, sibling package, symlinks;
+//! - `append-only`     — published versions are immutable (§7.5);
+//! - `namespace`       — reserved + confusable screening of new claims (§7.4);
+//! - `decide`          — the auto-merge MERGE/HOLD verdict for the bot (§7.5);
+//! - `reachability`    — pinned sources still fetch (P3.4, periodic);
+//! - `integrity-audit` — entries still match their pinned source (P3.4, periodic).
 
 pub mod append_only;
+pub mod catalog;
 pub mod decide;
 pub mod git;
+pub mod integrity;
 pub mod model;
 pub mod namespace;
+pub mod reachability;
 pub mod validate;
 
 /// A valid namespace/name path segment of a package key (mirrors
