@@ -9,6 +9,7 @@
 
 use std::path::Path;
 
+use crate::model::git_pins;
 use crate::{catalog, git};
 
 pub fn run(root: &Path) -> eyre::Result<i32> {
@@ -21,16 +22,18 @@ pub fn run(root: &Path) -> eyre::Result<i32> {
         if ce.entry.yanked {
             continue;
         }
-        let (git_url, rev) = match (&ce.entry.source.git, &ce.entry.source.rev) {
-            (Some(g), Some(r)) => (g, r),
-            _ => {
-                binary_only += 1;
-                continue;
+        // re-check every git-pinned level — the primary source *and* each
+        // `fallback-git` (a binary-primary entry can still pin a git fallback)
+        let pins = git_pins(&ce.entry.source);
+        if pins.is_empty() {
+            binary_only += 1;
+            continue;
+        }
+        for pin in pins {
+            checked += 1;
+            if let Err(e) = git::shallow_fetch(pin.git, pin.rev) {
+                failed.push(format!("{}: {e:#}", super::audit_site(&ce.rel, pin.depth)));
             }
-        };
-        checked += 1;
-        if let Err(e) = git::shallow_fetch(git_url, rev) {
-            failed.push(format!("{}: {e:#}", ce.rel));
         }
     }
 

@@ -69,6 +69,19 @@ fn entry_yaml(name: &str, git_url: &str, rev: &str, yanked: bool, binary: bool) 
     )
 }
 
+/// A binary-primary entry whose `fallback-git` pins `git_url`@`rev` (manifest at
+/// the repo root); the stored manifest claims `name`. Exercises the path where
+/// the top-level source has no git rev but a fallback does.
+fn binary_with_fallback(name: &str, git_url: &str, rev: &str) -> String {
+    format!(
+        "manifest:\n  apiVersion: 1\n  name: {name}\n  namespace: acme\n  \
+         runtime: rust\n  entrypoint: e\nsource:\n  binary:\n    - platform: \
+         x86_64-unknown-linux-gnu\n      url: https://example.com/n.tar.gz\n      \
+         sha256: 0000000000000000000000000000000000000000000000000000000000000000\n  \
+         fallback-git:\n    git: {git_url}\n    rev: {rev}\n"
+    )
+}
+
 #[test]
 fn reachability_passes_for_a_live_pin_and_fails_for_a_rotted_one() {
     let (repo, sha) = source_repo(&manifest("n"));
@@ -152,4 +165,58 @@ fn audits_no_op_on_an_empty_catalog() {
     let empty = tempfile::tempdir().unwrap();
     assert_eq!(reachability::run(empty.path()).unwrap(), 0);
     assert_eq!(integrity::run(empty.path(), None).unwrap(), 0);
+}
+
+#[test]
+fn reachability_rechecks_a_git_fallback_under_a_binary_primary() {
+    let (repo, sha) = source_repo(&manifest("n"));
+    let url = repo.path().to_str().unwrap();
+
+    // binary primary + LIVE git fallback → reachable
+    let live = tempfile::tempdir().unwrap();
+    write_entry(
+        live.path(),
+        "n",
+        "1.0.0",
+        &binary_with_fallback("n", url, &sha),
+    );
+    assert_eq!(reachability::run(live.path()).unwrap(), 0);
+
+    // binary primary + ROTTED git fallback → the gap this fixes: must fail, not
+    // be waved through as "binary-only"
+    let rotted = tempfile::tempdir().unwrap();
+    let gone = "0".repeat(40);
+    write_entry(
+        rotted.path(),
+        "n",
+        "1.0.0",
+        &binary_with_fallback("n", url, &gone),
+    );
+    assert_eq!(reachability::run(rotted.path()).unwrap(), 1);
+}
+
+#[test]
+fn integrity_audits_a_git_fallback_manifest() {
+    let (repo, sha) = source_repo(&manifest("n"));
+    let url = repo.path().to_str().unwrap();
+
+    // fallback's committed manifest matches the stored snapshot
+    let ok = tempfile::tempdir().unwrap();
+    write_entry(
+        ok.path(),
+        "n",
+        "1.0.0",
+        &binary_with_fallback("n", url, &sha),
+    );
+    assert_eq!(integrity::run(ok.path(), None).unwrap(), 0);
+
+    // entry claims a name the fallback's committed manifest doesn't → drift
+    let tampered = tempfile::tempdir().unwrap();
+    write_entry(
+        tampered.path(),
+        "n",
+        "1.0.0",
+        &binary_with_fallback("evil", url, &sha),
+    );
+    assert_eq!(integrity::run(tampered.path(), None).unwrap(), 1);
 }

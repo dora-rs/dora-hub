@@ -86,6 +86,38 @@ pub struct PackageMeta {
     pub owners: Vec<String>,
 }
 
+/// One git-pinned level of a source's primary → `fallback-git` chain.
+pub struct GitPin<'a> {
+    pub git: &'a str,
+    pub rev: &'a str,
+    pub subdir: Option<&'a str>,
+    /// 0 = the primary source; 1+ = position in the `fallback-git` chain.
+    pub depth: usize,
+}
+
+/// Every git-pinned level reachable from `source`, walking the `fallback-git`
+/// chain. Binary-only levels contribute nothing. The audits re-check each of
+/// these — a primary *and* a fallback can independently rot, and validation
+/// requires a `fallback-git` to be a full pinned source too (§8.1).
+pub fn git_pins(source: &SourceSpec) -> Vec<GitPin<'_>> {
+    let mut out = Vec::new();
+    let mut cur = Some(source);
+    let mut depth = 0;
+    while let Some(s) = cur {
+        if let (Some(git), Some(rev)) = (&s.git, &s.rev) {
+            out.push(GitPin {
+                git,
+                rev,
+                subdir: s.subdir.as_deref(),
+                depth,
+            });
+        }
+        cur = s.fallback_git.as_deref();
+        depth += 1;
+    }
+    out
+}
+
 impl IndexEntry {
     pub fn parse(yaml: &str) -> eyre::Result<Self> {
         Ok(serde_yaml::from_str(yaml)?)
@@ -95,5 +127,65 @@ impl IndexEntry {
 impl PackageMeta {
     pub fn parse(yaml: &str) -> eyre::Result<Self> {
         Ok(serde_yaml::from_str(yaml)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(yaml: &str) -> SourceSpec {
+        serde_yaml::from_str(yaml).unwrap()
+    }
+
+    #[test]
+    fn git_pins_includes_a_fallback_under_a_binary_primary() {
+        // a binary-primary entry can still pin a git fallback — the audits must
+        // re-check it (the gap this fixes), so it shows up as a depth-1 pin
+        let s = source(
+            "
+binary:
+  - platform: x86_64-unknown-linux-gnu
+    url: https://example.com/x.tgz
+    sha256: 0000000000000000000000000000000000000000000000000000000000000000
+fallback-git:
+  git: https://example.com/r.git
+  rev: 1111111111111111111111111111111111111111
+  subdir: nodes/n
+",
+        );
+        let pins = git_pins(&s);
+        assert_eq!(pins.len(), 1);
+        assert_eq!(pins[0].depth, 1);
+        assert_eq!(pins[0].subdir, Some("nodes/n"));
+    }
+
+    #[test]
+    fn git_pins_includes_primary_and_fallback() {
+        let s = source(
+            "
+git: https://example.com/a.git
+rev: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+fallback-git:
+  git: https://example.com/b.git
+  rev: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+",
+        );
+        let pins = git_pins(&s);
+        assert_eq!(pins.len(), 2);
+        assert_eq!((pins[0].depth, pins[1].depth), (0, 1));
+    }
+
+    #[test]
+    fn git_pins_empty_for_a_pure_binary_entry() {
+        let s = source(
+            "
+binary:
+  - platform: x86_64-unknown-linux-gnu
+    url: https://example.com/x.tgz
+    sha256: 0000000000000000000000000000000000000000000000000000000000000000
+",
+        );
+        assert!(git_pins(&s).is_empty());
     }
 }

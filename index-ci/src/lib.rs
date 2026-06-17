@@ -18,6 +18,16 @@ pub mod namespace;
 pub mod reachability;
 pub mod validate;
 
+/// Label an audit finding by its source-chain position: the entry path for the
+/// primary source, or `<rel> (fallback N)` for a `fallback-git` level.
+pub fn audit_site(rel: &str, depth: usize) -> String {
+    if depth == 0 {
+        rel.to_owned()
+    } else {
+        format!("{rel} (fallback {depth})")
+    }
+}
+
 /// A valid namespace/name path segment of a package key (mirrors
 /// `dora-hub-client`'s `index::is_valid_key_part`): a bounded `[A-Za-z0-9._-]`
 /// token, non-empty, not starting with `.` (so `..`/dotfiles can't traverse).

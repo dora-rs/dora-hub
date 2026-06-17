@@ -16,7 +16,7 @@
 
 use std::path::Path;
 
-use crate::model::Manifest;
+use crate::model::{Manifest, git_pins};
 use crate::{catalog, git};
 
 /// The node manifest filename in a source repo (mirrors dora-core's
@@ -39,44 +39,41 @@ pub fn run(root: &Path, sample: Option<usize>) -> eyre::Result<i32> {
         if ce.entry.yanked {
             continue;
         }
-        let (git_url, rev) = match (&ce.entry.source.git, &ce.entry.source.rev) {
-            (Some(g), Some(r)) => (g, r),
-            _ => continue, // binary-only: no source manifest to compare against
-        };
-        let manifest_path = match &ce.entry.source.subdir {
-            Some(s) => format!("{s}/{MANIFEST_FILENAME}"),
-            None => MANIFEST_FILENAME.to_owned(),
-        };
-        checked += 1;
-        let dir = match git::shallow_fetch(git_url, rev) {
-            Ok(dir) => dir,
-            Err(e) => {
-                drift.push(format!("{}: source unreachable: {e:#}", ce.rel));
-                continue;
+        // audit every git-pinned level — primary *and* each `fallback-git`,
+        // which hosts the same node and must match the stored manifest too
+        for pin in git_pins(&ce.entry.source) {
+            let site = crate::audit_site(&ce.rel, pin.depth);
+            let manifest_path = match pin.subdir {
+                Some(s) => format!("{s}/{MANIFEST_FILENAME}"),
+                None => MANIFEST_FILENAME.to_owned(),
+            };
+            checked += 1;
+            let dir = match git::shallow_fetch(pin.git, pin.rev) {
+                Ok(dir) => dir,
+                Err(e) => {
+                    drift.push(format!("{site}: source unreachable: {e:#}"));
+                    continue;
+                }
+            };
+            let committed = match git::show_in(dir.path(), pin.rev, &manifest_path)? {
+                Some(committed) => committed,
+                None => {
+                    drift.push(format!("{site}: {manifest_path} absent at pinned commit"));
+                    continue;
+                }
+            };
+            let actual: Manifest = match serde_yaml::from_str(&committed) {
+                Ok(actual) => actual,
+                Err(e) => {
+                    drift.push(format!(
+                        "{site}: committed {MANIFEST_FILENAME} is unparseable: {e}"
+                    ));
+                    continue;
+                }
+            };
+            if let Some(reason) = envelope_drift(&ce.entry.manifest, &actual) {
+                drift.push(format!("{site}: {reason}"));
             }
-        };
-        let committed = match git::show_in(dir.path(), rev, &manifest_path)? {
-            Some(committed) => committed,
-            None => {
-                drift.push(format!(
-                    "{}: {manifest_path} absent at pinned commit",
-                    ce.rel
-                ));
-                continue;
-            }
-        };
-        let actual: Manifest = match serde_yaml::from_str(&committed) {
-            Ok(actual) => actual,
-            Err(e) => {
-                drift.push(format!(
-                    "{}: committed {MANIFEST_FILENAME} is unparseable: {e}",
-                    ce.rel
-                ));
-                continue;
-            }
-        };
-        if let Some(reason) = envelope_drift(&ce.entry.manifest, &actual) {
-            drift.push(format!("{}: {reason}", ce.rel));
         }
     }
 
