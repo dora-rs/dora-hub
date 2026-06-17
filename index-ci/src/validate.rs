@@ -97,7 +97,7 @@ fn validate_file(
                 // owners are the merge authority for `decide`; each must be a
                 // valid GitHub login/org so a malformed entry can't slip in
                 for owner in &meta.owners {
-                    if !is_valid_owner(owner) {
+                    if !crate::is_valid_login(owner) {
                         errors.push(format!("{rel}: invalid owner `{owner}` (GitHub login/org)"));
                     }
                 }
@@ -187,18 +187,6 @@ pub fn validate_source(source: &SourceSpec) -> eyre::Result<()> {
         validate_source(fb)?;
     }
     Ok(())
-}
-
-/// A valid GitHub login or org: 1–39 chars, alphanumeric with single internal
-/// hyphens (no leading/trailing/double hyphen). Mirrors the old package schema's
-/// `owners` pattern.
-fn is_valid_owner(owner: &str) -> bool {
-    !owner.is_empty()
-        && owner.len() <= 39
-        && owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
-        && !owner.starts_with('-')
-        && !owner.ends_with('-')
-        && !owner.contains("--")
 }
 
 /// Reject a `subdir` that could escape the checkout: relative, no `..`, single

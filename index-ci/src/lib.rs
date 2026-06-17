@@ -12,11 +12,24 @@ pub mod append_only;
 pub mod catalog;
 pub mod decide;
 pub mod git;
+pub mod identity;
 pub mod integrity;
 pub mod model;
 pub mod namespace;
 pub mod reachability;
 pub mod validate;
+
+/// A valid GitHub login or org: 1–39 chars, alphanumeric with single internal
+/// hyphens (no leading/trailing/double hyphen). Mirrors the package schema's
+/// `owners` pattern; shared by `validate` (owner check) and `identity`.
+pub fn is_valid_login(login: &str) -> bool {
+    !login.is_empty()
+        && login.len() <= 39
+        && login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        && !login.starts_with('-')
+        && !login.ends_with('-')
+        && !login.contains("--")
+}
 
 /// Label an audit finding by its source-chain position: the entry path for the
 /// primary source, or `<rel> (fallback N)` for a `fallback-git` level.
