@@ -18,6 +18,8 @@ eyre = "0.6"
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9.33"
+# used at runtime by the audit subcommands to fetch pinned sources into scratch repos
+tempfile = "3"
 
 [dev-dependencies]
 tempfile = "3"
