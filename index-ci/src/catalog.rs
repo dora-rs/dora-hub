@@ -1,7 +1,7 @@
 //! Shared catalog walk for the audit subcommands (`reachability`,
 //! `integrity-audit`). Collects the *parseable* version entries
 //! (`node-index/<ns>/<name>/<semver>.yml`); `package.yml`, symlinks, and
-//! non-version files are skipped, and an unparseable entry is reported as a
+//! non-version files are skipped, and an unparsable entry is reported as a
 //! `::warning::` and skipped — the `validate` subcommand is the gate that fails
 //! a PR on a malformed entry, so the periodic audits only re-check entries that
 //! already passed it.
@@ -91,7 +91,7 @@ mod tests {
         let p = root.path();
         write(&p.join("acme/n/1.0.0.yml"), ENTRY);
         write(&p.join("acme/n/package.yml"), "owners: [acme]\n");
-        write(&p.join("acme/n/2.0.0.yml"), "manifest: {oops\n"); // unparseable → skipped
+        write(&p.join("acme/n/2.0.0.yml"), "manifest: {oops\n"); // unparsable → skipped
         write(&p.join("acme/loose.yml"), ENTRY); // wrong depth → skipped
 
         let entries = version_entries(p).unwrap();

@@ -66,7 +66,7 @@ pub fn run(root: &Path, sample: Option<usize>) -> eyre::Result<i32> {
                 Ok(actual) => actual,
                 Err(e) => {
                     drift.push(format!(
-                        "{site}: committed {MANIFEST_FILENAME} is unparseable: {e}"
+                        "{site}: committed {MANIFEST_FILENAME} is unparsable: {e}"
                     ));
                     continue;
                 }
