@@ -93,12 +93,8 @@ async fn main() -> eyre::Result<()> {
                         .iter()
                         .map(|msg| msg.to_texts().join("\n"))
                         .collect::<Vec<_>>();
-                    node.send_output(
-                        DataId::from(output),
-                        metadata,
-                        StringArray::from(texts),
-                    )
-                    .context("failed to send dora output")?;
+                    node.send_output(DataId::from(output), metadata, StringArray::from(texts))
+                        .context("failed to send dora output")?;
 
                     reply_channels.insert(call_id, (reply, 0_u32, Some(request.model)));
                 }
