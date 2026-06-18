@@ -1,0 +1,13 @@
+[package]
+name = "dora-recorder"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1.36.0", features = ["fs", "rt", "rt-multi-thread"] }
+dora-node-api = { version = "0.3.12", default-features = false, features = ["tracing"] }
+eyre = "0.6.8"
+chrono = "0.4.31"
+dora-tracing = { version = "0.3.12" }
+parquet = { version = "54.2.1", features = ["async"] }
+arrow = "54.3.1"
