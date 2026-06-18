@@ -4,6 +4,8 @@ This directory is the **Dora Hub index**: a git-backed catalog mapping
 `[<namespace>/]<name>@<version>` to a node's manifest snapshot and a pointer to
 where its source lives. The `dora` CLI resolves `hub:` references against it.
 
+User guide: [Publishing a Node](https://github.com/dora-rs/dora/blob/main/guide/src/hub/publishing.md)
+and [Custom & Enterprise Indexes](https://github.com/dora-rs/dora/blob/main/guide/src/hub/indexes.md).
 Full design: [`docs/plan-node-hub.md` §7](https://github.com/dora-rs/dora/blob/main/docs/plan-node-hub.md)
 in `dora-rs/dora`.
 
@@ -64,6 +66,10 @@ and the publisher can't drift.
   ([`index-ci/reserved_namespaces.txt`](../index-ci/reserved_namespaces.txt) →
   needs an index admin) and a confusable/edit-distance check (→ human review),
   and always gets a human reviewer — see [`POLICY.md`](POLICY.md).
+- **Identity binding.** A newly-claimed namespace must match the claiming
+  author's GitHub identity — their own login, or an org they are a public member
+  of. Claiming another user's login is rejected (CI fails); an org claim that
+  can't be confirmed public is routed to human review rather than rejected.
 - **Owner identity.** The auto-merge bot merges a version only when it is
   published by an **owner** of its namespace (the `package.yml` OWNERS list,
   read from the base branch — a PR can't add itself as an owner and self-approve).

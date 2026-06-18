@@ -75,10 +75,23 @@ on Discord first.
 
 ## Publishing to the Dora Hub
 
-> The `node-index/` catalog and its CI land with the catalog bootstrap (PR #66);
-> this section applies once that merges.
+Publishing makes a node installable with `hub: dora-rs/<name>@<version>`. It adds
+an append-only entry to the `node-index/` catalog that points at a commit of the
+node's source — it does **not** upload code.
 
-The `node-index/` catalog is produced by the `dora hub publish` CLI — **don't
-hand-edit version entries**. Published version files are immutable (append-only,
-enforced by `node-index CI`); a yank is the one allowed mutation. See
-`node-index/README.md` for the format.
+```bash
+cd node-hub/my-node
+dora hub init               # scaffold dora-node.yml (if you haven't already)
+dora validate --node-manifest dora-node.yml
+# commit dora-node.yml + the version bump, push
+dora hub publish --dry-run  # preview the exact index entry
+dora hub publish            # print the entry + PR instructions (open the PR manually)
+```
+
+The catalog is produced by the `dora hub publish` CLI — **don't hand-edit version
+entries**. Published version files are immutable (append-only, enforced by
+`node-index CI`); a yank (`dora hub yank`) is the one allowed mutation. See
+[`node-index/README.md`](node-index/README.md) for the entry format,
+[`node-index/POLICY.md`](node-index/POLICY.md) for namespaces/ownership, and the
+[Dora Hub guide](https://github.com/dora-rs/dora/blob/main/guide/src/hub/publishing.md)
+for the full walkthrough.

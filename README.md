@@ -2,6 +2,51 @@
 
 This hub contains useful pre-built nodes for Dora.
 
+The nodes maintained in this repo (under `node-hub/`) are published to the **Dora
+Hub** catalog, so you can pull one into a dataflow with a single line of YAML —
+no clone, no manual `path:` wiring:
+
+```yaml
+nodes:
+  - id: detector
+    hub: dora-yolo@^0.5      # resolved, pinned, and type-checked by `dora build`
+    inputs:
+      image: camera/image
+    outputs:
+      - bbox
+```
+
+`dora build` resolves the version requirement to an exact published version, pins
+it to a commit, and injects the node's typed input/output contracts into
+validation. Discover and inspect nodes with:
+
+```bash
+dora hub search yolo                 # find by name / keyword / category
+dora hub info dora-yolo              # contracts + a ready-to-paste example
+```
+
+See the **[Dora Hub guide](https://github.com/dora-rs/dora/blob/main/guide/src/hub/overview.md)**
+for version requirements, reproducible builds (`--locked`), publishing, and
+offline use. *(The `hub:` feature is currently unstable.)*
+
+### Publishing a node
+
+This repo is both the node **collection** (`node-hub/<name>/` source) and the
+**catalog** (`node-index/`, the published index entries). To publish a node you
+maintain here:
+
+```bash
+cd node-hub/my-node
+dora hub init               # scaffold a dora-node.yml manifest (if needed)
+dora hub publish --dry-run  # preview the exact index entry
+dora hub publish            # print the entry + PR instructions (open the PR manually)
+```
+
+The catalog is append-only and CI-gated. See [`CONTRIBUTING.md`](CONTRIBUTING.md)
+for the workflow, [`node-index/README.md`](node-index/README.md) for the entry
+format, and [`node-index/POLICY.md`](node-index/POLICY.md) for namespaces and
+ownership.
+
 ## Packages
 
 > Feel free to modify this README with your own nodes so that it benefits the community.
