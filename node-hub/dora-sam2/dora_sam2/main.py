@@ -214,7 +214,7 @@ def main():
                     ),
                 ):
                     predictor.set_image(frames[image_id])
-                    labels = [i for i in range(len(points))]
+                    labels = [1 for i in range(len(points))]
                     masks, _scores, last_pred = predictor.predict(
                         points,
                         point_labels=labels,
