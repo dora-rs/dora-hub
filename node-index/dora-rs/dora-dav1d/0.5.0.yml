@@ -1,0 +1,57 @@
+manifest:
+  apiVersion: 1
+  name: dora-dav1d
+  namespace: dora-rs
+  description: AV1 video decoder using dav1d — decodes encoded AV1 byte streams into raw image frames (BGR8, YUV420, or mono).
+  categories:
+  - transform
+  keywords:
+  - av1
+  - decoder
+  - video
+  - dav1d
+  - image
+  runtime: rust
+  entrypoint: target/release/dora-dav1d
+  build: cargo build --release --target-dir target
+  dora: '>=0.3.9'
+  inputs:
+    tick:
+      description: |
+        Encoded AV1 data as a UInt8 Arrow array. The input must carry an
+        `encoding` parameter equal to `av1`; other encodings are skipped with a
+        warning. Non-UInt8 data types are ignored. The output is emitted under
+        the same id as this input.
+  outputs:
+    tick:
+      description: |
+        Decoded image frame as an Arrow array, emitted under the same id as the
+        received input. Carries `encoding` (`bgr8`, `yuv420`, `mono8`, or
+        `mono16` depending on the decoded picture and the ENCODING setting),
+        `primitive: image`, and — for `yuv420` — `width` and `height`
+        parameters.
+  env:
+    ENCODING:
+      type: string
+      default: bgr8
+      description: |
+        Output pixel encoding for I420 (color) pictures. `bgr8` converts to
+        interleaved BGR; `yuv420` emits planar Y/U/V concatenated with width and
+        height parameters. Other values are skipped with a warning. Mono (I400)
+        pictures ignore this and emit `mono8` or `mono16` based on bit depth.
+  example: |-
+    - id: dora-dav1d
+      build: cargo build --release --target-dir target
+      path: target/release/dora-dav1d
+      inputs:
+        tick: encoder/encoded
+      outputs:
+        - tick
+      env:
+        ENCODING: bgr8
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-dav1d
+published: 2026-06-16T21:22:17Z
+yanked: false

@@ -1,0 +1,64 @@
+manifest:
+  apiVersion: 1
+  name: dora-qwen
+  namespace: dora-rs
+  description: LLM text generation using Qwen2.5 — turns text prompts into generated text, with a system prompt, optional tools, and conversation history.
+  categories:
+  - llm
+  keywords:
+  - llm
+  - qwen
+  - text-generation
+  - chat
+  runtime: python
+  entrypoint: dora-qwen
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    system_prompt:
+      required: false
+      description: Any input whose id contains "system_prompt" sets the system message for the conversation (does not trigger generation).
+    text:
+      required: true
+      description: 'Prompt text appended to the conversation as a user turn and used to drive generation. Any input id other than system_prompt/tools is treated as prompt text. Optional inline role tags are honored: <|system|>, <|assistant|>, <|tool|>, <|user|>\n<|im_start|>, and <|user|>\n<|vision_start|> (image url).'
+    tools:
+      required: false
+      description: Any input whose id contains "tools" supplies a JSON tool list (parsed and passed to generation on Darwin); does not trigger generation. Can also be provided per-message via the "tools" metadata key.
+  outputs:
+    text:
+      description: Generated assistant response as a single-element UTF-8 string Arrow array.
+  env:
+    ACTIVATION_WORDS:
+      default: ''
+      description: Space-separated words; if set, generation only runs when the prompt contains one of them. Empty means always generate.
+    CONTEXT_SIZE:
+      type: int
+      default: 4096
+      description: Context window size (n_ctx) for the llama-cpp (Darwin) backend.
+    MODEL_FILE_PATTERN:
+      default: '*fp16.gguf'
+      description: GGUF filename pattern selected from the repo on Darwin.
+    MODEL_NAME_OR_PATH:
+      default: Qwen/Qwen2.5-0.5B-Instruct-GGUF
+      description: Repo id / path of the GGUF model loaded via llama-cpp on Darwin.
+    N_GPU_LAYERS:
+      type: int
+      default: 0
+      description: Number of model layers offloaded to GPU for the llama-cpp (Darwin) backend.
+    N_THREADS:
+      type: int
+      default: 4
+      description: CPU thread count for the llama-cpp (Darwin) backend.
+  example: |-
+    - id: dora-qwen
+      hub: dora-qwen@^0.5
+      inputs:
+        text: some-node/text
+      outputs:
+        - text
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-qwen
+published: 2026-06-16T21:22:20Z
+yanked: false

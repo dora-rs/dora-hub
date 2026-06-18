@@ -1,0 +1,51 @@
+manifest:
+  apiVersion: 1
+  name: replay-client
+  namespace: dora-rs
+  description: Replays a recorded episode (action/joints) from a parquet dataset into the dataflow, emitting one frame per pull tick.
+  categories:
+  - simulator
+  - debug
+  keywords:
+  - replay
+  - recording
+  - parquet
+  - dataset
+  - robot
+  runtime: python
+  entrypoint: replay-client
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    end:
+      description: Stop signal. On receipt the node sends `end` and exits.
+    pull_position:
+      description: Tick that advances the replay by one frame and emits the next recorded position. When all frames are exhausted the node sends `end` and exits.
+  outputs:
+    end:
+      description: Empty array emitted once when the replay finishes or is stopped.
+    position:
+      description: The next recorded frame as a struct array with fields `joints` (names) and `values` (float32 action positions).
+  env:
+    DATASET_PATH:
+      description: Filesystem path to the recording directory containing `dataset.parquet`. Required — the node errors at startup if unset.
+    EPISODE:
+      type: int
+      description: Episode index (`episode_index`) to select rows for from the dataset. Required.
+  example: |-
+    - id: replay-client
+      hub: replay-client@^0.5
+      inputs:
+        pull_position: dora/timer/millis/10
+      env:
+        DATASET_PATH: /path/to/record
+        EPISODE: "1"
+      outputs:
+        - position
+        - end
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/replay-client
+published: 2026-06-16T21:22:22Z
+yanked: false

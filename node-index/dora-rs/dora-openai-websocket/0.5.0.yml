@@ -1,0 +1,68 @@
+manifest:
+  apiVersion: 1
+  name: dora-openai-websocket
+  namespace: dora-rs
+  description: Bridges a dora dataflow to the OpenAI Realtime/websocket API. Runs an HTTP + WebSocket server that speaks the OpenAI Realtime protocol (`/realtime`, `/v1/realtime`), a chat-completions endpoint (`/v1/chat/completions`), and a models listing (`/models`, `/v1/models`). Incoming client audio/text is forwarded as dora outputs; dora inputs (audio, text, transcripts, speech events) are streamed back to the connected client as Realtime events.
+  categories:
+  - llm
+  - communication
+  keywords:
+  - openai
+  - realtime
+  - websocket
+  - llm
+  - audio
+  - chat-completions
+  - bridge
+  runtime: rust
+  entrypoint: target/release/dora-openai-websocket
+  build: cargo build --release --target-dir target
+  dora: '>=0.3.9'
+  inputs:
+    audio:
+      description: Arrow float32 PCM audio samples from the dataflow. Converted to PCM16, base64-encoded, and sent to the connected client as a `response.audio.delta` followed by a `response.done` event. Matched by the substring `audio` in the input id.
+    speech_started:
+      description: Signals that the user started speaking. Forwarded to the client as an `input_audio_buffer.speech_started` event. Matched by the substring `speech_started` in the input id.
+    speech_stopped:
+      description: Signals that the user stopped speaking. Forwarded to the client as an `input_audio_buffer.speech_stopped` event. Matched by the substring `speech_stopped` in the input id.
+    text:
+      description: Arrow Utf8 assistant text. Sent to the client as a `response.text.delta`; if the text is wrapped in `<tool_call>...</tool_call>` (or parses as a tool call) it is emitted as Realtime function-call events instead. Matched by the substring `text` in the input id.
+    transcript:
+      description: Arrow Utf8 transcription text. Sent to the client as a `response.audio_transcript.delta` event. Matched by the substring `transcript` in the input id.
+  outputs:
+    audio:
+      description: 'Arrow float32 PCM audio decoded from client `input_audio_buffer.append` events. Metadata carries `sample_rate: 16000`.'
+    function_call_output:
+      description: Arrow Utf8 output of a client `conversation.item.create` item of type `function_call_output`.
+    response.create:
+      description: Arrow Utf8 prompt text emitted from a client `response.create` instructions field or from a `/v1/chat/completions` request.
+    system_prompt:
+      description: Arrow Utf8 system prompt taken from the `session.update` instructions when a client establishes a Realtime session.
+    text:
+      description: Arrow Utf8 text extracted from client `conversation.item.create` message items (input_text, text, and image-url content parts).
+    tools:
+      description: Arrow Utf8 JSON-encoded tool list taken from the `session.update` tools field when a client establishes a Realtime session.
+  env:
+    HOST:
+      type: string
+      default: 0.0.0.0
+      description: Address the HTTP/WebSocket server binds to.
+    PORT:
+      type: string
+      default: '8123'
+      description: TCP port the HTTP/WebSocket server listens on.
+  example: |-
+    - id: dora-openai-websocket
+      hub: dora-openai-websocket@^0.5
+      inputs:
+        audio: tts/audio
+        text: llm/text
+        transcript: stt/transcript
+      env:
+        PORT: "8123"
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-openai-websocket
+published: 2026-06-16T21:22:19Z
+yanked: false

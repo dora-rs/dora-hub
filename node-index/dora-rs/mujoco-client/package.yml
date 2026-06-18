@@ -1,0 +1,7 @@
+description: Dora node client for a MuJoCo simulation — steps the physics, publishes generalised joint coordinates, and applies incoming actuator commands.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

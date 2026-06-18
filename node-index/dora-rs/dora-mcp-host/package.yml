@@ -1,0 +1,7 @@
+description: A Model Context Protocol (MCP) host node. Exposes an OpenAI-compatible HTTP API, routes chat completions to multiple AI providers (OpenAI, Gemini, Deepseek) or back into the dataflow, and connects to MCP servers to expose their tools.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

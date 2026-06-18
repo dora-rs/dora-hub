@@ -1,0 +1,7 @@
+description: LeRobot policy inference node. Buffers camera image observations and robot state, runs a pre-trained LeRobot policy when the lead camera ticks, and emits the predicted robot action (in radians).
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

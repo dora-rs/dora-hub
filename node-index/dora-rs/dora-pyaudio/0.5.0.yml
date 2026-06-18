@@ -1,0 +1,37 @@
+manifest:
+  apiVersion: 1
+  name: dora-pyaudio
+  namespace: dora-rs
+  description: Plays received audio samples to the system speakers using PyAudio.
+  categories:
+  - actuator
+  - speech
+  keywords:
+  - pyaudio
+  - audio
+  - playback
+  - speaker
+  runtime: python
+  entrypoint: dora-pyaudio
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    audio:
+      required: true
+      description: Audio samples to play; an Arrow array of int16 or floating-point values. Per-message metadata may carry sample_rate (falls back to SAMPLE_RATE).
+  env:
+    SAMPLE_RATE:
+      type: int
+      default: 16000
+      description: Default playback sample rate in Hz, used when an input message omits sample_rate metadata.
+  example: |-
+    - id: dora-pyaudio
+      hub: dora-pyaudio@^0.5
+      inputs:
+        audio: some-node/audio
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-pyaudio
+published: 2026-06-16T21:22:19Z
+yanked: false

@@ -1,0 +1,7 @@
+description: Pygame dashboard for LeRobot dataset recording — displays two images side by side plus a status text, and turns keyboard events into episode-recording control outputs.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

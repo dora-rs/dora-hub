@@ -1,0 +1,7 @@
+description: Dora node for controlling an Agilex UGV (Hunter) over CAN — sends linear/angular motion commands and emits the robot's measured velocity.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

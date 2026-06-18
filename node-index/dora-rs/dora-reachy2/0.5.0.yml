@@ -1,0 +1,53 @@
+manifest:
+  apiVersion: 1
+  name: dora-reachy2
+  namespace: dora-rs
+  description: Streams stereo teleop (left/right) and depth camera frames from a Reachy 2 robot. This manifest covers the camera node of the dora-reachy2 package.
+  categories:
+  - sensor
+  - robot
+  keywords:
+  - reachy
+  - reachy2
+  - camera
+  - stereo
+  - depth
+  - robot
+  runtime: python
+  entrypoint: dora-reachy2-camera
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    tick:
+      required: true
+      description: Trigger to capture and emit one set of camera frames.
+  outputs:
+    depth:
+      description: Depth frame in meters (float64) as a flattened Arrow array; metadata carries width, height, focal, resolution, primitive.
+    image_depth:
+      description: Depth camera color frame (bgr8) as a flattened Arrow array; metadata carries width, height, encoding, primitive.
+    image_left:
+      description: Left teleop camera frame (bgr8) as a flattened Arrow array; metadata carries width, height, encoding, primitive.
+    image_right:
+      description: Right teleop camera frame (bgr8) as a flattened Arrow array; metadata carries width, height, encoding, primitive.
+  env:
+    ROBOT_IP:
+      type: string
+      default: 10.42.0.80
+      description: IP address of the Reachy 2 robot to connect to.
+  example: |-
+    - id: dora-reachy2-camera
+      hub: dora-reachy2@^0.5
+      inputs:
+        tick: dora/timer/millis/33
+      outputs:
+        - image_left
+        - image_right
+        - image_depth
+        - depth
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-reachy2
+published: 2026-06-16T21:22:20Z
+yanked: false

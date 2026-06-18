@@ -1,0 +1,7 @@
+description: AV1 video decoder using dav1d — decodes encoded AV1 byte streams into raw image frames (BGR8, YUV420, or mono).
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

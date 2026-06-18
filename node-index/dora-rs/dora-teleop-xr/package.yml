@@ -1,0 +1,7 @@
+description: 'XR teleoperation node: serves a WebXR/VR teleop session, runs inverse kinematics on incoming controller poses, and on each tick emits the latest head/hand poses, robot joint state, and the raw XR state.'
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

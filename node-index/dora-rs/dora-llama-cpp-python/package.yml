@@ -1,0 +1,7 @@
+description: LLM text generation via llama-cpp-python — consumes input text and emits a generated response (text -> text). Loads a GGUF model from a local path or HuggingFace, with optional CUDA/Metal GPU acceleration.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

@@ -1,0 +1,7 @@
+description: Overlays bounding boxes, labels, and text on an image input and displays it in an OpenCV window.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

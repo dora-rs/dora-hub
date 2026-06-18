@@ -1,4 +1,4 @@
-description: Official dora-rs nodes.
+description: Captures RGB color and depth frames from an Orbbec depth camera via the pyorbbecsdk.
 repo: https://github.com/dora-rs/dora-hub
 owners:
   - bobdingAI

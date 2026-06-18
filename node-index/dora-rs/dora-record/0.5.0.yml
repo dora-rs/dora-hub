@@ -1,0 +1,33 @@
+manifest:
+  apiVersion: 1
+  name: dora-record
+  namespace: dora-rs
+  description: Record dataflow inputs to disk — writes each received input to a Brotli- compressed Parquet file under out/<dataflow-id>/<input-id>.parquet, capturing the value plus UHLC/UTC timestamps and OpenTelemetry trace/span ids.
+  categories:
+  - recorder
+  keywords:
+  - record
+  - recorder
+  - parquet
+  - sink
+  - logging
+  - dataset
+  runtime: rust
+  entrypoint: target/release/dora-record
+  build: cargo build --release --target-dir target
+  dora: '>=0.3.9'
+  inputs:
+    data:
+      required: false
+      description: The stream to record. Any Arrow value; written verbatim to data.parquet alongside timestamps and trace ids.
+  example: |-
+    - id: dora-record
+      hub: dora-record@^0.5
+      inputs:
+        data: some-node/output
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-record
+published: 2026-06-16T21:22:20Z
+yanked: false

@@ -1,0 +1,7 @@
+description: Streams RGB and LiDAR depth frames from an iOS device running the Record3D app (USB), emitting the color frame on `image` and the depth frame on `depth` along with camera intrinsics (focal length and principal point).
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

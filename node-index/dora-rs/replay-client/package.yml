@@ -1,0 +1,7 @@
+description: Replays a recorded episode (action/joints) from a parquet dataset into the dataflow, emitting one frame per pull tick.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

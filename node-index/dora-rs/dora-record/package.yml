@@ -1,0 +1,7 @@
+description: Record dataflow inputs to disk — writes each received input to a Brotli- compressed Parquet file under out/<dataflow-id>/<input-id>.parquet, capturing the value plus UHLC/UTC timestamps and OpenTelemetry trace/span ids.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

@@ -1,0 +1,42 @@
+manifest:
+  apiVersion: 1
+  name: dora-qwen-omni
+  namespace: dora-rs
+  description: Multimodal llama.cpp (mtmd) node. Receives prompt/image strings on a dora input, runs a GGUF model with a multimodal projection, and emits the generated text. Decodes inline base64 images and fetches image URLs found in the input.
+  categories:
+  - ml-inference
+  - llm
+  keywords:
+  - llama-cpp
+  - multimodal
+  - mtmd
+  - gguf
+  - vision
+  - qwen
+  runtime: rust
+  entrypoint: target/release/dora-qwen-omni
+  build: cargo build --release --target-dir target
+  dora: '>=0.3.9'
+  inputs:
+    tick:
+      description: 'Any input event. Its data is read as a UTF-8 string array. Lines are parsed by prefix marker: `<|user|>\n<|im_start|>\n` is treated as text prompt, `<|user|>\n<|vision_start|>\n` as an image (either a `data:image/...` base64 data URI or an http(s) URL that is fetched), and `<|system|>\n` lines are ignored. The input id itself is not inspected.'
+  outputs:
+    text:
+      description: The model's generated text response for the received prompt/image.
+  example: |-
+    - id: dora-qwen-omni
+      build: cargo build --release --target-dir target
+      path: target/release/dora-qwen-omni
+      args: >-
+        --model ./model.gguf --mmproj ./mmproj.gguf
+        --prompt "What is in the picture?"
+      inputs:
+        tick: some-node/output
+      outputs:
+        - text
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-qwen-omni
+published: 2026-06-16T21:22:20Z
+yanked: false

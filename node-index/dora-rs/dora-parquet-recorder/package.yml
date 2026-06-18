@@ -1,0 +1,7 @@
+description: A generic, zero-copy data recorder for dora that batches received inputs and writes one Parquet file per input id.
+repo: https://github.com/dora-rs/dora-hub
+owners:
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

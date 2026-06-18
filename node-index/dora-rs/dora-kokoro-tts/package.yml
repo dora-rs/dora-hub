@@ -1,4 +1,4 @@
-description: Official dora-rs nodes.
+description: Text-to-speech using Kokoro — converts text input into synthesized audio output.
 repo: https://github.com/dora-rs/dora-hub
 owners:
   - bobdingAI

@@ -1,0 +1,31 @@
+manifest:
+  apiVersion: 1
+  name: dora-keyboard
+  namespace: dora-rs
+  description: Keyboard listener source — emits the character of each printable key as it is pressed.
+  categories:
+  - sensor
+  keywords:
+  - keyboard
+  - input
+  - key
+  - source
+  - pynput
+  runtime: python
+  entrypoint: dora-keyboard
+  build: pip install .
+  dora: '>=0.3.9'
+  outputs:
+    char:
+      description: The character of a printable key on press, as a single-element UTF-8 string array (primitive=text metadata).
+  example: |-
+    - id: dora-keyboard
+      hub: dora-keyboard@^0.5
+      outputs:
+        - char
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-keyboard
+published: 2026-06-16T21:22:18Z
+yanked: false

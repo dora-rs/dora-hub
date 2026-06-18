@@ -1,0 +1,50 @@
+manifest:
+  apiVersion: 1
+  name: dora-reachy1
+  namespace: dora-rs
+  description: Reachy 1 camera node. On any input tick, grabs the latest frame from the robot's selected (left or right) head camera over the Reachy SDK and emits it as a bgr8 image with width/height/encoding metadata.
+  categories:
+  - robot
+  - sensor
+  keywords:
+  - reachy
+  - robot
+  - camera
+  - vision
+  - image
+  runtime: python
+  entrypoint: dora-reachy1-vision
+  build: pip install .
+  dora: '>=0.3.9'
+  inputs:
+    tick:
+      required: true
+      description: Trigger to capture a frame. Any input event causes the node to grab the latest camera frame and emit it; a timer is the typical source.
+  outputs:
+    image:
+      description: Latest camera frame as a flattened bgr8 array. Metadata carries width, height, and encoding ("bgr8").
+  env:
+    CAMERA:
+      type: string
+      default: right
+      description: Which head camera to read; "right" selects the right camera, anything else selects the left.
+    ROBOT_IP:
+      type: string
+      default: 10.42.0.24
+      description: IP address of the Reachy robot to connect to.
+  example: |-
+    - id: dora-reachy1-vision
+      hub: dora-reachy1@^0.5
+      inputs:
+        tick: dora/timer/millis/100
+      outputs:
+        - image
+      env:
+        ROBOT_IP: "10.42.0.24"
+        CAMERA: right
+source:
+  git: https://github.com/dora-rs/dora-hub.git
+  rev: 14c765ac6122dc170c51bc2c542cdebd4ac4a88f
+  subdir: node-hub/dora-reachy1
+published: 2026-06-16T21:22:20Z
+yanked: false

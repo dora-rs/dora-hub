@@ -1,4 +1,4 @@
-description: Official dora-rs nodes.
+description: Capture video frames from a camera or video device using OpenCV.
 repo: https://github.com/dora-rs/dora-hub
 owners:
   - bobdingAI
