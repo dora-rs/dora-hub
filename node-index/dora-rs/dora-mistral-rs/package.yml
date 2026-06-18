@@ -1,4 +1,7 @@
 description: LLM text generation via mistral.rs — receives a prompt string and emits the generated completion.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

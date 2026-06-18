@@ -1,4 +1,7 @@
 description: Print received inputs to the terminal — a debug sink that pretty-prints UTF-8 strings and debug-dumps any other Arrow type.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

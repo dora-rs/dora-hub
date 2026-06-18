@@ -1,4 +1,7 @@
 description: Streams stereo teleop (left/right) and depth camera frames from a Reachy 2 robot. This manifest covers the camera node of the dora-reachy2 package.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

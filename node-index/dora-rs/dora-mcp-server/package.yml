@@ -1,4 +1,7 @@
 description: Model Context Protocol (MCP) server node — exposes the dataflow as MCP tools over HTTP. Tool calls are forwarded to other dora nodes as outputs and their replies are returned as MCP results.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

@@ -1,4 +1,7 @@
 description: Transcribes (or translates) speech audio to text using a Whisper model (mlx-whisper on macOS, transformers pipeline elsewhere).
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

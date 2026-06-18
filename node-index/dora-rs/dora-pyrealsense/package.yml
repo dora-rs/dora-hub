@@ -1,4 +1,7 @@
 description: Captures aligned RGB color and depth frames from an Intel RealSense camera.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

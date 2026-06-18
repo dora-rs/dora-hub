@@ -1,5 +1,7 @@
 description: Official dora-rs nodes.
 repo: https://github.com/dora-rs/dora-hub
 owners:
+  - bobdingAI
   - haixuanTao
+  - heyong4725
   - phil-opp

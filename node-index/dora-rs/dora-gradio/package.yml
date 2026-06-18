@@ -1,4 +1,7 @@
 description: Gradio web UI that streams text, audio, and camera video from a browser into a dataflow.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

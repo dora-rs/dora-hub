@@ -1,4 +1,7 @@
 description: MuJoCo-based Clearpath Husky mobile-robot simulation node. Consumes velocity commands, steps the physics sim, and emits the robot's position and velocity.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

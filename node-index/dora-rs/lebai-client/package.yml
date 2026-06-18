@@ -1,4 +1,7 @@
 description: Dora node client for Lebai robotic arms — drives the arm from Cartesian/joint move commands, claw control, teach mode, and a JSON-backed pose/recording library.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

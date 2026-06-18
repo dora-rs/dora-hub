@@ -1,4 +1,7 @@
 description: LLM text generation using Qwen2.5 — turns text prompts into generated text, with a system prompt, optional tools, and conversation history.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

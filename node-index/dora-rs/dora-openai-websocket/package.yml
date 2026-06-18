@@ -1,4 +1,7 @@
 description: Bridges a dora dataflow to the OpenAI Realtime/websocket API. Runs an HTTP + WebSocket server that speaks the OpenAI Realtime protocol (`/realtime`, `/v1/realtime`), a chat-completions endpoint (`/v1/chat/completions`), and a models listing (`/models`, `/v1/models`). Incoming client audio/text is forwarded as dora outputs; dora inputs (audio, text, transcripts, speech events) are streamed back to the connected client as Realtime events.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

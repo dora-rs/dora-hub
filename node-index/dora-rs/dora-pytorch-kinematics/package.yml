@@ -1,4 +1,7 @@
 description: Forward and inverse kinematics for a serial robot chain using pytorch_kinematics. Converts between joint states and end-effector poses (and computes the Jacobian), dispatching on the input's `encoding` metadata.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

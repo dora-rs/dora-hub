@@ -1,4 +1,7 @@
 description: SAM2 image segmentation node. Given an image plus a box (boxes2d) or point prompt, it runs the facebook/sam2-hiera-large predictor and emits the resulting boolean segmentation masks as a flat Arrow array.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp

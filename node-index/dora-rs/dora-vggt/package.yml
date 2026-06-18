@@ -1,4 +1,7 @@
 description: VGGT (Visual Geometry Grounded Transformer) node — runs the facebook/VGGT-1B model on incoming images to predict per-image depth maps plus camera focal and principal-point parameters, and echoes back the preprocessed RGB image.
 repo: https://github.com/dora-rs/dora-hub
 owners:
-  - haixuanTao  # TODO: confirm dora-rs namespace owner handle(s) before publishing
+  - bobdingAI
+  - haixuanTao
+  - heyong4725
+  - phil-opp
