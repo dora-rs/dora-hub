@@ -39,7 +39,7 @@ maintain here:
 cd node-hub/my-node
 dora hub init               # scaffold a dora-node.yml manifest (if needed)
 dora hub publish --dry-run  # preview the exact index entry
-dora hub publish            # open the index PR
+dora hub publish            # print the entry + PR instructions (open the PR manually)
 ```
 
 The catalog is append-only and CI-gated. See [`CONTRIBUTING.md`](CONTRIBUTING.md)

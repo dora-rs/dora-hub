@@ -85,7 +85,7 @@ dora hub init               # scaffold dora-node.yml (if you haven't already)
 dora validate --node-manifest dora-node.yml
 # commit dora-node.yml + the version bump, push
 dora hub publish --dry-run  # preview the exact index entry
-dora hub publish            # print the entry + open the index PR
+dora hub publish            # print the entry + PR instructions (open the PR manually)
 ```
 
 The catalog is produced by the `dora hub publish` CLI — **don't hand-edit version
