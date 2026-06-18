@@ -1,6 +1,6 @@
 # dora-recorder
 
-dora data recording in Apache Arrow format
+dora data recording in Apache Arrow IPC format
 
 ## Adding to existing graph
 
@@ -15,8 +15,8 @@ dora data recording in Apache Arrow format
 
 ## Output Files
 
-**Format**: Arrow file
-**Path**: `record-bag/type-<TYPE_ID>.parquet` (TYPE-ID starts from 1 and ends at the total number of `data_types` of the message to be recorded)
+**Format**: Arrow IPC file
+**Path**: `record-bag/type-<TYPE_ID>.arrow` (TYPE-ID starts from 1 and ends at the total number of `data_types` of the message to be recorded)
 
 **Columns**:
 - payload_list: List, containing the input messages

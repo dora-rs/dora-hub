@@ -4,6 +4,7 @@ members = [
     "node-hub/dora-mcp-host",
     "node-hub/dora-mcp-server",
     "node-hub/dora-record",
+    "node-hub/dora-recorder",
     "node-hub/dora-rerun",
     "node-hub/terminal-print",
     "node-hub/openai-proxy-server",

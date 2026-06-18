@@ -1,0 +1,42 @@
+# Node manifest (the typed Hub contract) for `dora-recorder`.
+# Spec: docs/plan-node-hub.md §5 in dora-rs/dora. Published verbatim into the
+# Hub index by `dora hub publish`.
+apiVersion: 1
+name: dora-recorder
+namespace: dora-rs
+description: >-
+  Record dataflow inputs to disk — writes received inputs to Apache Arrow IPC
+  files (.arrow) under record-bag/type-<count>.arrow, automatically grouped
+  by their Arrow DataType. Features asynchronous buffered writing and semaphore-based
+  backpressure to protect against memory overflow (OOM).
+categories: [recorder]
+keywords: [record, recorder, arrow, ipc, sink, logging, dataset]
+
+runtime: rust
+entrypoint: target/release/dora-recorder
+# `--target-dir target` is required for workspace-member nodes: Hub builds and
+# spawns rooted at the subdir and resolves `entrypoint` confined to it, but a
+# plain `cargo build` writes to the *workspace* target dir (outside the subdir).
+# This keeps the binary package-local at <subdir>/target/release/dora-recorder.
+build: cargo build --release --target-dir target
+platforms: []
+dora: ">=0.3.9"
+
+# dora-recorder is a sink: it records whatever it receives and produces no outputs.
+# The code records *any* input id (one Arrow file per data-type), but a Hub
+# contract must declare every wired input (an undeclared input fails the build),
+# so it declares one generic `data` input — wire your stream to `data`.
+# To record arbitrary/multiple input names, run it directly via `path:` (where
+# the contract isn't enforced) or use one instance per stream.
+inputs:
+  data:
+    required: false
+    description: The stream to record. Any Arrow value; written to Arrow IPC files alongside timestamps and topics.
+
+outputs: {}
+
+example: |
+  - id: dora-recorder
+    hub: dora-recorder@^0.5
+    inputs:
+      data: some-node/output
