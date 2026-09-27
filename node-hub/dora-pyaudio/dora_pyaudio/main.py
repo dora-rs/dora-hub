@@ -21,7 +21,8 @@ def play_audio(
     """Play audio using pyaudio and replace stream if already exists."""
     if np.issubdtype(audio_array.dtype, np.floating):
         audio_array = audio_array * 70_000
-        audio_array = audio_array.astype(np.int16)
+        # Clip before casting: out-of-range values would otherwise wrap around.
+        audio_array = np.clip(audio_array, -32768, 32767).astype(np.int16)
     if stream is None:
         stream = p.open(
             format=pyaudio.paInt16,
