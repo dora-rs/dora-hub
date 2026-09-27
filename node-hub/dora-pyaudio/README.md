@@ -6,8 +6,8 @@ Plays received audio samples to the system speakers using PyAudio.
 
 `dora-pyaudio` is an audio playback sink. It connects as a dora node and, on
 each `audio` input event, plays the samples to the default output device via
-PyAudio (`stream.write`). Floating-point arrays are scaled by 70000 and cast to
-int16; int16 arrays are played as-is. Playback uses 1 channel (mono) at the
+PyAudio (`stream.write`). Floating-point arrays are scaled by 70000, clipped to
+the int16 range and cast to int16; int16 arrays are played as-is. Playback uses 1 channel (mono) at the
 `paInt16` format. The sample rate is taken from the input message's
 `sample_rate` metadata, falling back to the `SAMPLE_RATE` environment variable.
 
