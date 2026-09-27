@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -33,6 +35,13 @@ def test_sliced_primitive_only_takes_the_slice():
 def test_empty_strings():
     assert raw_value_bytes(pa.array([], type=pa.string())) == b""
     assert raw_value_bytes(pa.array(["", ""])) == b""
+
+
+def test_fixed_size_binary_and_decimal_stay_raw_bytes():
+    value = pa.array([b"ab", b"cd", b"ef"], type=pa.binary(2))[1:3]
+    assert raw_value_bytes(value) == b"cdef"
+    value = pa.array([Decimal("1.23")], type=pa.decimal128(5, 2))
+    assert raw_value_bytes(value) == value.buffers()[1].to_pybytes()
 
 
 def test_types_without_a_single_value_buffer():
