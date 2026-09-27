@@ -26,7 +26,12 @@ def raw_value_bytes(value: pa.Array) -> Optional[bytes]:
     is a slice, so only the part covered by the slice is taken.
     """
     buffers = value.buffers()
-    if pa.types.is_primitive(value.type) and not pa.types.is_boolean(value.type):
+    fixed_width = (
+        (pa.types.is_primitive(value.type) and not pa.types.is_boolean(value.type))
+        or pa.types.is_fixed_size_binary(value.type)
+        or pa.types.is_decimal(value.type)
+    )
+    if fixed_width:
         width = value.type.bit_width // 8
         return buffers[1].slice(value.offset * width, len(value) * width).to_pybytes()
     if pa.types.is_string(value.type) or pa.types.is_binary(value.type):
