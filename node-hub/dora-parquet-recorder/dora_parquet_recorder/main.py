@@ -5,8 +5,9 @@ import os
 import queue
 import threading
 from datetime import datetime
-from typing import Any
+from typing import Any, Optional
 
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 from dora import Node
@@ -14,6 +15,38 @@ from dora import Node
 # CONFIGURATION
 BATCH_SIZE = int(os.getenv("BATCH_SIZE", "30"))
 LOG_DIR = os.getenv("LOG_DIR", "data_logs")
+
+
+def raw_value_bytes(value: pa.Array) -> Optional[bytes]:
+    """Return the bytes holding the values of ``value``, or None.
+
+    ``buffers()[1]`` is only the value buffer for fixed-width types. For
+    strings and binaries it holds the offsets, and the text lives in
+    ``buffers()[2]``. Both buffers also belong to the parent when ``value``
+    is a slice, so only the part covered by the slice is taken.
+    """
+    buffers = value.buffers()
+    fixed_width = (
+        (pa.types.is_primitive(value.type) and not pa.types.is_boolean(value.type))
+        or pa.types.is_fixed_size_binary(value.type)
+        or pa.types.is_decimal(value.type)
+    )
+    if fixed_width:
+        width = value.type.bit_width // 8
+        return buffers[1].slice(value.offset * width, len(value) * width).to_pybytes()
+    if pa.types.is_string(value.type) or pa.types.is_binary(value.type):
+        offset_type = np.int32
+    elif pa.types.is_large_string(value.type) or pa.types.is_large_binary(value.type):
+        offset_type = np.int64
+    else:
+        return None
+    offsets = np.frombuffer(buffers[1], dtype=offset_type)
+    start = int(offsets[value.offset])
+    end = int(offsets[value.offset + len(value)])
+    if buffers[2] is None or end == start:
+        return b""
+    return buffers[2].slice(start, end - start).to_pybytes()
+
 
 class DoraParquetRecorder:
     def __init__(self):
@@ -102,8 +135,10 @@ class DoraParquetRecorder:
             # Try to get raw C-buffer bytes if possible
             if hasattr(value, "buffers"):
                 try:
-                    data_blob = value.buffers()[1].to_pybytes()
+                    data_blob = raw_value_bytes(value)
                 except Exception:
+                    data_blob = None
+                if data_blob is None:
                     data_blob = value.to_string().encode('utf-8')
             else:
                 # Fallback for strings/other types
