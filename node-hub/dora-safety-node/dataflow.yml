@@ -1,0 +1,15 @@
+nodes:
+  - id: dummy_input
+    build: pip install -e ../../node-hub/pyarrow-sender
+    path: pyarrow-sender
+    outputs:
+      - data
+    env:
+      DATA: "[{\"speed\": 2}]"
+
+  - id: safety_node
+    path: dora_safety_node/main.py
+    inputs:
+      cmd_vel: dummy_input/data
+    outputs:
+      - safe_cmd_vel

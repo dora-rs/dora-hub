@@ -1,0 +1,10 @@
+nodes:
+  - id: smol_agent
+    path: dora_smolagents/main.py
+
+connections:
+  - from: input/command
+    to: smol_agent/command
+
+  - from: smol_agent/action
+    to: output/action
