@@ -1,11 +1,8 @@
 """TODO: Add docstring."""
 
 import argparse
-import os
 
 from dora import Node
-
-RUNNER_CI = True if os.getenv("CI") == "true" else False
 
 
 def main():
