@@ -1,0 +1,12 @@
+nodes:
+  - id: camera_node
+    path: camera_node/camera_node/main.py
+    inputs:
+      tick: dora/timer/millis/33  
+    outputs:
+      - image
+
+  - id: vlm_brain
+    path: vlm_brain/vlm_brain/main.py
+    inputs:
+      image: camera_node/image
