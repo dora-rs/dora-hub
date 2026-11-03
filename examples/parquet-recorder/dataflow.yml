@@ -8,7 +8,8 @@ nodes:
 
   - id: recorder
     # This works if the user ran 'pip install -e .' first
-    path: pip install -e ../../node-hub/dora-parquet-recorder 
+    build: pip install ../../node-hub/dora-parquet-recorder
+    path: dora-parquet-recorder
     inputs:
       cam_feed: camera/image
     outputs:
