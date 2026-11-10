@@ -7,7 +7,11 @@ license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.12"
 
-dependencies = ["dora-rs >= 0.3.9", "pyarrow", "lerobot[train]"]
+dependencies = [
+  "dora-rs >= 0.3.9",
+  "pyarrow",
+  "lerobot[training]==0.7.0",
+]
 
 [dependency-groups]
 dev = ["pytest >=8.1.1", "ruff >=0.9.1"]
@@ -26,6 +30,3 @@ ignore = [
   "D103", # Missing docstring in public function
   "D104", # Missing docstring in public package
 ]
-
-[tool.uv.sources]
-lerobot = { git = "https://github.com/huggingface/lerobot.git", rev = "main" }
