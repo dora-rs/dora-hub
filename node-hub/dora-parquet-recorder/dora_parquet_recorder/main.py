@@ -90,13 +90,20 @@ class DoraParquetRecorder:
         except Exception as e:
             print(f"[Recorder] Flush failed: {e}", flush=True)
 
+    @staticmethod
+    def _serialize_metadata_value(value: Any) -> str:
+        if isinstance(value, datetime):
+            return value.isoformat()
+        type_name = type(value).__name__
+        raise TypeError(f"Object of type {type_name} is not JSON serializable")
+
     def handle_input(self, input_id: str, value: Any, metadata: Any):
         if self.shutdown_flag:
             return
 
         try:
             # 1. Fast Metadata Serialize
-            meta_json = json.dumps(metadata)
+            meta_json = json.dumps(metadata, default=self._serialize_metadata_value)
 
             # 2. Fast Binary Copy (Zero-Copyish)
             # Try to get raw C-buffer bytes if possible
