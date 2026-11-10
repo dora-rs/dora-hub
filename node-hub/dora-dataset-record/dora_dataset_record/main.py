@@ -203,13 +203,12 @@ class DoraLeRobotRecorder:
             return False
 
         # If episode is active, check if episode time is over
-        if self.episode_active:
-            if (current_time - self.start_time) >= self.episode_duration:
-                self._end_episode()
-                if self.episode_index < self.total_episodes:
-                    self._start_reset_phase()
-                else:
-                    self.last_episode = True
+        if self.episode_active and current_time - self.start_time >= self.episode_duration:
+            self._end_episode()
+            if self.episode_index < self.total_episodes:
+                self._start_reset_phase()
+            else:
+                self.last_episode = True
 
         return False
 
@@ -337,7 +336,6 @@ class DoraLeRobotRecorder:
         """Add a frame to the dataset."""
         with self.buffer_lock:
             frame_data = {}
-            ideal_timestamp = self.frame_count / self.fps
 
             for key, value in self.data_buffer.items():
                 if key == "robot_action":
@@ -366,11 +364,8 @@ class DoraLeRobotRecorder:
             if self.save_avif_frames:
                 self._save_avif_frames()
 
-            self.dataset.add_frame(
-                frame=frame_data,
-                task=os.getenv("SINGLE_TASK", "Your task"),
-                timestamp=ideal_timestamp,
-            )
+            frame_data["task"] = os.getenv("SINGLE_TASK", "Your task")
+            self.dataset.add_frame(frame_data)
             self.frame_count += 1
 
     def finalize_dataset(self):
@@ -378,9 +373,7 @@ class DoraLeRobotRecorder:
         if self.episode_active:
             self._end_episode()
 
-        if self.use_videos:
-            self._output("Encoding videos...")
-            self.dataset.encode_videos()
+        self.dataset.finalize()
 
         if os.getenv("PUSH_TO_HUB", "false").lower() == "true":
             self._output("Pushing dataset to hub...")
@@ -433,13 +426,9 @@ def main():
 
 
 def train_main():
-    from lerobot.scripts.train import train
-    from lerobot.utils.utils import (
-        init_logging,
-    )
+    from lerobot.scripts.lerobot_train import main as lerobot_train
 
-    init_logging()
-    train()
+    lerobot_train()
 
 
 if __name__ == "__main__":
